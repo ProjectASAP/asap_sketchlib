@@ -15,12 +15,12 @@ and frameworks.
 ```text
 src/common/
 ├── mod.rs                  # Public exports
-├── input.rs                # DataInput/HeapItem/HHItem + Hydra enums
+├── input.rs                # DataInput/OwnedDataInput/HeapEntry + Hydra enums
 ├── hash.rs                 # Hash traits, constants, and matrix hash helpers
-├── heap.rs                 # HHHeap
+├── heap.rs                 # TopKHeap
 ├── structure_utils.rs      # Nitro and median utility
 ├── precompute_hash.rs      # PRECOMPUTED_HASH
-├── precompute_sample.rs    # PRECOMPUTED_SAMPLE
+├── precompute_sample.rs    # LN_ONE_MINUS_U_TABLE
 ├── precompute_sample2.rs   # PRECOMPUTED_SAMPLE_RATE_1PERCENT
 └── structures/
     ├── vector1d.rs
@@ -37,38 +37,38 @@ src/common/
 ```rust
 use asap_sketchlib::common::{
     // Input layer
-    DataInput, HeapItem, HHItem, L2HH,
+    DataInput, OwnedDataInput, HeapEntry, L2HH,
     input_to_owned, heap_item_to_sketch_input,
 
     // Hash layer
     SketchHasher, DefaultXxHasher,
     DigestHasher, DigestBuildHasher,
-    SEEDLIST, CANONICAL_HASH_SEED, BOTTOM_LAYER_FINDER, HYDRA_SEED,
-    MatrixHashMode,
+    SEED_LIST, DEFAULT_CANONICAL_SEED_INDEX, UNIVMON_BOTTOM_LAYER_SEED_INDEX, HYDRA_SEED_INDEX,
+    MatrixHashLayout,
     hash64_seeded, hash128_seeded,
-    hash_item64_seeded, hash_item128_seeded,
-    hash_mode_for_matrix,
+    hash64_seeded_owned, hash128_seeded_owned,
+    hash_layout_for_matrix,
     hash_for_matrix, hash_for_matrix_seeded,
-    hash_for_matrix_seeded_with_mode,
-    hash_for_matrix_seeded_with_mode_generic,
+    hash_for_matrix_seeded_with_layout,
+    hash_for_matrix_seeded_with_layout_generic,
     hash_for_matrix_generic, hash_for_matrix_seeded_generic,
 
     // Structure layer
-    MatrixStorage, FastPathHasher, MatrixHashType,
+    MatrixStorage, FastPathHasher, MatrixHash,
     Vector1D, Vector2D, Vector3D,
     BitMatrix,
-    FixedMatrix, HllBucketList,
+    FixedMatrix, HllRegisters,
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128,
     QuickMatrixI32, QuickMatrixI64, QuickMatrixI128,
-    CommonHeap, CommonHeapOrder, KeepSmallest, KeepLargest,
+    CommonHeap, CommonHeapOrder, RetainLargest, RetainSmallest,
 
     // HH helper + utilities
-    HHHeap, HeapCount, TopKCounter,
+    TopKHeap, HeapCount, HeapCounter,
     Nitro, compute_median_inline_f64,
 
     // Precomputed assets
     PRECOMPUTED_HASH,
-    PRECOMPUTED_SAMPLE,
+    LN_ONE_MINUS_U_TABLE,
     PRECOMPUTED_SAMPLE_RATE_1PERCENT,
 };
 ```
@@ -82,26 +82,26 @@ use asap_sketchlib::common::{
 
 ## Cross-Cutting Notes
 
-- `DataInput`/`HeapItem` define borrowed-vs-owned key semantics used across all
+- `DataInput`/`OwnedDataInput` define borrowed-vs-owned key semantics used across all
   sketches and heaps.
 - `SketchHasher` enables custom hash injection for sketches that support hasher
   generics.
 - Matrix fast paths choose hash packing mode automatically through
-  `hash_mode_for_matrix(rows, cols)`.
+  `hash_layout_for_matrix(rows, cols)`.
 - `DigestHasher` replaces the full byte-wise hash with a single avalanche step,
   for maps whose key is already a digest.
 - `BitMatrix` implements the same `MatrixStorage` interface as the counter
   matrices over one bit per cell, so membership sketches share the matrix
   hashing and fast paths.
-- `HHHeap` is built for top-k heavy hitter maintenance and key lookup.
+- `TopKHeap` is built for top-k heavy hitter maintenance and key lookup.
 
 ## Quick Example
 
 ```rust
-use asap_sketchlib::{hash64_seeded, DataInput, Vector2D, CANONICAL_HASH_SEED};
+use asap_sketchlib::{hash64_seeded, DataInput, Vector2D, DEFAULT_CANONICAL_SEED_INDEX};
 
-let _h = hash64_seeded(CANONICAL_HASH_SEED, &DataInput::U64(42));
-let matrix = Vector2D::<i32>::init(3, 16);
+let _h = hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, &DataInput::U64(42));
+let matrix = Vector2D::<i32>::unfilled(3, 16);
 assert_eq!(matrix.rows(), 3);
 ```
 

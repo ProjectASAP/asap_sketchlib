@@ -331,14 +331,14 @@ fn print_row(
 
 fn config(trial: usize) -> UnivMonQConfig {
     UnivMonQConfig {
-        levels: 12,
-        width: 1_024,
-        width_halving_period: 3,
-        depth: 5,
+        layers: 12,
+        top_layer_cols: 1_024,
+        cols_halving_period: 3,
+        rows: 5,
         counter_bits: 32,
-        candidates: 256,
+        heap_size: 256,
         ordered_samples: 0,
-        hash_seed: 5 + trial,
+        seed_index: 5 + trial,
     }
 }
 
@@ -558,7 +558,7 @@ impl AssistedOccurrenceQuery {
         f2: f64,
         count: f64,
     ) -> Self {
-        let frequency_error_scale = (f2 / core.config().width as f64).sqrt();
+        let frequency_error_scale = (f2 / core.config().top_layer_cols as f64).sqrt();
         let threshold = sigma * frequency_error_scale;
         let mut heavy: BTreeMap<i64, f64> = core_query
             .heavy_hitters(64)
@@ -683,7 +683,7 @@ fn score_pure(sketch: &UnivMonQ, truth: &Truth) -> Score {
         .probes
         .iter()
         .map(|&(value, exact)| {
-            let estimate = query.estimate_rank_universal(value as f64).unwrap() as f64
+            let estimate = query.estimate_rank_from_g_sum(value as f64).unwrap() as f64
                 / truth.sorted.len() as f64;
             (estimate - exact).abs()
         })
@@ -692,7 +692,7 @@ fn score_pure(sketch: &UnivMonQ, truth: &Truth) -> Score {
     let mut estimated_cdf: Vec<_> = grid
         .into_iter()
         .map(|value| {
-            let rank = query.estimate_rank_universal(value as f64).unwrap() as f64
+            let rank = query.estimate_rank_from_g_sum(value as f64).unwrap() as f64
                 / truth.sorted.len() as f64;
             (value, rank)
         })
@@ -748,10 +748,10 @@ fn benchmark_pure_queries(sketch: &UnivMonQ, truth: &Truth) -> Duration {
     benchmark(|| {
         let query = black_box(sketch).prepare_queries();
         for &(value, _) in &truth.probes {
-            black_box(query.estimate_rank_universal(black_box(value as f64)));
+            black_box(query.estimate_rank_from_g_sum(black_box(value as f64)));
         }
         for value in fixed_value_grid(truth, 2_049) {
-            black_box(query.estimate_rank_universal(black_box(value as f64)));
+            black_box(query.estimate_rank_from_g_sum(black_box(value as f64)));
         }
     })
 }
@@ -869,8 +869,8 @@ fn pure_drift(left: &UnivMonQ, right: &UnivMonQ, truth: &Truth) -> (f64, f64) {
         .probes
         .iter()
         .map(|&(value, _)| {
-            let left = left_query.estimate_rank_universal(value as f64).unwrap() as f64;
-            let right = right_query.estimate_rank_universal(value as f64).unwrap() as f64;
+            let left = left_query.estimate_rank_from_g_sum(value as f64).unwrap() as f64;
+            let right = right_query.estimate_rank_from_g_sum(value as f64).unwrap() as f64;
             (left - right).abs() / truth.sorted.len() as f64
         })
         .fold(0.0, f64::max);
@@ -929,7 +929,7 @@ fn universal_grid(query: &asap_sketchlib::UnivMonQQuery<'_>, truth: &Truth) -> V
         .map(|value| {
             (
                 value,
-                query.estimate_rank_universal(value as f64).unwrap() as f64
+                query.estimate_rank_from_g_sum(value as f64).unwrap() as f64
                     / truth.sorted.len() as f64,
             )
         })

@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Vector2D;
 use crate::input::{HydraCounter, HydraQuery};
-use crate::{DataInput, HYDRA_SEED, hash_for_matrix_seeded};
+use crate::{DataInput, HYDRA_SEED_INDEX, hash_for_matrix_seeded};
 
 mod wire;
 
@@ -188,13 +188,13 @@ impl KeySchema {
 /// Sketch grid for subpopulation queries.
 pub struct Hydra {
     /// Number of rows in the sketch grid.
-    pub row_num: usize,
+    pub rows: usize,
     /// Number of columns in the sketch grid.
-    pub col_num: usize,
+    pub cols: usize,
     /// Backing grid of per-cell sketches.
-    pub sketches: Vector2D<HydraCounter>,
+    pub cells: Vector2D<HydraCounter>,
     /// Prototype sketch cloned for new cells.
-    pub type_to_clone: HydraCounter,
+    pub prototype: HydraCounter,
     /// Key columns. Private because changing it would invalidate every subkey
     /// already hashed into the grid.
     schema: KeySchema,
@@ -206,10 +206,10 @@ impl Hydra {
     /// Every [`update`](Hydra::update) supplies one value per column,
     /// positionally; every query constrains a subset of those columns.
     pub fn with_schema<S, I>(
-        r: usize,
-        c: usize,
+        rows: usize,
+        cols: usize,
         schema: I,
-        sketch_type: HydraCounter,
+        prototype: HydraCounter,
     ) -> Result<Self, String>
     where
         S: Into<String>,
@@ -218,13 +218,13 @@ impl Hydra {
         let labels: Vec<String> = schema.into_iter().map(Into::into).collect();
         let schema = KeySchema::try_from(labels)?;
         let mut h = Hydra {
-            row_num: r,
-            col_num: c,
-            sketches: Vector2D::init(r, c),
-            type_to_clone: sketch_type.clone(),
+            rows,
+            cols,
+            cells: Vector2D::unfilled(rows, cols),
+            prototype: prototype.clone(),
             schema,
         };
-        h.sketches.fill(sketch_type);
+        h.cells.fill(prototype);
         Ok(h)
     }
 
@@ -255,25 +255,23 @@ impl Hydra {
             // Insert immediately instead of collecting all combinations first
             // Use Str(&str) variant to avoid cloning the buffer
             let hash = hash_for_matrix_seeded(
-                HYDRA_SEED,
-                self.row_num,
-                self.col_num,
+                HYDRA_SEED_INDEX,
+                self.rows,
+                self.cols,
                 &DataInput::Str(&buffer),
             );
-            self.sketches
-                .fast_insert(|a, b, _| a.insert(b, count), value, &hash);
+            self.cells
+                .fast_insert(|a, b, _| a.update(b, count), value, &hash);
         }
         Ok(())
     }
 
     /// Merge another Hydra sketch into this one.
     pub fn merge(&mut self, other: &Hydra) -> Result<(), String> {
-        if self.row_num != other.row_num || self.col_num != other.col_num {
+        if self.rows != other.rows || self.cols != other.cols {
             return Err("Hydra dimension mismatch while merging".to_string());
         }
-        if std::mem::discriminant(&self.type_to_clone)
-            != std::mem::discriminant(&other.type_to_clone)
-        {
+        if std::mem::discriminant(&self.prototype) != std::mem::discriminant(&other.prototype) {
             return Err("Hydra counter type mismatch while merging".to_string());
         }
         // Declaration order matters, not just the label set: the encoding is
@@ -286,8 +284,8 @@ impl Hydra {
                 other.schema.labels()
             ));
         }
-        let self_cells = self.sketches.as_mut_slice();
-        let other_cells = other.sketches.as_slice();
+        let self_cells = self.cells.as_mut_slice();
+        let other_cells = other.cells.as_slice();
         if self_cells.len() != other_cells.len() {
             return Err("Hydra storage length mismatch while merging".to_string());
         }
@@ -311,24 +309,24 @@ impl Hydra {
         let (mask, values) = self.schema.resolve_query(key)?;
         // Probe the pristine template so an incompatible counter/query pair is a
         // clean error rather than a panic once per row inside the median closure.
-        self.type_to_clone.query(query)?;
+        self.prototype.query(query)?;
 
         let mut buffer = String::with_capacity(self.schema.encoded_capacity(&values));
         self.schema.encode_subkey_into(&values, mask, &mut buffer);
         let hashed_val = hash_for_matrix_seeded(
-            HYDRA_SEED,
-            self.row_num,
-            self.col_num,
+            HYDRA_SEED_INDEX,
+            self.rows,
+            self.cols,
             &DataInput::Str(&buffer),
         );
         Ok(self
-            .sketches
+            .cells
             .fast_query_median_with_key(&hashed_val, query, |counter, q, _, _| {
                 counter.query(q).unwrap_or(0.0)
             }))
     }
 
-    /// Convenience method for querying frequency (for CountMin-based Hydra)
+    /// Convenience method for querying frequency (for CountMinSketch-based Hydra)
     /// This is a wrapper around query_key with HydraQuery::Frequency
     pub fn query_frequency(&self, key: &[Option<&str>], value: &DataInput) -> Result<f64, String> {
         self.query_key(key, &HydraQuery::Frequency(value.clone()))
@@ -336,7 +334,7 @@ impl Hydra {
 
     /// Convenience method for querying cumulative distribution for a tracked metric
     /// This is a wrapper around query_key with HydraQuery::Cdf
-    pub fn query_quantile(&self, key: &[Option<&str>], threshold: f64) -> Result<f64, String> {
+    pub fn query_cdf(&self, key: &[Option<&str>], threshold: f64) -> Result<f64, String> {
         self.query_key(key, &HydraQuery::Cdf(threshold))
     }
 }
@@ -344,7 +342,7 @@ impl Hydra {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Count, CountMin, ErtlMLE, FastPath, HyperLogLog, KLL, UnivMon, Vector2D};
+    use crate::{CountMinSketch, CountSketch, Ertl, FastPath, HyperLogLog, Kll, UnivMon, Vector2D};
 
     const EPSILON: f64 = 1e-6;
 
@@ -353,12 +351,12 @@ mod tests {
 
     fn query_cdf(hydra: &Hydra, key_parts: &[Option<&str>], threshold: f64) -> f64 {
         hydra
-            .query_quantile(key_parts, threshold)
+            .query_cdf(key_parts, threshold)
             .expect("well-formed quantile query")
     }
 
     fn build_kll_test_hydra() -> Hydra {
-        let template = HydraCounter::KLL(KLL::default());
+        let template = HydraCounter::Kll(Kll::default());
         let mut hydra = Hydra::with_schema(3, 1024, K3, template).expect("valid schema");
 
         let dataset = [
@@ -387,7 +385,7 @@ mod tests {
             3,
             32,
             ["user", "session"],
-            HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::default()),
+            HydraCounter::CountMinSketch(CountMinSketch::<Vector2D<i32>, FastPath>::default()),
         )
         .expect("valid schema");
         let value = DataInput::String("event".to_string());
@@ -418,7 +416,7 @@ mod tests {
             3,
             32,
             K3,
-            HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::default()),
+            HydraCounter::CountMinSketch(CountMinSketch::<Vector2D<i32>, FastPath>::default()),
         )
         .expect("valid schema");
 
@@ -451,8 +449,9 @@ mod tests {
 
     #[test]
     fn hydra_round_trip_serialization() {
-        let template =
-            HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 64));
+        let template = HydraCounter::CountMinSketch(
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 64),
+        );
         let mut hydra = Hydra::with_schema(3, 64, ["city", "device", "country"], template)
             .expect("valid schema");
 
@@ -481,24 +480,23 @@ mod tests {
             .expect("well-formed query");
 
         let encoded = hydra
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect("serialize Hydra into an ASAPv1 envelope");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x07, 0x01]); // kind_id_len=2, Hydra over Count-Min
         let data = encoded.clone();
 
-        let decoded = Hydra::deserialize_from_bytes(&data)
-            .expect("deserialize Hydra from an ASAPv1 envelope");
+        let decoded = Hydra::from_asapv1(&data).expect("deserialize Hydra from an ASAPv1 envelope");
 
-        assert_eq!(hydra.row_num, decoded.row_num);
-        assert_eq!(hydra.col_num, decoded.col_num);
-        assert_eq!(hydra.sketches.rows(), decoded.sketches.rows());
-        assert_eq!(hydra.sketches.cols(), decoded.sketches.cols());
+        assert_eq!(hydra.rows, decoded.rows);
+        assert_eq!(hydra.cols, decoded.cols);
+        assert_eq!(hydra.cells.rows(), decoded.cells.rows());
+        assert_eq!(hydra.cells.cols(), decoded.cells.cols());
         // The key schema is part of the payload: without it the decoded sketch
         // could not reproduce a single subkey.
         assert_eq!(hydra.schema(), decoded.schema());
-        match &decoded.type_to_clone {
-            HydraCounter::CM(_) => {}
+        match &decoded.prototype {
+            HydraCounter::CountMinSketch(_) => {}
             other => panic!("expected CM template, got {other:?}"),
         }
 
@@ -515,7 +513,7 @@ mod tests {
             "region frequency changed after serde"
         );
         assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
+            decoded.to_asapv1().expect("re-serialize"),
             encoded,
             "a decoded Hydra re-serialized to different bytes"
         );
@@ -523,12 +521,12 @@ mod tests {
 
     #[test]
     fn hydra_subpopulation_frequency_test() {
-        // Build test dataset using CountMin for frequency queries
+        // Build test dataset using CountMinSketch for frequency queries
         let mut hydra = Hydra::with_schema(
             3,
             64,
             K3,
-            HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::default()),
+            HydraCounter::CountMinSketch(CountMinSketch::<Vector2D<i32>, FastPath>::default()),
         )
         .expect("valid schema");
 
@@ -608,11 +606,11 @@ mod tests {
 
     #[test]
     fn hydra_subpopulation_cardinality_test() {
-        use crate::sketches::hll::{ErtlMLE, HyperLogLog};
+        use crate::sketches::hll::{Ertl, HyperLogLog};
 
         // Build test dataset using HyperLogLog for cardinality queries
         let mut hydra =
-            Hydra::with_schema(5, 128, K3, HydraCounter::HLL(HyperLogLog::<ErtlMLE>::new()))
+            Hydra::with_schema(5, 128, K3, HydraCounter::Hll(HyperLogLog::<Ertl>::new()))
                 .expect("valid schema");
 
         let dataset = [
@@ -699,7 +697,7 @@ mod tests {
             3,
             64,
             ["metric", "stage"],
-            HydraCounter::KLL(KLL::default()),
+            HydraCounter::Kll(Kll::default()),
         )
         .expect("valid schema");
         let samples = [
@@ -810,16 +808,18 @@ mod tests {
         assert!((query_cdf(&hydra, &[Some("unknown"), None, None], 50.0) - 0.0).abs() < EPSILON);
     }
 
-    // Helper to generate a default CountMin counter
+    // Helper to generate a default CountMinSketch counter
     fn cm_counter() -> HydraCounter {
-        HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::default())
+        HydraCounter::CountMinSketch(CountMinSketch::<Vector2D<i32>, FastPath>::default())
     }
 
-    /// A deliberately tiny per-cell counter. The default CountMin is 3x4096 i32
+    /// A deliberately tiny per-cell counter. The default CountMinSketch is 3x4096 i32
     /// (~49 KB) *per grid cell*, which is fine for a 3x64 grid and ruinous for a
     /// large one.
     fn small_cm_counter() -> HydraCounter {
-        HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(2, 64))
+        HydraCounter::CountMinSketch(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+            2, 64,
+        ))
     }
 
     #[test]
@@ -1014,12 +1014,12 @@ mod tests {
 
     // Helper to generate a default Count Sketch counter
     fn count_counter() -> HydraCounter {
-        HydraCounter::CS(Count::<Vector2D<i32>, FastPath>::default())
+        HydraCounter::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::default())
     }
 
     // Helper to generate a default UnivMon counter
     fn univmon_counter() -> HydraCounter {
-        HydraCounter::UNIVERSAL(UnivMon::default())
+        HydraCounter::UnivMon(UnivMon::default())
     }
 
     #[test]
@@ -1028,16 +1028,16 @@ mod tests {
         let key = DataInput::I64(42);
 
         // 1. Insert data
-        counter.insert(&key, None);
-        counter.insert(&key, None);
-        counter.insert(&key, None);
+        counter.update(&key, None);
+        counter.update(&key, None);
+        counter.update(&key, None);
 
         // 2. Query Frequency (Valid)
         let query = HydraQuery::Frequency(key);
         let result = counter.query(&query);
 
         assert!(result.is_ok());
-        // CountMin isn't always exact, but for small inputs/defaults it usually is
+        // CountMinSketch isn't always exact, but for small inputs/defaults it usually is
         assert_eq!(result.unwrap(), 3.0);
     }
 
@@ -1060,14 +1060,14 @@ mod tests {
 
     #[test]
     fn test_hll_cardinality_query() {
-        let mut counter = HydraCounter::HLL(HyperLogLog::<ErtlMLE>::default());
+        let mut counter = HydraCounter::Hll(HyperLogLog::<Ertl>::default());
 
         // 1. Insert unique items
         for i in 0..100 {
-            counter.insert(&DataInput::I64(i), None);
+            counter.update(&DataInput::I64(i), None);
         }
         // Duplicate insertions shouldn't affect cardinality
-        counter.insert(&DataInput::I64(0), None);
+        counter.update(&DataInput::I64(0), None);
 
         // 2. Query Cardinality (Valid)
         let result = counter.query(&HydraQuery::Cardinality);
@@ -1084,11 +1084,11 @@ mod tests {
     #[test]
     fn test_kll_quantile_query() {
         // Assuming KLL has a default implementation
-        let mut counter = HydraCounter::KLL(KLL::default());
+        let mut counter = HydraCounter::Kll(Kll::default());
 
         // Insert numbers 1 to 100
         for i in 1..=100 {
-            counter.insert(&DataInput::F64(i as f64), None);
+            counter.update(&DataInput::F64(i as f64), None);
         }
 
         // Query Median (0.5)
@@ -1114,10 +1114,10 @@ mod tests {
         let key_b = DataInput::Str("B");
 
         for _ in 0..10 {
-            counter.insert(&key_a, None);
+            counter.update(&key_a, None);
         }
         for _ in 0..20 {
-            counter.insert(&key_b, None);
+            counter.update(&key_b, None);
         }
 
         // 1. Test L1 Norm (Total Sum of Weights)
@@ -1138,12 +1138,12 @@ mod tests {
 
     #[test]
     fn test_merge_counters() {
-        // Test merging two CountMin sketches via the Hydra wrapper
+        // Test merging two CountMinSketch sketches via the Hydra wrapper
         let mut c1 = cm_counter();
         let mut c2 = cm_counter();
 
-        c1.insert(&DataInput::I64(1), None);
-        c2.insert(&DataInput::I64(1), None);
+        c1.update(&DataInput::I64(1), None);
+        c2.update(&DataInput::I64(1), None);
 
         // Valid merge
         assert!(c1.merge(&c2).is_ok());
@@ -1152,7 +1152,7 @@ mod tests {
         assert_eq!(count, 2.0, "Merge should sum the counts");
 
         // Invalid merge (Different types)
-        let hll = HydraCounter::HLL(HyperLogLog::<ErtlMLE>::default());
+        let hll = HydraCounter::Hll(HyperLogLog::<Ertl>::default());
         assert!(c1.merge(&hll).is_err());
     }
 
@@ -1162,7 +1162,7 @@ mod tests {
         let key = DataInput::I64(7);
 
         for _ in 0..4 {
-            counter.insert(&key, None);
+            counter.update(&key, None);
         }
 
         let query = HydraQuery::Frequency(key);

@@ -19,7 +19,7 @@ is about to overflow. The counters stay narrow; the exponent buys the range.
 
 ## Type/Struct
 
-- `MicroCM<H = DefaultXxHasher>` — a Count-Min-shaped grid of cells.
+- `MicroCm<H = DefaultXxHasher>` — a Count-Min-shaped grid of cells.
 - `MicroParams { t, c }` — sub-windows per window, and the zoom base.
 - `SubWindowClock` — `CountBased` or `TimeBased`.
 - `DeltaStrategy` — `Over`, `Under`, `Linear(f64)`.
@@ -47,14 +47,14 @@ every row to the same cell — and `rows * log2(cols)` must not exceed 128.
 would collapse every byte-wide pixel to 0 or 1. `rounding_seed` seeds the probabilistic rounding a
 zoom-out uses; a fixed value makes a run reproducible.
 
-`MicroCM::default()` is a 4 x 1024 grid at `T = 12`, `c = 2`, over
+`MicroCm::default()` is a 4 x 1024 grid at `T = 12`, `c = 2`, over
 count-based sub-windows of 4096 items.
 
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &DataInput)                      // count-based clock
-fn insert_at(&mut self, key: &DataInput, timestamp: u64)   // time-based clock
+fn update(&mut self, key: &DataInput)                      // count-based clock
+fn update_at(&mut self, key: &DataInput, timestamp: u64)   // time-based clock
 ```
 
 Each panics if given the other's clock, rather than silently not advancing it.
@@ -152,11 +152,11 @@ up to a multiple of four: 20 bytes at `T = 12`, 8 bytes at `T = 1`.
 ## Examples
 
 ```rust
-use asap_sketchlib::sketches::microscope::{DeltaStrategy, MicroCM, MicroParams, SubWindowClock};
+use asap_sketchlib::sketches::microscope::{DeltaStrategy, MicroCm, MicroParams, SubWindowClock};
 use asap_sketchlib::DataInput;
 
 // A window of 8 sub-windows of 1000 items: the last ~8000 items.
-let mut sk: MicroCM = MicroCM::with_dimensions(
+let mut sk: MicroCm = MicroCm::with_dimensions(
     4,
     1024,
     MicroParams::new(8, 2),
@@ -165,7 +165,7 @@ let mut sk: MicroCM = MicroCM::with_dimensions(
 );
 
 for i in 0..5_000u64 {
-    sk.insert(&DataInput::U64(i % 100));
+    sk.update(&DataInput::U64(i % 100));
 }
 
 // Nothing has expired yet and nothing has zoomed, so the only error left

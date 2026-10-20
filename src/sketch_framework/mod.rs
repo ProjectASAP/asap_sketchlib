@@ -16,17 +16,17 @@
 //!
 //! Some parts of this module are feature-gated:
 //!
-//! - `eh_univ_optimized` requires `experimental`
+//! - `eh_univmon` requires `experimental`
 //! - the `OctoRuntime` execution runtime requires `octo-runtime`
 
 pub mod eh;
-pub use eh::EHBucket;
+pub use eh::EhBucket;
 pub use eh::ExponentialHistogram;
 
 /// Sketch-type adapters used by exponential histograms.
-pub mod eh_sketch_list;
-pub use eh_sketch_list::EHSketchList;
-pub use eh_sketch_list::SketchNorm;
+pub mod eh_bucket_sketch;
+pub use eh_bucket_sketch::EhBucketSketch;
+pub use eh_bucket_sketch::SketchNorm;
 
 pub mod hashlayer;
 pub use hashlayer::{EnsembleSketch, HashSketchEnsemble};
@@ -37,15 +37,16 @@ pub mod hydra;
 pub use hydra::Hydra;
 
 pub mod univmon;
-pub use univmon::{UnivMon, UnivMonDeltaFidelity, bottom_layer_for_hash};
+pub use univmon::{UnivMon, UnivMonDeltaFidelity};
 
 pub mod univmon_q;
 pub use univmon_q::{
-    OrderedQueryDiagnostics, UnivMonQ, UnivMonQConfig, UnivMonQError, UnivMonQPoint, UnivMonQQuery,
+    UnivMonQ, UnivMonQCdfEntry, UnivMonQConfig, UnivMonQError, UnivMonQOrderedQueryDiagnostics,
+    UnivMonQQuery,
 };
 
-pub mod univmon_optimized;
-pub use univmon_optimized::{UnivMonPyramid, UnivSketchPool};
+pub mod univmon_two_tier;
+pub use univmon_two_tier::{UnivMonPool, UnivMonTwoTier};
 
 pub mod nitro;
 pub use nitro::{
@@ -53,21 +54,26 @@ pub use nitro::{
 };
 
 #[cfg(feature = "experimental")]
-pub mod eh_univ_optimized;
+pub mod eh_univmon;
 #[cfg(feature = "experimental")]
-pub use eh_univ_optimized::{EHMapBucket, EHUnivMonBucket, EHUnivOptimized, EHUnivQueryResult};
+pub use eh_univmon::{
+    EhUnivMonExactBucket, EhUnivMonQueryResult, EhUnivMonSketchBucket, ExponentialHistogramUnivMon,
+};
 
 pub mod octo;
 pub use octo::{
-    CmOctoAggregator, CmOctoPlan, CmOctoWorker, CmTopKOctoAggregator, CmTopKOctoPlan,
-    CmTopKOctoWorker, CmWorkerSketch, CocoOctoAggregator, CocoOctoPlan, CocoOctoWorker,
-    CocoWorkerSketch, CountOctoAggregator, CountOctoPlan, CountOctoWorker, CountTopKOctoAggregator,
-    CountTopKOctoPlan, CountTopKOctoWorker, CountWorkerSketch, DEFAULT_OCTO_TOP_K,
-    DdOctoAggregator, DdOctoPlan, DdOctoWorker, DdWorkerSketch, ElasticOctoAggregator,
-    ElasticOctoPlan, ElasticOctoWorker, ElasticWorkerSketch, HllOctoAggregator, HllOctoPlan,
-    HllOctoWorker, KeyedHashes, L2hhWorkerSketch, OctoAggregator, OctoPlan, OctoWorker, RowHashes,
-    UnivMonInput, UnivMonOctoAggregator, UnivMonOctoPlan, UnivMonOctoWorker, flow_key_string,
-    max_hll_threshold, threshold_for_error, univmon_layer_threshold,
+    CocoOctoAggregator, CocoOctoPlan, CocoOctoWorker, CocoSketchWorker,
+    CountMinSketchOctoAggregator, CountMinSketchOctoPlan, CountMinSketchOctoWorker,
+    CountMinSketchWithHeapOctoAggregator, CountMinSketchWithHeapOctoPlan,
+    CountMinSketchWithHeapOctoWorker, CountMinSketchWorker, CountSketchOctoAggregator,
+    CountSketchOctoPlan, CountSketchOctoWorker, CountSketchWithHeapOctoAggregator,
+    CountSketchWithHeapOctoPlan, CountSketchWithHeapOctoWorker, CountSketchWithL2NormWorker,
+    CountSketchWorker, DdOctoAggregator, DdOctoPlan, DdOctoWorker, DdSketchWorker,
+    ElasticOctoAggregator, ElasticOctoPlan, ElasticOctoWorker, ElasticSketchWorker,
+    HllOctoAggregator, HllOctoPlan, HllOctoWorker, KeyedHashes, KeyedLayerHashes,
+    OCTO_DEFAULT_HEAP_SIZE, OctoAggregator, OctoPlan, OctoWorker, RowHashes, UnivMonOctoAggregator,
+    UnivMonOctoPlan, UnivMonOctoWorker, flow_key_string, max_hll_threshold, threshold_for_error,
+    univmon_layer_threshold,
 };
 #[cfg(feature = "octo-runtime")]
 pub use octo::{
@@ -77,5 +83,6 @@ pub use octo::{
 
 pub mod tumbling;
 pub use tumbling::{
-    FoldCMSConfig, FoldCSConfig, KLLConfig, SketchPool, TumblingWindow, TumblingWindowSketch,
+    CountMinSketchFoldConfig, CountSketchFoldConfig, KllConfig, SketchPool, TumblingWindow,
+    TumblingWindowSketch,
 };

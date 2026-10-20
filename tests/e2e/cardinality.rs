@@ -6,7 +6,7 @@
 //! error model:
 //!
 //! - `Classic` is Flajolet et al.'s register estimator, RSE `1.04 / sqrt(m)`.
-//! - `ErtlMLE` is the maximum-likelihood estimator over the same registers; it
+//! - `Ertl` is the maximum-likelihood estimator over the same registers; it
 //!   attains the Cramer-Rao bound `sqrt(3 ln 2 - 1) / sqrt(m) = 1.0389/sqrt(m)`,
 //!   so the same constant applies.
 //! - `HIP` integrates the insertion history and is strictly tighter, RSE
@@ -27,9 +27,9 @@ use common::{
 use common::{uniform_u64, zipf_u64};
 
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
-use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
+use asap_sketchlib::sketches::hll::{HyperLogLogHipImpl, HyperLogLogImpl};
 use asap_sketchlib::{
-    Classic, DataInput, ErtlMLE, HyperLogLogHIPP12, HyperLogLogHIPP14, HyperLogLogHIPP16,
+    Classic, DataInput, Ertl, HyperLogLogHipP12, HyperLogLogHipP14, HyperLogLogHipP16,
     HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, SetAggregator,
 };
 
@@ -116,7 +116,7 @@ macro_rules! hll_battery {
                 let base = IDENTITY_NAMESPACE_STRIDE * (i as u64 + 1);
                 let mut sketch = <$ty>::new();
                 for k in 0..target {
-                    sketch.insert(&DataInput::U64(base + k));
+                    sketch.update(&DataInput::U64(base + k));
                 }
                 if let Err(detail) = spec.check(sketch.estimate() as f64, target as usize) {
                     panic!("{detail}. {context}");
@@ -133,7 +133,7 @@ macro_rules! hll_battery {
             // moves to a larger leading-zero count. Structural, not a band.
             let before = biggest.estimate();
             for k in 0..target.min(200_000) {
-                biggest.insert(&DataInput::U64(base + k));
+                biggest.update(&DataInput::U64(base + k));
             }
             assert_eq!(
                 biggest.estimate(),
@@ -153,11 +153,11 @@ macro_rules! hll_battery {
                 let mut odd = <$ty>::new();
                 for k in 0..MERGE_N {
                     let d = DataInput::U64(mbase + k);
-                    single.insert(&d);
+                    single.update(&d);
                     if k % 2 == 0 {
-                        even.insert(&d);
+                        even.update(&d);
                     } else {
-                        odd.insert(&d);
+                        odd.update(&d);
                     }
                 }
                 let merge_shards: fn(&$ty, &$ty, &$ty) -> Option<(bool, bool)> = $merge;
@@ -207,42 +207,42 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_p12_satisfies_the_cramer_rao_error_model,
-    HyperLogLogP12<ErtlMLE>,
+    HyperLogLogP12<Ertl>,
     12,
     hll,
     mergeable
 );
 hll_battery!(
     hll_ertl_mle_p14_satisfies_the_cramer_rao_error_model,
-    HyperLogLogP14<ErtlMLE>,
+    HyperLogLogP14<Ertl>,
     14,
     hll,
     mergeable
 );
 hll_battery!(
     hll_ertl_mle_p16_satisfies_the_cramer_rao_error_model,
-    HyperLogLogP16<ErtlMLE>,
+    HyperLogLogP16<Ertl>,
     16,
     hll,
     mergeable
 );
 hll_battery!(
     hll_hip_p12_satisfies_the_hip_error_model,
-    HyperLogLogHIPP12,
+    HyperLogLogHipP12,
     12,
     hll_hip,
     not_mergeable
 );
 hll_battery!(
     hll_hip_p14_satisfies_the_hip_error_model,
-    HyperLogLogHIPP14,
+    HyperLogLogHipP14,
     14,
     hll_hip,
     not_mergeable
 );
 hll_battery!(
     hll_hip_p16_satisfies_the_hip_error_model,
-    HyperLogLogHIPP16,
+    HyperLogLogHipP16,
     16,
     hll_hip,
     not_mergeable
@@ -340,7 +340,7 @@ fn hll_accuracy_improves_with_precision_as_the_error_model_predicts() {
             for b in 0..BLOCKS {
                 let mut s = <$ty>::new();
                 for i in 0..N {
-                    s.insert(&DataInput::U64(b * N + i));
+                    s.update(&DataInput::U64(b * N + i));
                 }
                 let rel = (s.estimate() as f64 - N as f64) / N as f64;
                 sq += rel * rel;
@@ -404,7 +404,7 @@ fn hll_classic_switchover_band_stays_within_the_documented_empirical_band() {
             for b in 0..BLOCKS {
                 let mut s = <$ty>::new();
                 for i in 0..n {
-                    s.insert(&DataInput::U64(b * 20_000_000 + i));
+                    s.update(&DataInput::U64(b * 20_000_000 + i));
                 }
                 let rel = (s.estimate() as f64 - n as f64) / n as f64;
                 sq += rel * rel;
@@ -478,7 +478,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p10_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP10>,
+    HyperLogLogImpl<Ertl, HllRegP10>,
     10,
     hll,
     mergeable,
@@ -486,7 +486,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p10_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP10>,
+    HyperLogLogHipImpl<HllRegP10>,
     10,
     hll_hip,
     not_mergeable,
@@ -502,7 +502,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p11_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP11>,
+    HyperLogLogImpl<Ertl, HllRegP11>,
     11,
     hll,
     mergeable,
@@ -510,7 +510,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p11_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP11>,
+    HyperLogLogHipImpl<HllRegP11>,
     11,
     hll_hip,
     not_mergeable,
@@ -526,7 +526,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p12_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP12>,
+    HyperLogLogImpl<Ertl, HllRegP12>,
     12,
     hll,
     mergeable,
@@ -534,7 +534,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p12_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP12>,
+    HyperLogLogHipImpl<HllRegP12>,
     12,
     hll_hip,
     not_mergeable,
@@ -550,7 +550,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p13_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP13>,
+    HyperLogLogImpl<Ertl, HllRegP13>,
     13,
     hll,
     mergeable,
@@ -558,7 +558,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p13_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP13>,
+    HyperLogLogHipImpl<HllRegP13>,
     13,
     hll_hip,
     not_mergeable,
@@ -574,7 +574,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p14_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP14>,
+    HyperLogLogImpl<Ertl, HllRegP14>,
     14,
     hll,
     mergeable,
@@ -582,7 +582,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p14_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP14>,
+    HyperLogLogHipImpl<HllRegP14>,
     14,
     hll_hip,
     not_mergeable,
@@ -598,7 +598,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p15_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP15>,
+    HyperLogLogImpl<Ertl, HllRegP15>,
     15,
     hll,
     mergeable,
@@ -606,7 +606,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p15_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP15>,
+    HyperLogLogHipImpl<HllRegP15>,
     15,
     hll_hip,
     not_mergeable,
@@ -622,7 +622,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p16_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP16>,
+    HyperLogLogImpl<Ertl, HllRegP16>,
     16,
     hll,
     mergeable,
@@ -630,7 +630,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p16_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP16>,
+    HyperLogLogHipImpl<HllRegP16>,
     16,
     hll_hip,
     not_mergeable,
@@ -646,7 +646,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p17_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP17>,
+    HyperLogLogImpl<Ertl, HllRegP17>,
     17,
     hll,
     mergeable,
@@ -654,7 +654,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p17_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP17>,
+    HyperLogLogHipImpl<HllRegP17>,
     17,
     hll_hip,
     not_mergeable,
@@ -670,7 +670,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_ertl_mle_custom_p18_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP18>,
+    HyperLogLogImpl<Ertl, HllRegP18>,
     18,
     hll,
     mergeable,
@@ -678,7 +678,7 @@ hll_battery!(
 );
 hll_battery!(
     hll_hip_custom_p18_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP18>,
+    HyperLogLogHipImpl<HllRegP18>,
     18,
     hll_hip,
     not_mergeable,
@@ -695,9 +695,9 @@ fn custom_precision_accuracy_improves_with_precision_as_the_error_model_predicts
     let mut p18 = HyperLogLogImpl::<Classic, HllRegP18>::new();
     for k in 0..N {
         let d = DataInput::U64(BASE + k);
-        p10.insert(&d);
-        p13.insert(&d);
-        p18.insert(&d);
+        p10.update(&d);
+        p13.update(&d);
+        p18.update(&d);
     }
 
     let relative = |estimate: usize| (estimate as f64 - N as f64).abs() / N as f64;
@@ -724,19 +724,19 @@ fn a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estim
     let mut classic_single = HyperLogLogImpl::<Classic, HllRegP13>::new();
     let mut classic_even = HyperLogLogImpl::<Classic, HllRegP13>::new();
     let mut classic_odd = HyperLogLogImpl::<Classic, HllRegP13>::new();
-    let mut ertl_single = HyperLogLogImpl::<ErtlMLE, HllRegP13>::new();
-    let mut ertl_even = HyperLogLogImpl::<ErtlMLE, HllRegP13>::new();
-    let mut ertl_odd = HyperLogLogImpl::<ErtlMLE, HllRegP13>::new();
+    let mut ertl_single = HyperLogLogImpl::<Ertl, HllRegP13>::new();
+    let mut ertl_even = HyperLogLogImpl::<Ertl, HllRegP13>::new();
+    let mut ertl_odd = HyperLogLogImpl::<Ertl, HllRegP13>::new();
     for k in 0..N {
         let d = DataInput::U64(BASE + k);
-        classic_single.insert(&d);
-        ertl_single.insert(&d);
+        classic_single.update(&d);
+        ertl_single.update(&d);
         if k % 2 == 0 {
-            classic_even.insert(&d);
-            ertl_even.insert(&d);
+            classic_even.update(&d);
+            ertl_even.update(&d);
         } else {
-            classic_odd.insert(&d);
-            ertl_odd.insert(&d);
+            classic_odd.update(&d);
+            ertl_odd.update(&d);
         }
     }
 
@@ -767,7 +767,8 @@ fn a_custom_precision_merge_reproduces_the_single_pass_registers_for_every_estim
 
 #[test]
 fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
-    use asap_sketchlib::{DeltaResult, MessagePackCodec};
+    use asap_sketchlib::SetAggregatorDelta;
+    use asap_sketchlib::message_pack_format::MessagePackCodec;
     use std::collections::HashSet;
 
     let mut before = SetAggregator::new();
@@ -781,7 +782,7 @@ fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
 
     let added: HashSet<String> = after.values.difference(&before.values).cloned().collect();
     let removed: HashSet<String> = before.values.difference(&after.values).cloned().collect();
-    let delta = DeltaResult {
+    let delta = SetAggregatorDelta {
         added: added.clone(),
         removed: removed.clone(),
     };
@@ -798,7 +799,7 @@ fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
     );
 
     let bytes = delta.to_msgpack().expect("encode");
-    let decoded = DeltaResult::from_msgpack(&bytes).expect("decode");
+    let decoded = SetAggregatorDelta::from_msgpack(&bytes).expect("decode");
     assert_eq!(decoded.added, added, "added set survived the wire");
     assert_eq!(decoded.removed, removed, "removed set survived the wire");
 
@@ -814,12 +815,13 @@ fn a_set_aggregator_delta_describes_the_change_and_survives_the_wire() {
         "applying the decoded delta must reproduce the later snapshot"
     );
 
-    let empty = DeltaResult {
+    let empty = SetAggregatorDelta {
         added: HashSet::new(),
         removed: HashSet::new(),
     };
-    let round_tripped = DeltaResult::from_msgpack(&empty.to_msgpack().expect("encode empty"))
-        .expect("decode empty");
+    let round_tripped =
+        SetAggregatorDelta::from_msgpack(&empty.to_msgpack().expect("encode empty"))
+            .expect("decode empty");
     assert!(
         round_tripped.added.is_empty() && round_tripped.removed.is_empty(),
         "an empty delta must stay empty across the wire"
@@ -929,7 +931,7 @@ macro_rules! hll_zipf_battery {
 
                 let mut sketch = <$ty>::new();
                 for &v in &stream.values {
-                    sketch.insert(&DataInput::U64(v));
+                    sketch.update(&DataInput::U64(v));
                 }
                 if let Err(detail) = spec.check(sketch.estimate() as f64, n) {
                     panic!("{detail}. {context}");
@@ -937,7 +939,7 @@ macro_rules! hll_zipf_battery {
 
                 let mut once = <$ty>::new();
                 for &v in &stream.first_appearance {
-                    once.insert(&DataInput::U64(v));
+                    once.update(&DataInput::U64(v));
                 }
                 assert_eq!(
                     sketch.estimate(),
@@ -950,7 +952,7 @@ macro_rules! hll_zipf_battery {
 
                 let before = sketch.estimate();
                 for &v in &stream.values {
-                    sketch.insert(&DataInput::U64(v));
+                    sketch.update(&DataInput::U64(v));
                 }
                 assert_eq!(
                     sketch.estimate(),
@@ -970,13 +972,13 @@ hll_zipf_battery!(
 );
 hll_zipf_battery!(
     hll_ertl_mle_zipf_p10_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP10>,
+    HyperLogLogImpl<Ertl, HllRegP10>,
     10,
     hll
 );
 hll_zipf_battery!(
     hll_hip_zipf_p10_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP10>,
+    HyperLogLogHipImpl<HllRegP10>,
     10,
     hll_hip
 );
@@ -988,13 +990,13 @@ hll_zipf_battery!(
 );
 hll_zipf_battery!(
     hll_ertl_mle_zipf_p11_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP11>,
+    HyperLogLogImpl<Ertl, HllRegP11>,
     11,
     hll
 );
 hll_zipf_battery!(
     hll_hip_zipf_p11_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP11>,
+    HyperLogLogHipImpl<HllRegP11>,
     11,
     hll_hip
 );
@@ -1006,13 +1008,13 @@ hll_zipf_battery!(
 );
 hll_zipf_battery!(
     hll_ertl_mle_zipf_p12_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP12>,
+    HyperLogLogImpl<Ertl, HllRegP12>,
     12,
     hll
 );
 hll_zipf_battery!(
     hll_hip_zipf_p12_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP12>,
+    HyperLogLogHipImpl<HllRegP12>,
     12,
     hll_hip
 );
@@ -1024,13 +1026,13 @@ hll_zipf_battery!(
 );
 hll_zipf_battery!(
     hll_ertl_mle_zipf_p13_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP13>,
+    HyperLogLogImpl<Ertl, HllRegP13>,
     13,
     hll
 );
 hll_zipf_battery!(
     hll_hip_zipf_p13_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP13>,
+    HyperLogLogHipImpl<HllRegP13>,
     13,
     hll_hip
 );
@@ -1042,13 +1044,13 @@ hll_zipf_battery!(
 );
 hll_zipf_battery!(
     hll_ertl_mle_zipf_p14_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP14>,
+    HyperLogLogImpl<Ertl, HllRegP14>,
     14,
     hll
 );
 hll_zipf_battery!(
     hll_hip_zipf_p14_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP14>,
+    HyperLogLogHipImpl<HllRegP14>,
     14,
     hll_hip
 );
@@ -1060,13 +1062,13 @@ hll_zipf_battery!(
 );
 hll_zipf_battery!(
     hll_ertl_mle_zipf_p15_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP15>,
+    HyperLogLogImpl<Ertl, HllRegP15>,
     15,
     hll
 );
 hll_zipf_battery!(
     hll_hip_zipf_p15_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP15>,
+    HyperLogLogHipImpl<HllRegP15>,
     15,
     hll_hip
 );
@@ -1078,13 +1080,13 @@ hll_zipf_battery!(
 );
 hll_zipf_battery!(
     hll_ertl_mle_zipf_p16_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP16>,
+    HyperLogLogImpl<Ertl, HllRegP16>,
     16,
     hll
 );
 hll_zipf_battery!(
     hll_hip_zipf_p16_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP16>,
+    HyperLogLogHipImpl<HllRegP16>,
     16,
     hll_hip
 );
@@ -1096,13 +1098,13 @@ hll_zipf_battery!(
 );
 hll_zipf_battery!(
     hll_ertl_mle_zipf_p17_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP17>,
+    HyperLogLogImpl<Ertl, HllRegP17>,
     17,
     hll
 );
 hll_zipf_battery!(
     hll_hip_zipf_p17_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP17>,
+    HyperLogLogHipImpl<HllRegP17>,
     17,
     hll_hip
 );
@@ -1114,13 +1116,13 @@ hll_zipf_battery!(
 );
 hll_zipf_battery!(
     hll_ertl_mle_zipf_p18_satisfies_the_cramer_rao_error_model,
-    HyperLogLogImpl<ErtlMLE, HllRegP18>,
+    HyperLogLogImpl<Ertl, HllRegP18>,
     18,
     hll
 );
 hll_zipf_battery!(
     hll_hip_zipf_p18_satisfies_the_hip_error_model,
-    HyperLogLogHIPImpl<HllRegP18>,
+    HyperLogLogHipImpl<HllRegP18>,
     18,
     hll_hip
 );
@@ -1180,13 +1182,13 @@ mod documented_matrix {
                     let context = input.context();
 
                     let mut classic = HyperLogLogImpl::<Classic, $reg>::new();
-                    let mut ertl = HyperLogLogImpl::<ErtlMLE, $reg>::new();
-                    let mut hip = HyperLogLogHIPImpl::<$reg>::new();
+                    let mut ertl = HyperLogLogImpl::<Ertl, $reg>::new();
+                    let mut hip = HyperLogLogHipImpl::<$reg>::new();
                     for key in &input.keys {
                         let d = input.data(*key);
-                        classic.insert(&d);
-                        ertl.insert(&d);
-                        hip.insert(&d);
+                        classic.update(&d);
+                        ertl.update(&d);
+                        hip.update(&d);
                     }
 
                     for (label, spec, estimate) in [
@@ -1217,7 +1219,7 @@ mod documented_matrix {
                     // a register only ever takes a maximum. Structural.
                     let before = classic.estimate();
                     for key in &input.keys {
-                        classic.insert(&input.data(*key));
+                        classic.update(&input.data(*key));
                     }
                     assert_eq!(
                         classic.estimate(),
@@ -1235,9 +1237,9 @@ mod documented_matrix {
                     for (i, key) in input.keys.iter().enumerate() {
                         let d = input.data(*key);
                         if i % 2 == 0 {
-                            even.insert(&d);
+                            even.update(&d);
                         } else {
-                            odd.insert(&d);
+                            odd.update(&d);
                         }
                     }
                     even.merge(&odd);
@@ -1386,9 +1388,9 @@ mod documented_matrix {
         let input = key_input(id);
         let distinct = distinct_of(&input) as f64;
 
-        let mut um = UnivMon::init_univmon(HEAP, ROWS, COLS, LAYERS);
+        let mut um = UnivMon::new(HEAP, ROWS, COLS, LAYERS);
         for key in &input.keys {
-            um.insert(&input.data(*key), 1);
+            um.update_weighted(&input.data(*key), 1);
         }
 
         let context = format!(
@@ -1396,11 +1398,11 @@ mod documented_matrix {
             input.context()
         );
         assert_eq!(
-            um.calc_l1(),
+            um.estimate_l1(),
             input.keys.len() as f64,
             "UnivMon L1 must be exact. {context}"
         );
-        let card = um.calc_card();
+        let card = um.estimate_cardinality();
         let rel = (card - distinct) / distinct;
         assert!(
             rel.abs() <= CARDINALITY_BAND,
@@ -1418,16 +1420,16 @@ mod documented_matrix {
         // g-sum has no recoverable heavy hitters to work from at any layer.
         let input = key_input(1);
         let distinct = distinct_of(&input) as f64;
-        let mut um = UnivMon::init_univmon(32, 5, 2_048, 8);
+        let mut um = UnivMon::new(32, 5, 2_048, 8);
         for key in &input.keys {
-            um.insert(&input.data(*key), 1);
+            um.update_weighted(&input.data(*key), 1);
         }
         assert!(
-            um.calc_card() < distinct * 0.5,
+            um.estimate_cardinality() < distinct * 0.5,
             "an eight-layer pyramid reported {} against {distinct:.0} distinct keys; if this \
              now succeeds, the layer count the documented configuration carries is larger \
              than it needs to be",
-            um.calc_card()
+            um.estimate_cardinality()
         );
     }
 

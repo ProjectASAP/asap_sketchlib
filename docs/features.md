@@ -22,8 +22,8 @@ This document provides a high-level overview of implemented and planned features
 - `Vector1D`, `Vector2D` - Flat storage structures for sketch counters
 - `BitMatrix` - Packed one-bit-per-cell grid behind the same `MatrixStorage` interface as the counter matrices, for membership sketches
 - `impl_fixed_matrix!` macro - Define compile-time fixed-size matrix types with any counter type and dimensions
-- `impl_hll_bucket_list!` macro - Define compile-time fixed-size HLL register storage types at any precision (the crate ships `lg_k` 12/14/16)
-- `CommonHeap` & `HHHeap` - Generic and specialized heaps for heavy hitter tracking
+- `impl_hll_registers!` macro - Define compile-time fixed-size HLL register storage types at any precision (the crate ships `lg_k` 12/14/16)
+- `CommonHeap` & `TopKHeap` - Generic and specialized heaps for heavy hitter tracking
 - Deterministic hashing with seed management
 - Pluggable hash via the `SketchHasher` trait — swap the hash function without changing sketch code
 - `DigestHasher` / `DigestBuildHasher` - Single-avalanche hasher for maps keyed by a value that is already a digest
@@ -37,7 +37,7 @@ This document provides a high-level overview of implemented and planned features
 
 **UnivMon** - Universal monitoring (L1, L2, entropy, cardinality from single structure) ([apis.md](apis.md))
 
-**UnivMonPyramid** - Optimized two-tier UnivMon with `UnivSketchPool` for insert and memory management ([apis.md](apis.md))
+**UnivMonTwoTier** - Optimized two-tier UnivMon with `UnivMonPool` for insert and memory management ([apis.md](apis.md))
 
 **UnivMonQ (Experimental)** - Terminal-stratum UnivMon with exact insertion-only L1, F0/F2/compatible g-sum queries, an adaptively assisted occurrence sample for entropy, ranks, and quantiles, and reusable prepared query views. Its API, estimators, and guarantees may change.
 
@@ -45,13 +45,13 @@ This document provides a high-level overview of implemented and planned features
 
 **NitroBatch** - Batch-mode sampling wrapper for CMS/Count FastPath
 
-**EHSketchList** - Unified sketch enum for insert/merge/query across sketch types, that can be integrated into `ExponentialHistogram`
+**EhBucketSketch** - Unified sketch enum for insert/merge/query across sketch types, that can be integrated into `ExponentialHistogram`
 
 **ExponentialHistogram** - Sliding window coordinator for mergeable sketches
 
-**TumblingWindow** - Non-overlapping windows over pooled mergeable sketches, with built-in support for FoldCMS, FoldCS, KLL and the experimental UnivMon-Q
+**TumblingWindow** - Non-overlapping windows over pooled mergeable sketches, with built-in support for CountMinSketchFold, CountSketchFold, KLL and the experimental UnivMon-Q
 
-**EHUnivOptimized** - Hybrid two-tier ExponentialHistogram for UnivMon with sketch memory reuse (currently `Unstable`)
+**ExponentialHistogramUnivMon** - Hybrid two-tier ExponentialHistogram for UnivMon with sketch memory reuse (currently `Unstable`)
 
 **OctoSketch** - Multi-threaded sketch-serving framework with worker/aggregator architecture ([apis.md](apis.md))
 
@@ -87,33 +87,33 @@ Insertion throughput measured on 10,000,000 Zipf-distributed `int64` values (s=1
 
 ### Serialization
 
-MessagePack (`rmp-serde`) support. **serde support** means the type derives `Serialize`/`Deserialize` and can be used with any serde-compatible serializer. **Built-in helpers** (`serialize_to_bytes` / `deserialize_from_bytes`) provide one-call round-tripping without requiring users to depend on `rmp-serde` directly. These helpers emit the self-describing **ASAPv1** wire envelope (see the [ASAPv1 wire format spec](./asapv1_wire_format.md)) for every sketch the spec's `kind_id` registry marks *implemented*; NitroBatch, FoldCMS, FoldCS, HashSketchEnsemble, EHUnivOptimized and OctoSketch are not converted.
+MessagePack (`rmp-serde`) support. **serde support** means the type derives `Serialize`/`Deserialize` and can be used with any serde-compatible serializer. **Built-in helpers** (`to_asapv1` / `from_asapv1`) provide one-call round-tripping without requiring users to depend on `rmp-serde` directly. These helpers emit the self-describing **ASAPv1** wire envelope (see the [ASAPv1 wire format spec](./asapv1_wire_format.md)) for every sketch the spec's `kind_id` registry marks *implemented*; NitroBatch, CountMinSketchFold, CountSketchFold, HashSketchEnsemble, ExponentialHistogramUnivMon and OctoSketch are not converted.
 
 | Component | serde support | Built-in helpers |
 | --- | --- | --- |
-| CountMin | Yes | Yes |
-| Count / CountL2HH | Yes | Yes |
+| CountMinSketch | Yes | Yes |
+| Count / CountSketchWithL2Norm | Yes | Yes |
 | HyperLogLog (all variants) | Yes | Yes |
 | DDSketch | Yes | Yes |
-| KLL / KLLDynamic | Yes | Yes |
+| KLL / KllDynamic | Yes | Yes |
 | KMV | Yes | Yes |
 | Elastic | Yes | Yes |
 | Coco | Yes | Yes |
 | UniformSampling | Yes | Yes |
-| FoldCMS / FoldCS | Yes | In Progress |
-| CMSHeap / CSHeap | In Progress | Yes |
-| CMSSpaceSaving / CSSpaceSaving | No | Yes |
+| CountMinSketchFold / CountSketchFold | Yes | In Progress |
+| CountMinSketchWithHeap / CountSketchWithHeap | In Progress | Yes |
+| CountMinSketchWithSpaceSaving / CountSketchWithSpaceSaving | No | Yes |
 | SpaceSaving | Yes | Yes |
 | Bloom | Yes | Yes |
 | Hydra | Yes | Yes |
 | UnivMon | Yes | Yes |
-| UnivMon Optimized | No | Yes |
+| Two-tier UnivMon | No | Yes |
 | UnivMonQ (experimental) | Internal wire DTO | Yes |
 | NitroBatch | Yes | In Progress |
-| EHSketchList | Yes | Yes |
+| EhBucketSketch | Yes | Yes |
 | ExponentialHistogram | No | Yes |
 
-Protobuf (prost): `.proto` definitions exist for CountMin, Count, HLL, DDSketch, KLL, Elastic, Coco, Hydra, and UnivMon. Rust conversion code is in progress.
+Protobuf (prost): `.proto` definitions exist for CountMinSketch, Count, HLL, DDSketch, KLL, Elastic, Coco, Hydra, and UnivMon. Rust conversion code is in progress.
 
 ### API Stability
 

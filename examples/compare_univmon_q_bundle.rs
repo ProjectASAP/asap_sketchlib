@@ -10,7 +10,7 @@ use std::hint::black_box;
 use std::mem::size_of;
 use std::time::{Duration, Instant};
 
-use asap_sketchlib::{KLL, UnivMonQ, UnivMonQConfig};
+use asap_sketchlib::{Kll, UnivMonQ, UnivMonQConfig};
 
 const LEVELS: usize = 12;
 const DEPTH: usize = 5;
@@ -34,18 +34,18 @@ fn main() {
     assert!(n > 0, "n must be a positive integer");
     let seed = 0x2026_0804_u64;
     let q_matched = UnivMonQConfig {
-        levels: LEVELS,
-        width: 256,
-        width_halving_period: 3,
-        depth: DEPTH,
+        layers: LEVELS,
+        top_layer_cols: 256,
+        cols_halving_period: 3,
+        rows: DEPTH,
         counter_bits: 32,
-        candidates: 128,
+        heap_size: 128,
         ordered_samples: ORDERED_SAMPLES,
-        hash_seed: 5,
+        seed_index: 5,
     };
     let q_quality = UnivMonQConfig {
-        width: 1_024,
-        candidates: 256,
+        top_layer_cols: 1_024,
+        heap_size: 256,
         ..q_matched
     };
 
@@ -56,10 +56,10 @@ fn main() {
     );
     println!(
         "Q-matched: width={}, candidates={}; Q-quality: width={}, candidates={}; both use {} ordered samples",
-        q_matched.width,
-        q_matched.candidates,
-        q_quality.width,
-        q_quality.candidates,
+        q_matched.top_layer_cols,
+        q_matched.heap_size,
+        q_quality.top_layer_cols,
+        q_quality.heap_size,
         q_matched.ordered_samples
     );
 
@@ -315,7 +315,7 @@ fn score_q(sketch: &UnivMonQ, truth: &Truth) -> Score {
         .collect();
     truth.score(
         &points,
-        query.estimate_distinct(),
+        query.estimate_cardinality(),
         query.estimate_f2(),
         query.estimate_entropy(),
         &heavy,
@@ -336,7 +336,7 @@ fn score_bundle(sketch: &SpecializedBundle, truth: &Truth) -> Score {
     let cdf = sketch.kll.cdf();
     let quantiles: Vec<i64> = QUANTILES
         .iter()
-        .map(|q| cdf.query(*q).round() as i64)
+        .map(|q| cdf.value_at(*q).round() as i64)
         .collect();
     let ranks: Vec<(i64, f64)> = truth
         .cdf_probes
@@ -510,7 +510,7 @@ struct SpecializedBundle {
     frequencies: FrequencyCountSketch,
     heavy_hitters: SpaceSaving,
     reservoir: OccurrenceBottomK,
-    kll: KLL<i64>,
+    kll: Kll<i64>,
     count: u64,
     min: Option<i64>,
     max: Option<i64>,
@@ -523,7 +523,7 @@ impl SpecializedBundle {
             frequencies: FrequencyCountSketch::new(BUNDLE_WIDTH, DEPTH, seed ^ 0x4353),
             heavy_hitters: SpaceSaving::new(BUNDLE_CANDIDATES),
             reservoir: OccurrenceBottomK::new(BUNDLE_RESERVOIR, seed ^ 0x0052_4553, stream_id),
-            kll: KLL::init_kll_with_seed(BUNDLE_KLL_K as i32, seed ^ stream_id ^ 0x004b_4c4c),
+            kll: Kll::with_k_and_seed(BUNDLE_KLL_K as i32, seed ^ stream_id ^ 0x004b_4c4c),
             count: 0,
             min: None,
             max: None,
@@ -945,11 +945,11 @@ fn print_query_latency(
     columns(
         "F0",
         average_query(
-            || black_box(matched_view.estimate_distinct()),
+            || black_box(matched_view.estimate_cardinality()),
             QUERY_REPEATS,
         ),
         average_query(
-            || black_box(quality_view.estimate_distinct()),
+            || black_box(quality_view.estimate_cardinality()),
             QUERY_REPEATS,
         ),
         average_query(|| black_box(bundle.hll.estimate()), QUERY_REPEATS),
@@ -986,7 +986,7 @@ fn print_query_latency(
         average_query(|| black_box(matched_view.rank(probe as f64)), QUERY_REPEATS),
         average_query(|| black_box(quality_view.rank(probe as f64)), QUERY_REPEATS),
         average_query(
-            || black_box(bundle_cdf.quantile(probe as f64)),
+            || black_box(bundle_cdf.normalized_rank(probe as f64)),
             QUERY_REPEATS,
         ),
     );
@@ -1001,7 +1001,7 @@ fn print_query_latency(
             QUERY_REPEATS,
         ),
         average_query(
-            || black_box(QUANTILES.map(|q| bundle_cdf.query(q))),
+            || black_box(QUANTILES.map(|q| bundle_cdf.value_at(q))),
             QUERY_REPEATS,
         ),
     );
@@ -1024,7 +1024,7 @@ fn query_all_q(sketch: &UnivMonQ, truth: &Truth) {
     black_box(query.count());
     black_box((query.min(), query.max()));
     black_box(query.estimate_frequency(truth.cdf_probes[50] as f64));
-    black_box(query.estimate_distinct());
+    black_box(query.estimate_cardinality());
     black_box(query.estimate_f2());
     black_box(query.estimate_entropy());
     black_box(query.heavy_hitters(TOP_K));
@@ -1043,7 +1043,7 @@ fn query_all_bundle(bundle: &SpecializedBundle, truth: &Truth) {
     black_box(bundle.heavy_hitters.top(TOP_K));
     black_box(bundle.kll.rank(truth.cdf_probes[50] as f64));
     let cdf = bundle.kll.cdf();
-    black_box(QUANTILES.map(|q| cdf.query(q)));
+    black_box(QUANTILES.map(|q| cdf.value_at(q)));
     black_box(cdf);
 }
 

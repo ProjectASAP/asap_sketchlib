@@ -2,7 +2,7 @@
 //!
 //! Child submodule of [`crate::sketches::bloom`]: it holds ALL of Bloom's
 //! ASAPv1 serialization (the metadata/payload DTOs, the kind_id constant, and
-//! the `serialize_to_bytes` / `deserialize_from_bytes` impls) while the
+//! the `to_asapv1` / `from_asapv1` impls) while the
 //! algorithm lives in the parent module file. Being a descendant module, it
 //! reads the sketch's private `bits` / `inserted` fields directly without
 //! widening any field visibility. See `docs/asapv1_wire_format.md` §3.4.
@@ -26,12 +26,11 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::BLOOM;
 use crate::{BitMatrix, HashProfile, SketchHasher};
 
 use super::{BLOOM_MAX_BITS, BLOOM_MAX_SLICES, Bloom, BloomMode};
-
-/// Bloom kind_id: family `0x17`, single algorithm variant `0x00`.
-const BLOOM_KIND: &[u8] = &[0x17, 0x00];
 
 /// Bits packed into one storage word of the bit grid.
 const BITS_PER_WORD: usize = u64::BITS as usize;
@@ -131,7 +130,7 @@ where
     ///
     /// A geometry outside the wire-eligible subset (see the module docs) is an
     /// error rather than bytes that would be refused on decode.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let (rows, cols) = (self.bits.rows(), self.bits.cols());
         check_geometry(rows, cols)
             .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 Bloom envelope: {e}")))?;
@@ -144,19 +143,19 @@ where
             words: self.bits.words().to_vec(),
             inserted: self.inserted,
         })?;
-        Ok(envelope::encode(BLOOM_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::BLOOM, &metadata, &payload))
     }
 
     /// Deserializes a filter from an ASAPv1 MessagePack envelope. The grid
     /// dimensions are read from the (validated) metadata and the word stride is
     /// derived from them; the payload carries only the words and the insert
     /// counter. Every inconsistency fails closed.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != BLOOM_KIND {
+        if kind_id != kind::BLOOM {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "Bloom kind_id mismatch: stored {kind_id:?}, expected {BLOOM_KIND:?}"
+                "Bloom kind_id mismatch: stored {kind_id:?}, expected {BLOOM:?}"
             )));
         }
         let meta: BloomMetadata = envelope::decode_block(metadata)?;
@@ -213,7 +212,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, FastPath, RegularPath};
+    use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, FastPath, RegularPath};
     use rmp_serde::from_slice;
 
     const MEMBERS: u64 = 5_000;
@@ -253,14 +252,14 @@ mod tests {
     fn bloom_envelope_structure_and_round_trip() {
         let mut filter = Bloom::<RegularPath>::with_dimensions(7, 1 << 14);
         for key in members() {
-            filter.insert(&key);
+            filter.update(&key);
         }
-        let bytes = filter.serialize_to_bytes().expect("serialize");
+        let bytes = filter.to_asapv1().expect("serialize");
 
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
-        // Literal, not `BLOOM_KIND`: the constant compared against itself pins
+        // Literal, not `kind::BLOOM`: the constant compared against itself pins
         // nothing, and these bytes are what a Go reader dispatches on.
         assert_eq!(&bytes[8..10], &[0x17, 0x00]);
         let (kind_id, metadata, _) = envelope::split(&bytes).expect("split");
@@ -270,9 +269,9 @@ mod tests {
         assert_eq!((meta.rows, meta.cols), (7, 1 << 14));
         assert_eq!(meta.mode, "regular");
 
-        let decoded = Bloom::<RegularPath>::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = Bloom::<RegularPath>::from_asapv1(&bytes).expect("decode");
         assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
+            decoded.to_asapv1().expect("re-serialize"),
             bytes,
             "Bloom serialized bytes differed after round trip"
         );
@@ -285,12 +284,12 @@ mod tests {
     fn bloom_fast_path_round_trip() {
         let mut filter = Bloom::<FastPath>::with_dimensions(7, 1 << 14);
         for key in members() {
-            filter.insert(&key);
+            filter.update(&key);
         }
-        let bytes = filter.serialize_to_bytes().expect("serialize");
-        let decoded = Bloom::<FastPath>::deserialize_from_bytes(&bytes).expect("decode");
+        let bytes = filter.to_asapv1().expect("serialize");
+        let decoded = Bloom::<FastPath>::from_asapv1(&bytes).expect("decode");
 
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
         assert_eq!(decoded.inserted(), filter.inserted());
         assert_answers_preserved(|k| filter.contains(k), |k| decoded.contains(k));
     }
@@ -298,14 +297,14 @@ mod tests {
     #[test]
     fn bloom_empty_round_trip() {
         let filter = Bloom::<RegularPath>::default();
-        let bytes = filter.serialize_to_bytes().expect("serialize");
-        let decoded = Bloom::<RegularPath>::deserialize_from_bytes(&bytes).expect("decode");
+        let bytes = filter.to_asapv1().expect("serialize");
+        let decoded = Bloom::<RegularPath>::from_asapv1(&bytes).expect("decode");
 
         assert!(decoded.is_empty(), "an empty filter decoded with bits set");
         assert_eq!(decoded.inserted(), 0);
         assert_eq!(decoded.rows(), filter.rows());
         assert_eq!(decoded.cols(), filter.cols());
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     /// The two paths fold different bits for the same key, so a filter decoded
@@ -316,19 +315,19 @@ mod tests {
         let mut regular = Bloom::<RegularPath>::with_dimensions(7, 1 << 12);
         let mut fast = Bloom::<FastPath>::with_dimensions(7, 1 << 12);
         for key in members() {
-            regular.insert(&key);
-            fast.insert(&key);
+            regular.update(&key);
+            fast.update(&key);
         }
-        let regular_bytes = regular.serialize_to_bytes().expect("serialize regular");
-        let fast_bytes = fast.serialize_to_bytes().expect("serialize fast");
+        let regular_bytes = regular.to_asapv1().expect("serialize regular");
+        let fast_bytes = fast.to_asapv1().expect("serialize fast");
         assert_ne!(regular_bytes, fast_bytes, "the two paths set the same bits");
 
         assert!(
-            Bloom::<FastPath>::deserialize_from_bytes(&regular_bytes).is_err(),
+            Bloom::<FastPath>::from_asapv1(&regular_bytes).is_err(),
             "regular-path bytes must not decode as fast path"
         );
         assert!(
-            Bloom::<RegularPath>::deserialize_from_bytes(&fast_bytes).is_err(),
+            Bloom::<RegularPath>::from_asapv1(&fast_bytes).is_err(),
             "fast-path bytes must not decode as regular path"
         );
     }
@@ -344,25 +343,25 @@ mod tests {
     impl SketchHasher for AltHasher {
         type HashType = <DefaultXxHasher as SketchHasher>::HashType;
 
-        fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
-            DefaultXxHasher::hash64_seeded(d, key)
+        fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(seed_index, key)
         }
-        fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
-            DefaultXxHasher::hash128_seeded(d, key)
+        fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(seed_index, key)
         }
-        fn hash_item64_seeded(d: usize, key: &crate::HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(seed_index: usize, key: &crate::OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(seed_index, key)
         }
-        fn hash_item128_seeded(d: usize, key: &crate::HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(seed_index: usize, key: &crate::OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(seed_index, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -374,7 +373,7 @@ mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
@@ -384,26 +383,22 @@ mod tests {
         let mut alt = Bloom::<RegularPath, AltHasher>::with_dimensions(7, 1 << 12);
         let mut std = Bloom::<RegularPath>::with_dimensions(7, 1 << 12);
         for key in members() {
-            alt.insert(&key);
-            std.insert(&key);
+            alt.update(&key);
+            std.update(&key);
         }
-        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
-        let decoded = Bloom::<RegularPath, AltHasher>::deserialize_from_bytes(&alt_bytes)
-            .expect("alt decode");
-        assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
-            alt_bytes
-        );
+        let alt_bytes = alt.to_asapv1().expect("alt serialize");
+        let decoded = Bloom::<RegularPath, AltHasher>::from_asapv1(&alt_bytes).expect("alt decode");
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), alt_bytes);
         assert_answers_preserved(|k| alt.contains(k), |k| decoded.contains(k));
 
         // (b) Bytes differ from the standard-profile filter (metadata derived
         // from the different profile).
-        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        let std_bytes = std.to_asapv1().expect("std serialize");
         assert_ne!(alt_bytes, std_bytes);
 
         // (c) Standard-profile decode fails closed on custom-profile bytes.
         assert!(
-            Bloom::<RegularPath>::deserialize_from_bytes(&alt_bytes).is_err(),
+            Bloom::<RegularPath>::from_asapv1(&alt_bytes).is_err(),
             "standard-profile decode must reject custom-profile bytes"
         );
     }
@@ -453,13 +448,13 @@ mod tests {
         let metadata =
             rmp_serde::to_vec_named(&bloom_metadata::<DefaultXxHasher>(rows, cols, mode)).unwrap();
         let payload = rmp_serde::to_vec(&BloomPayload { words, inserted }).unwrap();
-        envelope::encode(BLOOM_KIND, &metadata, &payload)
+        envelope::encode(kind::BLOOM, &metadata, &payload)
     }
 
     /// The message a rejected decode fails with, so a test can pin *which*
     /// rule fired rather than settling for any error at all.
     fn decode_error(bytes: &[u8]) -> String {
-        Bloom::<RegularPath>::deserialize_from_bytes(bytes)
+        Bloom::<RegularPath>::from_asapv1(bytes)
             .expect_err("decode must fail")
             .to_string()
     }
@@ -477,7 +472,7 @@ mod tests {
         .unwrap();
         let bytes = envelope::encode(&[0x02, 0x00], &metadata, &payload);
         assert!(
-            Bloom::<RegularPath>::deserialize_from_bytes(&bytes).is_err(),
+            Bloom::<RegularPath>::from_asapv1(&bytes).is_err(),
             "a foreign kind_id must be rejected"
         );
     }
@@ -507,7 +502,7 @@ mod tests {
         );
         let ok = crafted(2, 128, "regular", vec![0; 4], 0);
         assert!(
-            Bloom::<RegularPath>::deserialize_from_bytes(&ok).is_ok(),
+            Bloom::<RegularPath>::from_asapv1(&ok).is_ok(),
             "the power-of-two control case must still decode"
         );
     }
@@ -531,7 +526,7 @@ mod tests {
             vec![0; BLOOM_MAX_SLICES],
             0,
         );
-        assert!(Bloom::<RegularPath>::deserialize_from_bytes(&ok).is_ok());
+        assert!(Bloom::<RegularPath>::from_asapv1(&ok).is_ok());
     }
 
     /// A hostile bit capacity is rejected from the declared dimensions alone,
@@ -561,7 +556,7 @@ mod tests {
             );
         }
         let ok = crafted(3, 128, "regular", vec![0; 6], 0);
-        assert!(Bloom::<RegularPath>::deserialize_from_bytes(&ok).is_ok());
+        assert!(Bloom::<RegularPath>::from_asapv1(&ok).is_ok());
     }
 
     /// A row's trailing padding is unreachable by `get`, but `count_ones` sums
@@ -582,7 +577,7 @@ mod tests {
         // Same words with the padding clear decode, and report the fill the
         // eight live bits imply rather than the inflated one.
         let clean = crafted(2, 8, "regular", vec![0xFF, 0], 0);
-        let decoded = Bloom::<RegularPath>::deserialize_from_bytes(&clean).expect("clean decode");
+        let decoded = Bloom::<RegularPath>::from_asapv1(&clean).expect("clean decode");
         assert_eq!(decoded.fill_ratio(), 0.5);
         // Eight bits set against an insert counter of zero: emptiness is a
         // property of the bits.
@@ -599,10 +594,10 @@ mod tests {
         const TARGET: f64 = 0.001;
         let mut filter = Bloom::<RegularPath>::with_capacity(N, TARGET);
         for key in 0..N as u64 {
-            filter.insert(&DataInput::U64(key));
+            filter.update(&DataInput::U64(key));
         }
-        let bytes = filter.serialize_to_bytes().expect("serialize");
-        let decoded = Bloom::<RegularPath>::deserialize_from_bytes(&bytes).expect("decode");
+        let bytes = filter.to_asapv1().expect("serialize");
+        let decoded = Bloom::<RegularPath>::from_asapv1(&bytes).expect("decode");
 
         assert_eq!(decoded.rows(), filter.rows());
         assert_eq!(decoded.cols(), filter.cols());

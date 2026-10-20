@@ -1,7 +1,7 @@
 //! Set aggregator: wire-format type for tracking a set of unique string keys.
 //!
 //! `SetAggregator` is not a sketch — it's a plain `HashSet<String>` wrapped
-//! for cross-language interop. `serialize_to_bytes` writes ASAPv1 (§3.21);
+//! for cross-language interop. `to_asapv1` writes ASAPv1 (§3.21);
 //! [`MessagePackCodec`] writes `StringSet { values: HashSet<String> }`.
 
 use std::collections::HashSet;

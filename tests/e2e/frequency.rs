@@ -24,14 +24,14 @@ use common::{
 use common::{FreqTruth, uniform_u64, zipf_u64};
 use std::collections::HashMap;
 
-use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
-use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
+use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch as PortableCountMinSketch;
+use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch as PortableCountSketch;
 use asap_sketchlib::{
-    Count, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, FoldCMS, FoldCS, RegularPath,
-    Vector2D,
+    CountMinSketch, CountMinSketchFold, CountSketch, CountSketchFold, CountSketchWithL2Norm,
+    DataInput, DefaultXxHasher, FastPath, RegularPath, Vector2D,
 };
 
-// ----------------------------------------------------------------- CountMin
+// ----------------------------------------------------------------- CountMinSketch
 
 /// Count-Min's own theorem end to end: the one-sided guarantee on every key,
 /// the additive `e*(N-f)/w` excess under the binomial acceptance rule, and
@@ -43,21 +43,21 @@ fn countmin_fast_path_zipf_conforms_to_the_count_min_model_and_merges_shards_exa
     const STREAM_SEED: u64 = 1001;
 
     let stream = zipf_u64(100_000, 8192, 1.1, STREAM_SEED);
-    let mut single = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut single = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     let (mut shard_a, mut shard_b, mut shard_c) = (
-        CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS),
-        CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS),
-        CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS),
+        CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS),
+        CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS),
+        CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS),
     );
     let mut truth = FreqTruth::default();
     for (i, k) in stream.iter().enumerate() {
         let d = DataInput::I64(*k as i64);
         truth.observe(*k as i64);
-        single.insert(&d);
+        single.update(&d);
         match i % 3 {
-            0 => shard_a.insert(&d),
-            1 => shard_b.insert(&d),
-            _ => shard_c.insert(&d),
+            0 => shard_a.update(&d),
+            1 => shard_b.update(&d),
+            _ => shard_c.update(&d),
         }
     }
     shard_b.merge(&shard_c);
@@ -99,14 +99,14 @@ fn countmin_vecbased_error_bound() {
 
     for r in ROWS {
         for c in COLS {
-            let mut reg = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(r, c);
-            let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(r, c);
+            let mut reg = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(r, c);
+            let mut fast = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(r, c);
             let mut truth = FreqTruth::default();
             let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
             for k in &stream {
                 truth.observe(*k as i64);
-                reg.insert(&DataInput::I64(*k as i64));
-                fast.insert(&DataInput::I64(*k as i64));
+                reg.update(&DataInput::I64(*k as i64));
+                fast.update(&DataInput::I64(*k as i64));
             }
             let spec = CountMinSpec::new(r, c);
             let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
@@ -134,14 +134,14 @@ fn count_vecbased_error_bound() {
 
     for r in ROWS {
         for c in COLS {
-            let mut reg = Count::<Vector2D<i64>, RegularPath>::with_dimensions(r, c);
-            let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(r, c);
+            let mut reg = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(r, c);
+            let mut fast = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(r, c);
             let mut truth = FreqTruth::default();
             let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
             for k in &stream {
                 truth.observe(*k as i64);
-                reg.insert(&DataInput::I64(*k as i64));
-                fast.insert(&DataInput::I64(*k as i64));
+                reg.update(&DataInput::I64(*k as i64));
+                fast.update(&DataInput::I64(*k as i64));
             }
             let spec = CountSketchSpec::new(r, c);
             let context = format!("zipf(1.2) domain=512 n=20000 stream_seed={STREAM_SEED}");
@@ -179,11 +179,11 @@ fn countmin_matbased_error_bound() {
     macro_rules! assert_fixed_matrix {
         ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
             $({
-                let mut reg = CountMin::<$mat, RegularPath>::from_storage($mat::default());
-                let mut fast = CountMin::<$mat, FastPath>::from_storage($mat::default());
+                let mut reg = CountMinSketch::<$mat, RegularPath>::from_storage($mat::default());
+                let mut fast = CountMinSketch::<$mat, FastPath>::from_storage($mat::default());
                 for k in &stream {
-                    reg.insert(&DataInput::I64(*k as i64));
-                    fast.insert(&DataInput::I64(*k as i64));
+                    reg.update(&DataInput::I64(*k as i64));
+                    fast.update(&DataInput::I64(*k as i64));
                 }
                 let spec = CountMinSpec::new($rows, $cols);
                 spec.assert_contract(
@@ -239,11 +239,11 @@ fn count_matbased_error_bound() {
     macro_rules! assert_fixed_matrix {
         ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
             $({
-                let mut reg = Count::<$mat, RegularPath>::from_storage($mat::default());
-                let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
+                let mut reg = CountSketch::<$mat, RegularPath>::from_storage($mat::default());
+                let mut fast = CountSketch::<$mat, FastPath>::from_storage($mat::default());
                 for k in &stream {
-                    reg.insert(&DataInput::I64(*k as i64));
-                    fast.insert(&DataInput::I64(*k as i64));
+                    reg.update(&DataInput::I64(*k as i64));
+                    fast.update(&DataInput::I64(*k as i64));
                 }
                 let spec = CountSketchSpec::new($rows, $cols);
                 spec.assert_contract(
@@ -361,11 +361,12 @@ fn countmin_regular_path_satisfies_the_count_min_theorem() {
     for trial in 0..BOUND_TRIALS {
         for (name, keys, to_input) in bound_streams(trial) {
             let mut truth = FreqTruth::default();
-            let mut regular =
-                CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
+            let mut regular = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(
+                BOUND_ROWS, BOUND_COLS,
+            );
             for k in &keys {
                 truth.observe(*k);
-                regular.insert(&to_input(*k));
+                regular.update(&to_input(*k));
             }
             let context = format!(
                 "{name} trial={trial} n={BOUND_N} (see bound_streams for stream seeds); \
@@ -398,10 +399,10 @@ fn countmin_fast_path_conforms_to_the_count_min_model() {
         for (name, keys, to_input) in bound_streams(trial) {
             let mut truth = FreqTruth::default();
             let mut fast =
-                CountMin::<Vector2D<i32>, FastPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
+                CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(BOUND_ROWS, BOUND_COLS);
             for k in &keys {
                 truth.observe(*k);
-                fast.insert(&to_input(*k));
+                fast.update(&to_input(*k));
             }
             let context = format!(
                 "{name} trial={trial} n={BOUND_N} (see bound_streams for stream seeds); \
@@ -454,17 +455,18 @@ fn countsketch_both_paths_meet_the_l2_median_bound() {
     for trial in 0..BOUND_TRIALS {
         for (name, keys, to_input) in bound_streams(trial) {
             let mut truth = FreqTruth::default();
-            let mut regular = asap_sketchlib::Count::<Vector2D<i32>, RegularPath>::with_dimensions(
-                BOUND_ROWS, BOUND_COLS,
-            );
-            let mut fast = asap_sketchlib::Count::<Vector2D<i32>, FastPath>::with_dimensions(
+            let mut regular =
+                asap_sketchlib::CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(
+                    BOUND_ROWS, BOUND_COLS,
+                );
+            let mut fast = asap_sketchlib::CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 BOUND_ROWS, BOUND_COLS,
             );
             for k in &keys {
                 let d = to_input(*k);
                 truth.observe(*k);
-                regular.insert(&d);
-                fast.insert(&d);
+                regular.update(&d);
+                fast.update(&d);
             }
             {
                 let (simul, marg) = tallies.entry(format!("{name}/RegularPath")).or_default();
@@ -516,10 +518,11 @@ fn countsketch_error_stays_rank_independent_within_the_documented_empirical_band
 
     let stream = zipf_u64(200_000, 8192, 1.1, STREAM_SEED);
     let mut truth = FreqTruth::default();
-    let mut cs = asap_sketchlib::Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
+    let mut cs =
+        asap_sketchlib::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
     for k in &stream {
         truth.observe(*k as i64);
-        cs.insert(&DataInput::I64(*k as i64));
+        cs.update(&DataInput::I64(*k as i64));
     }
 
     let mut pairs = truth.pairs();
@@ -547,10 +550,10 @@ fn countsketch_error_stays_rank_independent_within_the_documented_empirical_band
     );
 }
 
-// -------------------------------------------------------------- CountL2HH
+// -------------------------------------------------------------- CountSketchWithL2Norm
 
-/// CountL2HH is a Count Sketch carrying a running F2, so its point estimates
-/// obey the Count Sketch L2 bound and its `get_l2_sqr` tracks the exact F2.
+/// CountSketchWithL2Norm is a Count Sketch carrying a running F2, so its point estimates
+/// obey the Count Sketch L2 bound and its `l2_squared` tracks the exact F2.
 #[test]
 fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
     const ROWS: usize = 4;
@@ -558,17 +561,21 @@ fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
     const HASH_SEED_IDX: usize = 11;
     const STREAM_SEED: u64 = 1005;
 
-    let mut sk = CountL2HH::<DefaultXxHasher>::with_dimensions_and_seed(ROWS, COLS, HASH_SEED_IDX);
+    let mut sk = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions_and_seed_index(
+        ROWS,
+        COLS,
+        HASH_SEED_IDX,
+    );
     let mut truth = FreqTruth::default();
     let stream = zipf_u64(30_000, 512, 1.3, STREAM_SEED);
     for (i, k) in stream.iter().enumerate() {
         let w = 1 + (i % 5) as i64;
-        sk.fast_insert_with_count(&DataInput::I64(*k as i64), w);
+        sk.update_weighted(&DataInput::I64(*k as i64), w);
         truth.observe_weighted(*k as i64, w);
     }
     // Turnstile decrement on the hottest key must track through the median path.
     let hot = truth.top_k(1)[0].0;
-    sk.fast_insert_with_count(&DataInput::I64(hot), -10);
+    sk.update_weighted(&DataInput::I64(hot), -10);
     truth.observe_weighted(hot, -10);
 
     let context = format!(
@@ -578,7 +585,7 @@ fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
     CountSketchSpec::new(ROWS, COLS).assert_contract(
         "CountL2HH point estimate",
         &truth,
-        |k| sk.fast_get_est(&DataInput::I64(k)),
+        |k| sk.estimate(&DataInput::I64(k)),
         &context,
     );
 
@@ -586,50 +593,50 @@ fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
     // tug-of-war estimator over this sketch's own matrix — an estimate with a
     // real bound, not an exactly maintained total.
     let f2_spec = SecondMomentSpec::new(ROWS, COLS);
-    if let Err(detail) = f2_spec.check(sk.get_l2_sqr(), truth.f2()) {
+    if let Err(detail) = f2_spec.check(sk.l2_squared(), truth.f2()) {
         panic!("CountL2HH F2: {detail}\n  context: {context}");
     }
 }
 
-// ------------------------------------------- FoldCMS / FoldCS counts + merge
+// ------------------------------------------- CountMinSketchFold / CountSketchFold counts + merge
 
 #[test]
 fn fold_cms_foldcs_counts_and_hierarchical_merge() {
     // Weighted per-key counts stay exact on sparse dims.
-    let mut a = FoldCMS::<DefaultXxHasher>::new(3, 2048, 0, 32);
-    let mut b = FoldCMS::<DefaultXxHasher>::new(3, 2048, 0, 32);
+    let mut a = CountMinSketchFold::<DefaultXxHasher>::new(3, 2048, 0, 32);
+    let mut b = CountMinSketchFold::<DefaultXxHasher>::new(3, 2048, 0, 32);
     for _ in 0..100 {
-        a.insert(&DataInput::Str("alpha"), 2);
-        b.insert(&DataInput::Str("alpha"), 2);
-        b.insert(&DataInput::Str("beta"), 1);
+        a.update_weighted(&DataInput::Str("alpha"), 2);
+        b.update_weighted(&DataInput::Str("alpha"), 2);
+        b.update_weighted(&DataInput::Str("beta"), 1);
     }
-    assert_eq!(a.query(&DataInput::Str("alpha")), 200);
-    assert_eq!(b.query(&DataInput::Str("alpha")), 200);
-    assert_eq!(b.query(&DataInput::Str("beta")), 100);
+    assert_eq!(a.estimate(&DataInput::Str("alpha")), 200);
+    assert_eq!(b.estimate(&DataInput::Str("alpha")), 200);
+    assert_eq!(b.estimate(&DataInput::Str("beta")), 100);
 
     // Same-level merge sums disjoint contributions.
     a.merge_same_level(&b);
-    assert_eq!(a.query(&DataInput::Str("alpha")), 400);
-    assert_eq!(a.query(&DataInput::Str("beta")), 100);
+    assert_eq!(a.estimate(&DataInput::Str("alpha")), 400);
+    assert_eq!(a.estimate(&DataInput::Str("beta")), 100);
 
-    // Signed weighted updates through FoldCS.
-    let mut fs = FoldCS::<DefaultXxHasher>::new(3, 2048, 0, 32);
-    fs.insert(&DataInput::Str("gamma"), 60);
-    fs.insert(&DataInput::Str("gamma"), -20);
-    assert_eq!(fs.query(&DataInput::Str("gamma")), 40);
+    // Signed weighted updates through CountSketchFold.
+    let mut fs = CountSketchFold::<DefaultXxHasher>::new(3, 2048, 0, 32);
+    fs.update_weighted(&DataInput::Str("gamma"), 60);
+    fs.update_weighted(&DataInput::Str("gamma"), -20);
+    assert_eq!(fs.estimate(&DataInput::Str("gamma")), 40);
 
     // Hierarchical merge of level-matched sketches preserves totals.
     let s1 = build_fold_cms("s1", 30);
     let s2 = build_fold_cms("s2", 45);
-    let merged = FoldCMS::hierarchical_merge(&[s1, s2]);
-    assert_eq!(merged.query(&DataInput::Str("s1")), 90);
-    assert_eq!(merged.query(&DataInput::Str("s2")), 135);
+    let merged = CountMinSketchFold::hierarchical_merge(&[s1, s2]);
+    assert_eq!(merged.estimate(&DataInput::Str("s1")), 90);
+    assert_eq!(merged.estimate(&DataInput::Str("s2")), 135);
 }
 
-fn build_fold_cms(key: &'static str, n: usize) -> FoldCMS<DefaultXxHasher> {
-    let mut s = FoldCMS::<DefaultXxHasher>::new(3, 2048, 0, 32);
+fn build_fold_cms(key: &'static str, n: usize) -> CountMinSketchFold<DefaultXxHasher> {
+    let mut s = CountMinSketchFold::<DefaultXxHasher>::new(3, 2048, 0, 32);
     for _ in 0..n {
-        s.insert(&DataInput::Str(key), 3);
+        s.update_weighted(&DataInput::Str(key), 3);
     }
     s
 }
@@ -637,8 +644,8 @@ fn build_fold_cms(key: &'static str, n: usize) -> FoldCMS<DefaultXxHasher> {
 /// Sixteen sub-window sketches folded to a quarter width, then hierarchically
 /// merged. Folding halves the width `fold_level` times, so the merged sketches
 /// answer at `FULL_COLS >> FOLD_LEVEL` columns — and that, not the unfolded
-/// width, is the `w` each theorem is evaluated at. FoldCMS keeps Count-Min's
-/// additive bound; FoldCS keeps Count Sketch's L2 bound.
+/// width, is the `w` each theorem is evaluated at. CountMinSketchFold keeps Count-Min's
+/// additive bound; CountSketchFold keeps Count Sketch's L2 bound.
 #[test]
 fn folded_sketches_keep_their_own_bounds_through_a_sixteen_way_merge() {
     const ROWS: usize = 3;
@@ -659,20 +666,21 @@ fn folded_sketches_keep_their_own_bounds_through_a_sixteen_way_merge() {
     let mut cs_windows = Vec::with_capacity(WINDOWS);
 
     for w in 0..WINDOWS {
-        let mut cms = FoldCMS::<DefaultXxHasher>::new(ROWS, FULL_COLS, FOLD_LEVEL, TOP_K);
-        let mut cs = FoldCS::<DefaultXxHasher>::new(ROWS, FULL_COLS, FOLD_LEVEL, TOP_K);
+        let mut cms =
+            CountMinSketchFold::<DefaultXxHasher>::new(ROWS, FULL_COLS, FOLD_LEVEL, TOP_K);
+        let mut cs = CountSketchFold::<DefaultXxHasher>::new(ROWS, FULL_COLS, FOLD_LEVEL, TOP_K);
         for &v in &stream[w * per_window..(w + 1) * per_window] {
             let d = DataInput::U64(v);
-            cms.insert(&d, 1);
-            cs.insert(&d, 1);
+            cms.update_weighted(&d, 1);
+            cs.update_weighted(&d, 1);
             truth.observe(v as i64);
         }
         cms_windows.push(cms);
         cs_windows.push(cs);
     }
 
-    let cms_merged = FoldCMS::hierarchical_merge(&cms_windows);
-    let cs_merged = FoldCS::hierarchical_merge(&cs_windows);
+    let cms_merged = CountMinSketchFold::hierarchical_merge(&cms_windows);
+    let cs_merged = CountSketchFold::hierarchical_merge(&cs_windows);
     let folded_cols = FULL_COLS >> FOLD_LEVEL;
     let context = format!(
         "zipf(1.1) domain=10000 n={N} stream_seed={STREAM_SEED}, {WINDOWS} windows folded \
@@ -682,13 +690,13 @@ fn folded_sketches_keep_their_own_bounds_through_a_sixteen_way_merge() {
     CountMinSpec::new(ROWS, folded_cols).assert_contract(
         "FoldCMS after a 16-way hierarchical merge",
         &truth,
-        |k| cms_merged.query(&DataInput::U64(k as u64)) as f64,
+        |k| cms_merged.estimate(&DataInput::U64(k as u64)) as f64,
         &context,
     );
     CountSketchSpec::new(ROWS, folded_cols).assert_contract(
         "FoldCS after a 16-way hierarchical merge",
         &truth,
-        |k| cs_merged.query(&DataInput::U64(k as u64)) as f64,
+        |k| cs_merged.estimate(&DataInput::U64(k as u64)) as f64,
         &context,
     );
 }
@@ -710,8 +718,8 @@ fn portable_cms_and_cs_string_keys_satisfy_their_own_bounds() {
     // u64 values are the identity behind both, so `k -> "k{k}"` is injective
     // and the two truths agree key for key.
     let mut truth = FreqTruth::default();
-    let mut pcs = CountMinSketch::new(CM_ROWS, COLS);
-    let mut pcss = CountSketch::new(CS_ROWS, COLS);
+    let mut pcs = PortableCountMinSketch::new(CM_ROWS, COLS);
+    let mut pcss = PortableCountSketch::new(CS_ROWS, COLS);
     for k in &stream {
         truth.observe(*k as i64);
         let key = format!("k{k}");
@@ -762,12 +770,13 @@ fn countmin_documented_vector_grid(
 ) {
     for rows in DOC_ROWS {
         for cols in DOC_COLS {
-            let mut regular = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-            let mut fast = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            let mut regular =
+                CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for key in &input.keys {
                 let d = input.data(*key);
-                regular.insert(&d);
-                fast.insert(&d);
+                regular.update(&d);
+                fast.update(&d);
             }
             let spec = CountMinSpec::new(rows, cols);
             spec.assert_contract(
@@ -796,12 +805,12 @@ fn countmin_documented_fixed_grid(
     macro_rules! assert_fixed_matrix {
         ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
             $({
-                let mut regular = CountMin::<$mat, RegularPath>::from_storage($mat::default());
-                let mut fast = CountMin::<$mat, FastPath>::from_storage($mat::default());
+                let mut regular = CountMinSketch::<$mat, RegularPath>::from_storage($mat::default());
+                let mut fast = CountMinSketch::<$mat, FastPath>::from_storage($mat::default());
                 for key in &input.keys {
                     let d = input.data(*key);
-                    regular.insert(&d);
-                    fast.insert(&d);
+                    regular.update(&d);
+                    fast.update(&d);
                 }
                 let spec = CountMinSpec::new($rows, $cols);
                 spec.assert_contract(
@@ -854,12 +863,13 @@ fn countsketch_documented_vector_grid(
 ) {
     for rows in DOC_ROWS {
         for cols in DOC_COLS {
-            let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-            let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            let mut regular =
+                CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for key in &input.keys {
                 let d = input.data(*key);
-                regular.insert(&d);
-                fast.insert(&d);
+                regular.update(&d);
+                fast.update(&d);
             }
             let spec = CountSketchSpec::new(rows, cols);
             spec.assert_contract(
@@ -886,12 +896,12 @@ fn countsketch_documented_fixed_grid(
     macro_rules! assert_fixed_matrix {
         ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
             $({
-                let mut regular = Count::<$mat, RegularPath>::from_storage($mat::default());
-                let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
+                let mut regular = CountSketch::<$mat, RegularPath>::from_storage($mat::default());
+                let mut fast = CountSketch::<$mat, FastPath>::from_storage($mat::default());
                 for key in &input.keys {
                     let d = input.data(*key);
-                    regular.insert(&d);
-                    fast.insert(&d);
+                    regular.update(&d);
+                    fast.update(&d);
                 }
                 let spec = CountSketchSpec::new($rows, $cols);
                 spec.assert_contract(
@@ -980,7 +990,7 @@ documented_frequency_matrix! {
     countsketch_input_12_grid_satisfies_the_l2_bound => 12;
 }
 
-/// CountL2HH over the eight skewed documented inputs, at the documented
+/// CountSketchWithL2Norm over the eight skewed documented inputs, at the documented
 /// `row 4, col 2048`, with weighted arrivals and one negative update.
 ///
 /// Two assertions come straight from the coverage document — the hottest key
@@ -994,11 +1004,15 @@ fn countl2hh_documented_input(id: u8) {
     const HASH_SEED_IDX: usize = 11;
 
     let input = common::inputs::key_input(id);
-    let mut sk = CountL2HH::<DefaultXxHasher>::with_dimensions_and_seed(ROWS, COLS, HASH_SEED_IDX);
+    let mut sk = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions_and_seed_index(
+        ROWS,
+        COLS,
+        HASH_SEED_IDX,
+    );
     let mut truth = FreqTruth::default();
     for (i, key) in input.keys.iter().enumerate() {
         let w = 1 + (i % 5) as i64;
-        sk.fast_insert_with_count(&input.data(*key), w);
+        sk.update_weighted(&input.data(*key), w);
         truth.observe_weighted(*key, w);
     }
 
@@ -1006,7 +1020,7 @@ fn countl2hh_documented_input(id: u8) {
     // path rather than being absorbed by a counter nobody reads.
     let hot = truth.top_k(1)[0].0;
     let decrement = -(truth.get(hot) / 10);
-    sk.fast_insert_with_count(&input.data(hot), decrement);
+    sk.update_weighted(&input.data(hot), decrement);
     truth.observe_weighted(hot, decrement);
 
     let context = format!(
@@ -1018,12 +1032,12 @@ fn countl2hh_documented_input(id: u8) {
     CountSketchSpec::new(ROWS, COLS).assert_contract(
         "CountL2HH point estimate",
         &truth,
-        |k| sk.fast_get_est(&input.data(k)),
+        |k| sk.estimate(&input.data(k)),
         &context,
     );
 
     let hot_truth = truth.get(hot) as f64;
-    let hot_est = sk.fast_get_est(&input.data(hot));
+    let hot_est = sk.estimate(&input.data(hot));
     let hot_rel = ((hot_est - hot_truth) / hot_truth).abs();
     assert!(
         hot_rel <= 0.02,
@@ -1033,7 +1047,7 @@ fn countl2hh_documented_input(id: u8) {
     );
 
     let f2_truth = truth.f2();
-    let f2_est = sk.get_l2_sqr();
+    let f2_est = sk.l2_squared();
     let f2_rel = ((f2_est - f2_truth) / f2_truth).abs();
     assert!(
         f2_rel <= 0.10,

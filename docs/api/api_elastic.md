@@ -10,7 +10,7 @@ Heavy/light split frequency estimator with a heavy bucket plus Count-Min backing
 
 ## Type/Struct
 
-- `Elastic<H = DefaultXxHasher>`
+- `ElasticSketch<H = DefaultXxHasher>`
 - `HeavyBucket`
 - `LAMBDA` — the paper's eviction threshold (8).
 - `DEFAULT_LIGHT_ROWS` / `DEFAULT_LIGHT_COLS` — the default light layer (3 x 4096).
@@ -19,11 +19,11 @@ Heavy/light split frequency estimator with a heavy bucket plus Count-Min backing
 
 ```rust
 fn new() -> Self
-fn init_with_length(l: i32) -> Self
-fn init_with_dimensions(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self
+fn with_heavy_buckets(l: i32) -> Self
+fn with_heavy_and_light(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self
 ```
 
-`new()` builds 8 heavy buckets over a 3 x 4096 light layer; `init_with_length`
+`new()` builds 8 heavy buckets over a 3 x 4096 light layer; `with_heavy_buckets`
 takes the bucket count and keeps that same light layer. Both panic on a
 non-positive bucket count or an empty light layer.
 
@@ -58,7 +58,7 @@ default 3 x 4096 at exactly 50.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, id: String)
+fn update(&mut self, id: String)
 ```
 
 Follows the SIGCOMM '18 insertion rule. A vacant bucket seats the flow. A
@@ -71,17 +71,17 @@ light layer with its whole positive vote and the arrival takes the bucket with
 ### Weighted and merge-time insertion
 
 ```rust
-fn insert_many(&mut self, id: String, count: i32)
+fn update_weighted(&mut self, id: String, weight: i32)
 fn merge_heavy(&mut self, id: String, votes: i32, eviction: bool)
 fn absorb_evicted(&mut self, id: String, votes: i32)
 ```
 
-`insert_many` is `insert` with a weight: a matching bucket takes `count`
+`update_weighted` is `update` with a weight: a matching bucket takes `count`
 positive votes, a non-matching one takes `count` negative votes, and a takeover
-seats the arrival with `count` of each. `count` of 1 is `insert` exactly.
+seats the arrival with `count` of each. `count` of 1 is `update` exactly.
 
 `merge_heavy` absorbs a `<flow, votes, eviction>` message from another sketch's
-heavy part: `insert_many`, plus the sender's flag OR-ed in when the arrival ends
+heavy part: `update_weighted`, plus the sender's flag OR-ed in when the arrival ends
 up resident here. The flag travels with the counter it qualifies: the counter
 word handed between the two parts *is* the flag. A sender whose bucket is
 unflagged holds
@@ -97,16 +97,16 @@ of the flow next arrives through the light layer.
 ### Overload mode
 
 ```rust
-fn insert_heavy_only(&mut self, id: String)
+fn update_heavy_only(&mut self, id: String)
 ```
 
 Section 3.3 adapts to packet rate by letting arrivals "only access the heavy
 part, so as to record the information of elephant flows only and discard mouse
-flows". Call this instead of `insert` while your input queue is backed up, and
-go back to `insert` when it drains; the sketch holds no mode of its own, since
+flows". Call this instead of `update` while your input queue is backed up, and
+go back to `update` when it drains; the sketch holds no mode of its own, since
 only the caller can see the queue.
 
-Seating and matching behave exactly as in `insert`. The two other cases differ:
+Seating and matching behave exactly as in `update`. The two other cases differ:
 
 - A non-matching arrival takes its negative vote and is then **dropped**. It
   does not reach the light layer.
@@ -114,7 +114,7 @@ Seating and matching behave exactly as in `insert`. The two other cases differ:
   than starting at 1 — the paper's "the flow size of `f'` is set to the flow
   size of `f`" — and the evicted flow's size is **discarded**, not spilled.
 
-The light layer is still read by `query`; it is only never written.
+The light layer is still read by `estimate`; it is only never written.
 
 The arrival also **inherits the bucket's eviction flag**, and the negative vote
 resets to `0`. The paper's prose names neither: this path writes only the new
@@ -138,7 +138,7 @@ arrivals there often.
 ## Query
 
 ```rust
-fn query(&self, id: String) -> i32
+fn estimate(&self, id: String) -> i32
 ```
 
 Returns `vote_pos` for a resident flow whose bucket carries no eviction flag,
@@ -150,8 +150,8 @@ Multi-core, below.
 ## Merge
 
 ```rust
-fn merge(&mut self, other: &Elastic<H>)
-fn merge_max(&mut self, other: &Elastic<H>)
+fn merge(&mut self, other: &ElasticSketch<H>)
+fn merge_max(&mut self, other: &ElasticSketch<H>)
 ```
 
 Both combine the heavy parts bucket by bucket and then combine the light
@@ -286,7 +286,7 @@ doubled to 24 and compressed by 3.
 
 ```rust
 fn heavy_hitters(&self, threshold: i32) -> Vec<(String, i32)>
-fn heavy_changes(&self, other: &Elastic<H>, threshold: i32) -> Vec<(String, i32, i32)>
+fn heavy_changes(&self, other: &ElasticSketch<H>, threshold: i32) -> Vec<(String, i32, i32)>
 ```
 
 Section 5 lists six tasks the sketch is meant to serve. Two are implemented
@@ -295,7 +295,7 @@ leaves behind, so no flow is reported twice.
 
 **Heavy hitter detection.** "For this task, we query the size of each flow in
 the heavy part. If one's size is larger than the predefined threshold, then we
-report this flow as a heavy hitter." Every resident is put through `query`
+report this flow as a heavy hitter." Every resident is put through `estimate`
 rather than read straight off `vote_pos`, so a flow that was once evicted picks
 up its light-layer remainder. The reference reports on `>=`, and so does this.
 
@@ -309,7 +309,7 @@ entry is `(flow, size in self, size in other)`.
 
 ### The other four tasks
 
-- **Flow size estimation** is `query`.
+- **Flow size estimation** is `estimate`.
 - **Cardinality**, **entropy**, and **flow size distribution** are not
   implemented. The paper's estimators for these read the light layer's counter
   value distribution, and the reference builds them on a `d = 1` flat array of
@@ -322,8 +322,8 @@ entry is `(flow, size in self, size in other)`.
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, rmp_serde::encode::Error>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
+fn to_asapv1(&self) -> Result<Vec<u8>, rmp_serde::encode::Error>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
 ```
 
 ASAPv1 MessagePack, kind_id `0x0b 0x00`. The metadata carries the hash spec plus
@@ -340,26 +340,26 @@ The light layer is a Count-Min matrix, so it carries that sketch's row bound:
 `1 <= light_rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length), refused on
 both sides past it.
 
-A zero dimension, a `bktlen` disagreeing with the heavy table, a free bucket
+A zero dimension, a `heavy_buckets` disagreeing with the heavy table, a free bucket
 that still names a flow, a payload length that disagrees with the declared
 geometry, and a `nil` flow id whose `vote_pos` is non-zero are all rejected on
-both sides. `Elastic` also derives serde.
+both sides. `ElasticSketch` also derives serde.
 
 ## Examples
 
 ```rust
-use asap_sketchlib::Elastic;
+use asap_sketchlib::ElasticSketch;
 
-let mut sk = Elastic::init_with_length(8);
-sk.insert("flow".to_string());
-let _ = sk.query("flow".to_string());
+let mut sk = ElasticSketch::with_heavy_buckets(8);
+sk.update("flow".to_string());
+let _ = sk.estimate("flow".to_string());
 ```
 
 ## Caveats
 
 - Light-layer counters are fixed at `i32`; the paper's 8-bit counters are not
   selectable.
-- `insert_heavy_only` is lossy by design and does not keep the one-sided
+- `update_heavy_only` is lossy by design and does not keep the one-sided
   guarantee the rest of the API holds.
 - Under the OctoSketch runtime the one-sided guarantee needs
   `OctoPartition::HashByKey`, the default. `RoundRobin` breaks it; see
@@ -375,7 +375,7 @@ let _ = sk.query("flow".to_string());
 let plan = ElasticOctoPlan::new(256, 3, 4096);
 let config = OctoConfig { threshold: plan.threshold().clone(), ..OctoConfig::default() };
 let out = run_octo(&inputs, &config, plan.clone(), || plan.aggregator());
-out.parent.sketch.query("flow::7".to_string());
+out.parent.sketch.estimate("flow::7".to_string());
 ```
 
 Appendix C of the OctoSketch paper keeps both halves in the worker and promotes
@@ -395,10 +395,10 @@ parent alongside a heavy counter, so it closes the loop while a flow visits one
 worker. Under `RoundRobin` a flow reaches every worker, and one that is a
 stable unflagged resident on one while losing the bucket contest on another is
 seated at the parent unflagged over light-layer mass an unflagged bucket never
-reads: `query` comes back low. Measured counts are in `docs/api/api_octo.md`,
+reads: `estimate` comes back low. Measured counts are in `docs/api/api_octo.md`,
 "The Elastic eviction flag".
 
-Keys are rendered with `flow_key_string`, and that rendering is what `query`
+Keys are rendered with `flow_key_string`, and that rendering is what `estimate`
 must be asked for. See `docs/api/api_octo.md`.
 
 ## Relation to the paper

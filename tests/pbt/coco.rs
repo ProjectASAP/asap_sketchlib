@@ -6,7 +6,7 @@
 //!
 //! The oracle is a direct scan of the table - `(row, column)` loops that read
 //! `full_key` and `val` - plus the exact sum of the generated stream. That
-//! scan owes nothing to `recorded_flows`, `estimate_key` or the hash seeds, so
+//! scan owes nothing to `recorded_flows`, `estimate` or the hash seeds, so
 //! the laws below pin the query paths against the state they claim to read.
 //!
 //! The update rule the paper does fix is where a new key's weight lands: in a
@@ -17,11 +17,11 @@
 //! Zhang, Liu, Chen, Yang, Tu, Cui, SIGCOMM '21.
 
 use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, keys};
-use asap_sketchlib::{Coco, DataInput, DefaultXxHasher, SketchHasher};
+use asap_sketchlib::{CocoSketch, DataInput, DefaultXxHasher, SketchHasher};
 use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-type C = Coco<DefaultXxHasher>;
+type C = CocoSketch<DefaultXxHasher>;
 
 /// The field before the `|`, the partial key the grouping laws project onto.
 fn family(full: &str) -> &str {
@@ -81,7 +81,7 @@ fn crowded_pair(max: usize) -> impl Strategy<Value = CrowdedPair> {
 fn filled(w: usize, d: usize, seed: u64, stream: &[(u64, u64)]) -> C {
     let mut sketch = C::init_with_size_and_seed(w, d, seed);
     for (id, v) in stream {
-        sketch.insert(&key_of(*id), *v);
+        sketch.update_weighted(&key_of(*id), *v);
     }
     sketch
 }
@@ -93,9 +93,9 @@ fn mass_of(stream: &[(u64, u64)]) -> u64 {
 /// Every bucket's mass in row-major order, occupied buckets and empty ones
 /// alike.
 fn vals(sketch: &C) -> Vec<u64> {
-    let mut cells = Vec::with_capacity(sketch.d * sketch.w);
-    for i in 0..sketch.d {
-        for j in 0..sketch.w {
+    let mut cells = Vec::with_capacity(sketch.rows * sketch.cols);
+    for i in 0..sketch.rows {
+        for j in 0..sketch.cols {
             cells.push(sketch.table[i][j].val);
         }
     }
@@ -109,11 +109,11 @@ fn table_mass(sketch: &C) -> u64 {
 /// The `d` buckets `key` maps to, as `(row, column)`.
 fn mapped(sketch: &C, key: &str) -> Vec<(usize, usize)> {
     let input = DataInput::Str(key);
-    (0..sketch.d)
+    (0..sketch.rows)
         .map(|i| {
             (
                 i,
-                DefaultXxHasher::hash64_seeded(i, &input) as usize % sketch.w,
+                DefaultXxHasher::hash64_seeded(i, &input) as usize % sketch.cols,
             )
         })
         .collect()
@@ -122,8 +122,8 @@ fn mapped(sketch: &C, key: &str) -> Vec<(usize, usize)> {
 /// Every bucket that holds a key, read off the table in row-major order.
 fn occupied(sketch: &C) -> Vec<(String, u64)> {
     let mut cells = Vec::new();
-    for i in 0..sketch.d {
-        for j in 0..sketch.w {
+    for i in 0..sketch.rows {
+        for j in 0..sketch.cols {
             let bucket = &sketch.table[i][j];
             if let Some(key) = &bucket.full_key {
                 cells.push((key.clone(), bucket.val));
@@ -136,8 +136,8 @@ fn occupied(sketch: &C) -> Vec<(String, u64)> {
 /// Every bucket holding `key`, as `(row, column)`.
 fn homes(sketch: &C, key: &str) -> Vec<(usize, usize)> {
     let mut found = Vec::new();
-    for i in 0..sketch.d {
-        for j in 0..sketch.w {
+    for i in 0..sketch.rows {
+        for j in 0..sketch.cols {
             if sketch.table[i][j].full_key.as_deref() == Some(key) {
                 found.push((i, j));
             }
@@ -168,14 +168,14 @@ proptest! {
     ) {
         let mut sketch = C::init_with_size_and_seed(width, depth, seed);
         for k in &stream {
-            sketch.insert(&format!("flow-{k}"), 1);
+            sketch.update_weighted(&format!("flow-{k}"), 1);
         }
 
         round_trip!(
             C,
             sketch,
             |s: &C| (0..PROBE_KEYS as u64)
-                .map(|k| s.estimate_key(&format!("flow-{k}")))
+                .map(|k| s.estimate(&format!("flow-{k}")))
                 .collect::<Vec<_>>(),
         );
     }
@@ -216,7 +216,7 @@ proptest! {
             .min()
             .expect("a table has at least one row");
 
-        sketch.insert(&key, weight);
+        sketch.update_weighted(&key, weight);
 
         let after = vals(&sketch);
         let grown: Vec<(usize, usize)> = (0..d)
@@ -375,7 +375,7 @@ proptest! {
                 .filter(|(full, _)| *full == key)
                 .map(|&(_, val)| val)
                 .sum();
-            let estimate = sketch.estimate_key(&key);
+            let estimate = sketch.estimate(&key);
             prop_assert_eq!(estimate, expected, "estimate_key({})", key);
             prop_assert!(estimate <= total, "estimate_key({}) exceeds {}", key, total);
         }

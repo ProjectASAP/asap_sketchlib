@@ -1,4 +1,4 @@
-//! Exercises `impl_hll_bucket_list!` from outside the crate.
+//! Exercises `impl_hll_registers!` from outside the crate.
 //!
 //! This is an integration test, so it compiles as a separate crate: it only
 //! sees `asap_sketchlib`'s public surface, and it never imports `serde`,
@@ -9,22 +9,22 @@
 //! {12, 14, 16} set, including `lg_k = 18` (needed by sketch-bench's
 //! `lkarger` search space).
 
-use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
-use asap_sketchlib::{Classic, DataInput, ErtlMLE, HllRegisterStorage};
+use asap_sketchlib::sketches::hll::{HyperLogLogHipImpl, HyperLogLogImpl};
+use asap_sketchlib::{Classic, DataInput, Ertl, HllRegisterStorage};
 
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP4, 4, 1_usize << 4);
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP8, 8, 1_usize << 8);
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP10, 10, 1_usize << 10);
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP13, 13, 1_usize << 13);
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP18, 18, 1_usize << 18);
-asap_sketchlib::impl_hll_bucket_list!(HllBucketListP22, 22, 1_usize << 22);
+asap_sketchlib::impl_hll_registers!(HllBucketListP4, 4, 1_usize << 4);
+asap_sketchlib::impl_hll_registers!(HllBucketListP8, 8, 1_usize << 8);
+asap_sketchlib::impl_hll_registers!(HllBucketListP10, 10, 1_usize << 10);
+asap_sketchlib::impl_hll_registers!(HllBucketListP13, 13, 1_usize << 13);
+asap_sketchlib::impl_hll_registers!(HllBucketListP18, 18, 1_usize << 18);
+asap_sketchlib::impl_hll_registers!(HllBucketListP22, 22, 1_usize << 22);
 
 /// Distinct, deterministic inputs so every assertion below is reproducible.
 fn item(i: usize) -> String {
     format!("key-{i:08}")
 }
 
-/// Checks the storage constants, then builds Classic, ErtlMLE, and HIP
+/// Checks the storage constants, then builds Classic, Ertl, and HIP
 /// sketches over `cardinality` distinct items and asserts all three land
 /// within `tolerance` relative error.
 fn check_precision<R: HllRegisterStorage>(lg_k: usize, cardinality: usize, tolerance: f64) {
@@ -35,9 +35,13 @@ fn check_precision<R: HllRegisterStorage>(lg_k: usize, cardinality: usize, toler
         num_registers,
         "NUM_REGISTERS for lg_k={lg_k}"
     );
-    assert_eq!(R::REGISTER_BITS, 64 - lg_k, "REGISTER_BITS for lg_k={lg_k}");
     assert_eq!(
-        R::P_MASK,
+        R::RANK_HASH_BITS,
+        64 - lg_k,
+        "REGISTER_BITS for lg_k={lg_k}"
+    );
+    assert_eq!(
+        R::INDEX_MASK,
         (num_registers as u64) - 1,
         "P_MASK for lg_k={lg_k}"
     );
@@ -52,13 +56,13 @@ fn check_precision<R: HllRegisterStorage>(lg_k: usize, cardinality: usize, toler
     );
 
     let mut classic = HyperLogLogImpl::<Classic, R>::new();
-    let mut ertl = HyperLogLogImpl::<ErtlMLE, R>::new();
-    let mut hip = HyperLogLogHIPImpl::<R>::new();
+    let mut ertl = HyperLogLogImpl::<Ertl, R>::new();
+    let mut hip = HyperLogLogHipImpl::<R>::new();
     for i in 0..cardinality {
         let value = DataInput::String(item(i));
-        classic.insert(&value);
-        ertl.insert(&value);
-        hip.insert(&value);
+        classic.update(&value);
+        ertl.update(&value);
+        hip.update(&value);
     }
 
     // Registers really were written, and none exceeds the rank ceiling.
@@ -75,7 +79,7 @@ fn check_precision<R: HllRegisterStorage>(lg_k: usize, cardinality: usize, toler
         classic
             .registers_as_slice()
             .iter()
-            .all(|&r| (r as usize) <= R::REGISTER_BITS + 1),
+            .all(|&r| (r as usize) <= R::RANK_HASH_BITS + 1),
         "register rank out of range for lg_k={lg_k}"
     );
 
@@ -112,11 +116,11 @@ fn custom_precision_merges() {
     let mut left = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
     let mut right = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
     for i in 0..60_000 {
-        left.insert(&DataInput::String(item(i)));
+        left.update(&DataInput::String(item(i)));
     }
     // Overlapping halves: the union is 100_000 distinct items.
     for i in 40_000..100_000 {
-        right.insert(&DataInput::String(item(i)));
+        right.update(&DataInput::String(item(i)));
     }
 
     left.merge(&right);
@@ -148,7 +152,7 @@ fn custom_precision_indexing_and_iteration() {
 fn custom_precision_round_trips_through_serde() {
     let mut sketch = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
     for i in 0..5_000 {
-        sketch.insert(&DataInput::String(item(i)));
+        sketch.update(&DataInput::String(item(i)));
     }
 
     let bytes = rmp_serde::to_vec(&sketch).expect("serialize");
@@ -175,7 +179,7 @@ fn large_precision_allocates_on_the_heap() {
 
     let mut big = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
     for i in 0..1_000 {
-        big.insert(&DataInput::String(item(i)));
+        big.update(&DataInput::String(item(i)));
     }
     let bytes = rmp_serde::to_vec(&big).expect("serialize");
     let restored: HyperLogLogImpl<Classic, HllBucketListP18> =
@@ -190,30 +194,29 @@ fn large_precision_allocates_on_the_heap() {
 #[test]
 fn custom_precision_round_trips_through_the_asapv1_wire_format() {
     let mut classic = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
-    let mut ertl = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::new();
-    let mut hip = HyperLogLogHIPImpl::<HllBucketListP13>::new();
+    let mut ertl = HyperLogLogImpl::<Ertl, HllBucketListP13>::new();
+    let mut hip = HyperLogLogHipImpl::<HllBucketListP13>::new();
     for i in 0..5_000 {
         let value = DataInput::String(item(i));
-        classic.insert(&value);
-        ertl.insert(&value);
-        hip.insert(&value);
+        classic.update(&value);
+        ertl.update(&value);
+        hip.update(&value);
     }
 
-    let bytes = classic.serialize_to_bytes().expect("classic encode");
-    let restored = HyperLogLogImpl::<Classic, HllBucketListP13>::deserialize_from_bytes(&bytes)
-        .expect("classic decode");
+    let bytes = classic.to_asapv1().expect("classic encode");
+    let restored =
+        HyperLogLogImpl::<Classic, HllBucketListP13>::from_asapv1(&bytes).expect("classic decode");
     assert_eq!(restored.registers_as_slice(), classic.registers_as_slice());
     assert_eq!(restored.estimate(), classic.estimate());
 
-    let bytes = ertl.serialize_to_bytes().expect("ertl_mle encode");
-    let restored = HyperLogLogImpl::<ErtlMLE, HllBucketListP13>::deserialize_from_bytes(&bytes)
-        .expect("ertl_mle decode");
+    let bytes = ertl.to_asapv1().expect("ertl_mle encode");
+    let restored =
+        HyperLogLogImpl::<Ertl, HllBucketListP13>::from_asapv1(&bytes).expect("ertl_mle decode");
     assert_eq!(restored.registers_as_slice(), ertl.registers_as_slice());
     assert_eq!(restored.estimate(), ertl.estimate());
 
-    let bytes = hip.serialize_to_bytes().expect("hip encode");
-    let restored =
-        HyperLogLogHIPImpl::<HllBucketListP13>::deserialize_from_bytes(&bytes).expect("hip decode");
+    let bytes = hip.to_asapv1().expect("hip encode");
+    let restored = HyperLogLogHipImpl::<HllBucketListP13>::from_asapv1(&bytes).expect("hip decode");
     // HIP's estimate is a running scalar, so this also checks that kxq0/kxq1/est
     // survived the round-trip rather than being recomputed from registers.
     assert_eq!(restored.estimate(), hip.estimate());
@@ -221,10 +224,10 @@ fn custom_precision_round_trips_through_the_asapv1_wire_format() {
     // A payload whose register count does not match the target precision is
     // rejected rather than silently accepted at the wrong precision.
     let p18 = HyperLogLogImpl::<Classic, HllBucketListP18>::new()
-        .serialize_to_bytes()
+        .to_asapv1()
         .expect("p18 encode");
     assert!(
-        HyperLogLogImpl::<Classic, HllBucketListP13>::deserialize_from_bytes(&p18).is_err(),
+        HyperLogLogImpl::<Classic, HllBucketListP13>::from_asapv1(&p18).is_err(),
         "decoding lg_k=18 bytes as lg_k=13 should fail"
     );
 }

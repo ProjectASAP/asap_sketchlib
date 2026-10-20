@@ -1,5 +1,5 @@
-//! Property tests for the heap-backed matrix wrappers: `CMSHeap`, `CSHeap`
-//! and `CountL2HH`.
+//! Property tests for the heap-backed matrix wrappers: `CountMinSketchWithHeap`, `CountSketchWithHeap`
+//! and `CountSketchWithL2Norm`.
 //!
 //! Both sides of the path laws are real implementations: the wrapper must
 //! leave its inner matrix exactly as the bare sketch would, so a bug in the
@@ -7,18 +7,19 @@
 
 use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, grid, keys};
 use asap_sketchlib::{
-    CMSHeap, CSHeap, Count, CountL2HH, CountMin, DataInput, DefaultXxHasher, FastPath, HHHeap,
-    RegularPath, Vector2D, cs_heap_count, heap_item_to_sketch_input, l2hh_cell_for_row,
+    CountMinSketch, CountMinSketchWithHeap, CountSketch, CountSketchWithHeap,
+    CountSketchWithL2Norm, DataInput, DefaultXxHasher, FastPath, RegularPath, TopKHeap, Vector2D,
+    heap_count_from_estimate, heap_item_to_sketch_input,
 };
 use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};
 
-type Cm = CountMin<Vector2D<i32>, RegularPath>;
-type Cs = Count<Vector2D<i32>, RegularPath>;
-type CmHeap = CMSHeap<Vector2D<i32>, RegularPath>;
-type CsHeap = CSHeap<Vector2D<i32>, RegularPath>;
-type CmHeapWire = CMSHeap<Vector2D<i64>, FastPath>;
-type CsHeapWire = CSHeap<Vector2D<i64>, RegularPath>;
+type Cm = CountMinSketch<Vector2D<i32>, RegularPath>;
+type Cs = CountSketch<Vector2D<i32>, RegularPath>;
+type CmHeap = CountMinSketchWithHeap<Vector2D<i32>, RegularPath>;
+type CsHeap = CountSketchWithHeap<Vector2D<i32>, RegularPath>;
+type CmHeapWire = CountMinSketchWithHeap<Vector2D<i64>, FastPath>;
+type CsHeapWire = CountSketchWithHeap<Vector2D<i64>, RegularPath>;
 
 fn cm_cells(sketch: &Cm) -> Vec<i32> {
     grid(sketch.rows(), sketch.cols(), |r, c| {
@@ -70,7 +71,7 @@ fn roomy(max: usize) -> impl Strategy<Value = (usize, Vec<u64>)> {
     (1usize..24).prop_flat_map(move |k| (Just(k), prop::collection::vec(0u64..k as u64, 0..max)))
 }
 
-/// Hashes and counts fed straight to the `CountL2HH` hash-taking entry points,
+/// Hashes and counts fed straight to the `CountSketchWithL2Norm` hash-taking entry points,
 /// so the cell laws hold whatever the hasher does.
 fn hashed_updates(max: usize) -> impl Strategy<Value = Vec<(u128, i64)>> {
     prop::collection::vec((any::<u128>(), -1_000i64..1_000), 0..max)
@@ -84,19 +85,19 @@ fn truth_of(stream: &[u64]) -> HashMap<u64, i64> {
     counts
 }
 
-fn count_for(heap: &HHHeap, key: u64) -> Option<i64> {
+fn count_for(heap: &TopKHeap, key: u64) -> Option<i64> {
     heap.find(&DataInput::U64(key))
         .map(|idx| heap.heap()[idx].count)
 }
 
-fn resident_keys(heap: &HHHeap) -> HashSet<String> {
+fn resident_keys(heap: &TopKHeap) -> HashSet<String> {
     heap.heap()
         .iter()
         .map(|item| format!("{:?}", item.key))
         .collect()
 }
 
-/// The median `CountL2HH` reports: the middle value, or the mean of the two
+/// The median `CountSketchWithL2Norm` reports: the middle value, or the mean of the two
 /// straddling it.
 fn median(mut values: Vec<f64>) -> f64 {
     values.sort_by(f64::total_cmp);
@@ -108,14 +109,14 @@ fn median(mut values: Vec<f64>) -> f64 {
     }
 }
 
-fn l2hh_cells(sketch: &CountL2HH) -> Vec<i64> {
+fn l2hh_cells(sketch: &CountSketchWithL2Norm) -> Vec<i64> {
     grid(sketch.rows(), sketch.cols(), |r, c| {
         sketch.as_storage().query_one_counter(r, c)
     })
 }
 
-/// Sum of squares of each row, the quantity `get_l2_sqr` takes the median of.
-fn row_squares(sketch: &CountL2HH) -> Vec<f64> {
+/// Sum of squares of each row, the quantity `l2_squared` takes the median of.
+fn row_squares(sketch: &CountSketchWithL2Norm) -> Vec<f64> {
     (0..sketch.rows())
         .map(|r| {
             (0..sketch.cols())
@@ -138,7 +139,7 @@ fn mapped_cells(
     let mut cells = vec![vec![0i64; cols]; rows];
     for (hash, delta) in updates {
         for (r, row) in cells.iter_mut().enumerate() {
-            let (col, sign) = l2hh_cell_for_row(*hash, r, cols, mask_bits);
+            let (col, sign) = CountSketchWithL2Norm::cell_for_row(*hash, r, cols, mask_bits);
             row[col] += sign * delta;
         }
     }
@@ -158,11 +159,11 @@ proptest! {
         let mut wrapped = CmHeap::new(rows, cols, top_k);
         let mut bare = Cm::with_dimensions(rows, cols);
         for k in &keys {
-            wrapped.insert(&DataInput::U64(*k));
-            bare.insert(&DataInput::U64(*k));
+            wrapped.update(&DataInput::U64(*k));
+            bare.update(&DataInput::U64(*k));
         }
 
-        prop_assert_eq!(cm_cells(wrapped.cms()), cm_cells(&bare));
+        prop_assert_eq!(cm_cells(wrapped.count_min_sketch()), cm_cells(&bare));
     }
 
     #[test]
@@ -175,11 +176,11 @@ proptest! {
         let mut wrapped = CsHeap::new(rows, cols, top_k);
         let mut bare = Cs::with_dimensions(rows, cols);
         for k in &keys {
-            wrapped.insert(&DataInput::U64(*k));
-            bare.insert(&DataInput::U64(*k));
+            wrapped.update(&DataInput::U64(*k));
+            bare.update(&DataInput::U64(*k));
         }
 
-        prop_assert_eq!(cs_cells(wrapped.cs()), cs_cells(&bare));
+        prop_assert_eq!(cs_cells(wrapped.count_sketch()), cs_cells(&bare));
     }
 
     // ===== Wire =====
@@ -193,7 +194,7 @@ proptest! {
     ) {
         let mut sketch = CmHeapWire::new(rows, cols, top_k);
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         round_trip!(
@@ -215,7 +216,7 @@ proptest! {
     ) {
         let mut sketch = CsHeapWire::new(rows, cols, top_k);
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         round_trip!(
@@ -242,7 +243,7 @@ proptest! {
     ) {
         let mut wrapped = CmHeap::new(rows, cols, top_k);
         for k in &stream {
-            wrapped.insert(&DataInput::U64(*k));
+            wrapped.update(&DataInput::U64(*k));
         }
 
         for (key, truth) in truth_of(&stream) {
@@ -269,8 +270,8 @@ proptest! {
         let mut read_at_last_insert: HashMap<u64, i64> = HashMap::new();
         for k in &stream {
             let probe = DataInput::U64(*k);
-            wrapped.insert(&probe);
-            read_at_last_insert.insert(*k, cs_heap_count(wrapped.estimate(&probe)));
+            wrapped.update(&probe);
+            read_at_last_insert.insert(*k, heap_count_from_estimate(wrapped.estimate(&probe)));
         }
 
         for (key, expected) in read_at_last_insert {
@@ -291,8 +292,8 @@ proptest! {
         let mut cs = CsHeap::new(rows, cols, top_k);
         for k in &stream {
             let probe = DataInput::U64(*k);
-            cms.insert(&probe);
-            cs.insert(&probe);
+            cms.update(&probe);
+            cs.update(&probe);
             prop_assert!(
                 cms.heap().len() <= top_k,
                 "CMS holds {} of {}", cms.heap().len(), top_k
@@ -317,8 +318,8 @@ proptest! {
         let mut cs = CsHeap::new(rows, cols, top_k);
         for k in &stream {
             let probe = DataInput::U64(*k);
-            cms.insert(&probe);
-            cs.insert(&probe);
+            cms.update(&probe);
+            cs.update(&probe);
         }
 
         let truth = truth_of(&stream);
@@ -356,12 +357,12 @@ proptest! {
         let mut cs = CsHeap::new(rows, cols, top_k);
         let mut cs_other = CsHeap::new(rows, cols, top_k);
         for k in &left {
-            cms.insert(&DataInput::U64(*k));
-            cs.insert(&DataInput::U64(*k));
+            cms.update(&DataInput::U64(*k));
+            cs.update(&DataInput::U64(*k));
         }
         for k in &right {
-            cms_other.insert(&DataInput::U64(*k));
-            cs_other.insert(&DataInput::U64(*k));
+            cms_other.update(&DataInput::U64(*k));
+            cs_other.update(&DataInput::U64(*k));
         }
 
         let cms_union: HashSet<String> = resident_keys(cms.heap())
@@ -398,12 +399,12 @@ proptest! {
         let mut cs = CsHeap::new(rows, cols, top_k);
         let mut cs_other = CsHeap::new(rows, cols, top_k);
         for k in &left {
-            cms.insert(&DataInput::U64(*k));
-            cs.insert(&DataInput::U64(*k));
+            cms.update(&DataInput::U64(*k));
+            cs.update(&DataInput::U64(*k));
         }
         for k in &right {
-            cms_other.insert(&DataInput::U64(*k));
-            cs_other.insert(&DataInput::U64(*k));
+            cms_other.update(&DataInput::U64(*k));
+            cs_other.update(&DataInput::U64(*k));
         }
         cms.merge(&cms_other);
         cs.merge(&cs_other);
@@ -420,7 +421,7 @@ proptest! {
             let probe = heap_item_to_sketch_input(&item.key);
             prop_assert_eq!(
                 item.count,
-                cs_heap_count(cs.estimate(&probe)),
+                heap_count_from_estimate(cs.estimate(&probe)),
                 "CS key {:?}", item.key
             );
         }
@@ -439,12 +440,12 @@ proptest! {
         let mut cs = CsHeap::new(rows, cols, top_k);
         let mut cs_other = CsHeap::new(rows, cols, top_k);
         for k in &left {
-            cms.insert(&DataInput::U64(*k));
-            cs.insert(&DataInput::U64(*k));
+            cms.update(&DataInput::U64(*k));
+            cs.update(&DataInput::U64(*k));
         }
         for k in &right {
-            cms_other.insert(&DataInput::U64(*k));
-            cs_other.insert(&DataInput::U64(*k));
+            cms_other.update(&DataInput::U64(*k));
+            cs_other.update(&DataInput::U64(*k));
         }
 
         let cms_union: HashSet<String> = resident_keys(cms.heap())
@@ -462,9 +463,9 @@ proptest! {
         prop_assert_eq!(resident_keys(cs.heap()), cs_union);
     }
 
-    // ===== CountL2HH lands where the shared cell map says =====
+    // ===== CountSketchWithL2Norm lands where the shared cell map says =====
 
-    /// An OctoSketch worker addresses cells with `l2hh_cell_for_row` and its
+    /// An OctoSketch worker addresses cells with `CountSketchWithL2Norm::cell_for_row` and its
     /// parent with the sketch's own insert, so the two must name one cell.
     #[test]
     fn count_l2hh_writes_the_cells_the_shared_map_names(
@@ -472,10 +473,10 @@ proptest! {
         cols in edge_dimension(),
         updates in hashed_updates(64),
     ) {
-        let mut sketch = CountL2HH::<DefaultXxHasher>::with_dimensions(rows, cols);
+        let mut sketch = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(rows, cols);
         let mask_bits = sketch.mask_bits();
         for (hash, delta) in &updates {
-            sketch.fast_insert_with_count_without_l2_and_hash(*hash, *delta);
+            sketch.update_weighted_with_hash_without_l2(*hash, *delta);
         }
 
         let mapped = mapped_cells(rows, cols, mask_bits, &updates);
@@ -498,22 +499,22 @@ proptest! {
         cols in edge_dimension(),
         updates in hashed_updates(64),
     ) {
-        let mut sketch = CountL2HH::<DefaultXxHasher>::with_dimensions(rows, cols);
+        let mut sketch = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(rows, cols);
         let mask_bits = sketch.mask_bits();
         for (hash, delta) in &updates {
-            sketch.fast_insert_with_count_and_hash(*hash, *delta);
+            sketch.update_weighted_with_hash(*hash, *delta);
         }
 
         let mapped = mapped_cells(rows, cols, mask_bits, &updates);
         for (hash, _) in &updates {
             let rows_read: Vec<f64> = (0..rows)
                 .map(|r| {
-                    let (col, sign) = l2hh_cell_for_row(*hash, r, cols, mask_bits);
+                    let (col, sign) = CountSketchWithL2Norm::cell_for_row(*hash, r, cols, mask_bits);
                     (sign * mapped[r][col]) as f64
                 })
                 .collect();
             prop_assert_eq!(
-                sketch.fast_get_est_with_hash(*hash),
+                sketch.estimate_with_hash(*hash),
                 median(rows_read),
                 "hash {}", hash
             );
@@ -526,11 +527,11 @@ proptest! {
         cols in edge_dimension(),
         updates in hashed_updates(64),
     ) {
-        let mut sketch = CountL2HH::<DefaultXxHasher>::with_dimensions(rows, cols);
+        let mut sketch = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(rows, cols);
         for (step, (hash, delta)) in updates.iter().enumerate() {
-            sketch.fast_insert_with_count_and_hash(*hash, *delta);
+            sketch.update_weighted_with_hash(*hash, *delta);
             prop_assert_eq!(
-                sketch.get_l2_sqr(),
+                sketch.l2_squared(),
                 median(row_squares(&sketch)),
                 "after update {}", step
             );
@@ -544,13 +545,13 @@ proptest! {
         left in hashed_updates(64),
         right in hashed_updates(64),
     ) {
-        let mut sketch = CountL2HH::<DefaultXxHasher>::with_dimensions(rows, cols);
-        let mut other = CountL2HH::<DefaultXxHasher>::with_dimensions(rows, cols);
+        let mut sketch = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(rows, cols);
+        let mut other = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(rows, cols);
         for (hash, delta) in &left {
-            sketch.fast_insert_with_count_and_hash(*hash, *delta);
+            sketch.update_weighted_with_hash(*hash, *delta);
         }
         for (hash, delta) in &right {
-            other.fast_insert_with_count_and_hash(*hash, *delta);
+            other.update_weighted_with_hash(*hash, *delta);
         }
         let before = l2hh_cells(&sketch);
         let added = l2hh_cells(&other);
@@ -558,6 +559,6 @@ proptest! {
 
         let summed: Vec<i64> = before.iter().zip(&added).map(|(a, b)| a + b).collect();
         prop_assert_eq!(l2hh_cells(&sketch), summed);
-        prop_assert_eq!(sketch.get_l2_sqr(), median(row_squares(&sketch)));
+        prop_assert_eq!(sketch.l2_squared(), median(row_squares(&sketch)));
     }
 }

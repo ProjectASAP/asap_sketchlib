@@ -3,20 +3,20 @@
 //! This module is the main entry point for the library's sketch algorithms.
 //! Broadly, the sketches fall into a few common use cases:
 //!
-//! - frequency estimation: [`CountMin`], [`Count`]
+//! - frequency estimation: [`CountMinSketch`], [`CountSketch`]
 //! - cardinality estimation: [`HyperLogLog`]
-//! - quantiles and distributions: [`KLL`], [`DDSketch`]
+//! - quantiles and distributions: [`Kll`], [`DdSketch`]
 //! - specialized or composite structures: heap-backed, folded, and
-//!   runtime-oriented variants such as [`CMSHeap`], [`CSHeap`],
-//!   [`CMSSpaceSaving`], [`CSSpaceSaving`], [`FoldCMS`], and [`FoldCS`]
+//!   runtime-oriented variants such as [`CountMinSketchWithHeap`], [`CountSketchWithHeap`],
+//!   [`CountMinSketchWithSpaceSaving`], [`CountSketchWithSpaceSaving`], [`CountMinSketchFold`], and [`CountSketchFold`]
 //!
 //! For most users:
 //!
-//! - choose [`CountMin`] for fast approximate non-negative frequency queries
-//! - choose [`Count`] for Count Sketch style frequency estimation
+//! - choose [`CountMinSketch`] for fast approximate non-negative frequency queries
+//! - choose [`CountSketch`] for Count Sketch style frequency estimation
 //! - choose [`HyperLogLog`] for distinct counts
-//! - choose [`KLL`] for general quantile estimation
-//! - choose [`DDSketch`] when relative-error quantiles are important
+//! - choose [`Kll`] for general quantile estimation
+//! - choose [`DdSketch`] when relative-error quantiles are important
 //!
 //! [`FastPath`] and [`RegularPath`] control how some matrix-backed frequency
 //! sketches map values to rows and columns. Several specialized sketches in
@@ -29,9 +29,9 @@
 //! - [`countminsketch`] / [`countsketch`] — the core sketch (matrix of
 //!   counters only). Answers point-frequency queries: "how often did key `k`
 //!   appear?" These do not track which keys are heavy hitters.
-//! - [`countminsketch_topk`] / [`countsketch_topk`] — the same sketch paired
+//! - [`countminsketch_heap`] / [`countsketch_heap`] — the same sketch paired
 //!   with a min-heap that tracks the top-`k` heavy hitters as items stream in
-//!   ([`CMSHeap`], [`CSHeap`] / [`CountL2HH`]). Use these when the question is
+//!   ([`CountMinSketchWithHeap`], [`CountSketchWithHeap`] / [`CountSketchWithL2Norm`]). Use these when the question is
 //!   "which keys are the most frequent?" rather than "how often did this
 //!   specific key appear?"
 //!
@@ -40,8 +40,8 @@
 //! bookkeeping for heavy-hitter workloads.
 
 pub mod coco;
-pub use coco::Coco;
 pub use coco::CocoBucket;
+pub use coco::CocoSketch;
 
 /// Fixed-counter heavy-hitter tracking over a Stream-Summary.
 pub mod space_saving;
@@ -54,7 +54,7 @@ pub use bloom::{
 };
 
 pub mod countsketch;
-pub use countsketch::{Count, CountSketchDelta};
+pub use countsketch::{CountSketch, CountSketchDelta};
 
 /// Count-Min-shaped grid with a per-bucket HyperLogLog (distinct-count) sketch.
 #[cfg(feature = "experimental")]
@@ -66,7 +66,7 @@ pub use countminsketch_hll::CountMinHll;
 #[cfg(feature = "experimental")]
 pub mod microscope;
 #[cfg(feature = "experimental")]
-pub use microscope::MicroCM;
+pub use microscope::MicroCm;
 
 /// Hashing path markers for matrix-backed sketches.
 pub mod mode;
@@ -74,29 +74,29 @@ pub use mode::{FastPath, RegularPath};
 
 pub mod countminsketch;
 pub use crate::MatrixStorage;
-pub use countminsketch::{CountMin, CountMinDelta, QUICKSTART_COL_NUM, QUICKSTART_ROW_NUM};
+pub use countminsketch::{CountMinSketch, CountMinSketchDelta, QUICKSTART_COLS, QUICKSTART_ROWS};
 
 pub mod elastic;
-pub use elastic::Elastic;
+pub use elastic::ElasticSketch;
 pub use elastic::HeavyBucket;
 
 /// HyperLogLog implementations and aliases.
 pub mod hll;
 pub use hll::{
-    Classic, ErtlMLE, HyperLogLog, HyperLogLogDelta, HyperLogLogHIP, HyperLogLogHIPP12,
-    HyperLogLogHIPP14, HyperLogLogHIPP16, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16,
+    Classic, Ertl, HyperLogLog, HyperLogLogDelta, HyperLogLogHip, HyperLogLogHipP12,
+    HyperLogLogHipP14, HyperLogLogHipP16, HyperLogLogP12, HyperLogLogP14, HyperLogLogP16,
 };
 
 pub mod kll;
-pub use kll::KLL;
+pub use kll::Kll;
 
 pub mod kll_dynamic;
-pub use kll_dynamic::KLLDynamic;
+pub use kll_dynamic::KllDynamic;
 
 #[cfg(feature = "experimental")]
 pub mod kmv;
 #[cfg(feature = "experimental")]
-pub use kmv::KMV;
+pub use kmv::Kmv;
 
 #[cfg(feature = "experimental")]
 pub mod uniform;
@@ -104,30 +104,35 @@ pub mod uniform;
 pub use uniform::UniformSampling;
 
 pub mod ddsketch;
-pub use ddsketch::{DDSketch, DDSketchDelta};
+pub use ddsketch::{DdSketch, DdSketchDelta};
 
-pub mod countminsketch_topk;
-pub use countminsketch_topk::{CMSHeap, CMSHeapDelta};
+pub mod countminsketch_heap;
+pub use countminsketch_heap::{CountMinSketchWithHeap, CountMinSketchWithHeapDelta};
 
-pub mod countsketch_topk;
-pub use countsketch_topk::{CSHeap, CSHeapDelta, CsHeapCounter, cs_heap_count};
-pub use countsketch_topk::{CountL2HH, l2hh_cell_for_row};
+pub mod countsketch_heap;
+pub use countsketch_heap::CountSketchWithL2Norm;
+pub use countsketch_heap::{
+    CountSketchHeapCounter, CountSketchWithHeap, CountSketchWithHeapDelta, heap_count_from_estimate,
+};
 
 pub mod countminsketch_space_saving;
-pub use countminsketch_space_saving::{CMSSpaceSaving, SpaceSavingCounter};
+pub use countminsketch_space_saving::{CandidateCounter, CountMinSketchWithSpaceSaving};
 
 pub mod countsketch_space_saving;
-pub use countsketch_space_saving::CSSpaceSaving;
+pub use countsketch_space_saving::CountSketchWithSpaceSaving;
 
 pub mod octo_delta;
 pub use octo_delta::{
-    CM_PROMASK, COCO_PROMASK, COUNT_PROMASK, CmDelta, CocoDelta, CountDelta, DD_PROMASK, DdDelta,
-    ELASTIC_PROMASK, ElasticDelta, HLL_PROMASK, HllDelta, KeyedCmDelta, KeyedCountDelta,
-    LayeredCountDelta, MAX_PROMASK, OctoThreshold, UNIVMON_PROMASK,
+    CocoDelta, CountMinSketchCellDelta, CountSketchCellDelta, DdSketchBucketDelta, ElasticDelta,
+    HllRegisterDelta, KeyedCountMinSketchCellDelta, KeyedCountSketchCellDelta,
+    OCTO_COCO_DEFAULT_THRESHOLD, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
+    OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, OCTO_DDSKETCH_DEFAULT_THRESHOLD,
+    OCTO_ELASTIC_DEFAULT_THRESHOLD, OCTO_HLL_DEFAULT_THRESHOLD, OCTO_MAX_PROMOTION_THRESHOLD,
+    OCTO_UNIVMON_DEFAULT_THRESHOLD, OctoThreshold, UnivMonCellDelta,
 };
 
-pub mod fold_cms;
-pub use fold_cms::{FoldCMS, FoldCell, FoldEntry};
+pub mod count_min_fold;
+pub use count_min_fold::{CountMinSketchFold, FoldCell, FoldEntry};
 
-pub mod fold_cs;
-pub use fold_cs::FoldCS;
+pub mod count_sketch_fold;
+pub use count_sketch_fold::CountSketchFold;

@@ -13,18 +13,20 @@ use crate::support::{
     PROBE_KEYS, close, edge_dimension, edge_rows, grid, keyed_updates, keys, matrices_close,
 };
 use asap_sketchlib::message_pack_format::MessagePackCodec;
+use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch as PortableCountMinSketch;
+use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketchDelta;
 use asap_sketchlib::{
-    CountMin, CountMinSketch, CountMinSketchDelta, DataInput, DefaultMatrixI32, FastPath,
-    MatrixFastHash, MatrixStorage, QuickMatrixI64, RegularPath, Vector2D, hash_for_matrix,
+    CountMinSketch, DataInput, DefaultMatrixI32, FastPath, MatrixFastHash, MatrixStorage,
+    QuickMatrixI64, RegularPath, Vector2D, hash_for_matrix,
 };
 use proptest::prelude::*;
 use std::collections::HashMap;
 
-type Cm = CountMin<Vector2D<i32>, RegularPath>;
-type CmFast = CountMin<Vector2D<i32>, FastPath>;
-type CmWire = CountMin<Vector2D<i64>, FastPath>;
-type CmFixedI32 = CountMin<DefaultMatrixI32, FastPath>;
-type CmFixedI64 = CountMin<QuickMatrixI64, FastPath>;
+type Cm = CountMinSketch<Vector2D<i32>, RegularPath>;
+type CmFast = CountMinSketch<Vector2D<i32>, FastPath>;
+type CmWire = CountMinSketch<Vector2D<i64>, FastPath>;
+type CmFixedI32 = CountMinSketch<DefaultMatrixI32, FastPath>;
+type CmFixedI64 = CountMinSketch<QuickMatrixI64, FastPath>;
 
 /// Key domain the bound and monotonicity laws probe. Narrow enough that a
 /// handful of columns forces collisions on every row.
@@ -70,8 +72,8 @@ fn columns_of(rows: usize, cols: usize, k: u64) -> Vec<usize> {
     (0..rows).map(|r| hashed.col_for_row(r, cols)).collect()
 }
 
-fn cms_of(rows: usize, cols: usize, updates: &[(String, f64)]) -> CountMinSketch {
-    let mut s = CountMinSketch::new(rows, cols);
+fn cms_of(rows: usize, cols: usize, updates: &[(String, f64)]) -> PortableCountMinSketch {
+    let mut s = PortableCountMinSketch::new(rows, cols);
     for (k, v) in updates {
         s.update(k, *v);
     }
@@ -124,8 +126,8 @@ fn cms_stream_of(
     cols: usize,
     keys: &[String],
     stream: &[(u64, i64)],
-) -> CountMinSketch {
-    let mut sketch = CountMinSketch::new(rows, cols);
+) -> PortableCountMinSketch {
+    let mut sketch = PortableCountMinSketch::new(rows, cols);
     for (k, w) in stream {
         sketch.update(&keys[*k as usize], *w as f64);
     }
@@ -133,7 +135,7 @@ fn cms_stream_of(
 }
 
 /// Every non-zero cell of `sketch`, as the delta that adds it to a peer.
-fn delta_of(sketch: &CountMinSketch) -> CountMinSketchDelta {
+fn delta_of(sketch: &PortableCountMinSketch) -> CountMinSketchDelta {
     let mut cells = Vec::new();
     for (r, row) in sketch.sketch().iter().enumerate() {
         for (c, count) in row.iter().enumerate() {
@@ -175,7 +177,7 @@ fn ceiling_for(rows: usize, columns: &[Vec<usize>], truth: &HashMap<u64, i64>, k
 fn cm_fast_of(rows: usize, cols: usize, stream: &[(u64, i32)]) -> CmFast {
     let mut sketch = CmFast::with_dimensions(rows, cols);
     for (k, w) in stream {
-        sketch.insert_many(&DataInput::U64(*k), *w);
+        sketch.update_weighted(&DataInput::U64(*k), *w);
     }
     sketch
 }
@@ -184,7 +186,7 @@ fn cm_fast_of(rows: usize, cols: usize, stream: &[(u64, i32)]) -> CmFast {
 /// built with, non-negative cells, every row carrying the model's whole mass,
 /// and each key's estimate between its truth and its lightest row's mass.
 fn holds_model(
-    sketch: &CountMinSketch,
+    sketch: &PortableCountMinSketch,
     model: &[i64],
     keys: &[String],
     columns: &[Vec<usize>],
@@ -258,10 +260,10 @@ proptest! {
         let mut first = Cm::with_dimensions(rows, cols);
         let mut second = Cm::with_dimensions(rows, cols);
         for k in &a {
-            first.insert(&DataInput::U64(*k));
+            first.update(&DataInput::U64(*k));
         }
         for k in &b {
-            second.insert(&DataInput::U64(*k));
+            second.update(&DataInput::U64(*k));
         }
 
         prop_assert_eq!(cm_cells(&first), cm_cells(&second));
@@ -278,9 +280,9 @@ proptest! {
         let mut by_weight = Cm::with_dimensions(rows, cols);
         let mut by_repeat = Cm::with_dimensions(rows, cols);
         for (k, n) in &updates {
-            by_weight.insert_many(&DataInput::U64(*k), *n);
+            by_weight.update_weighted(&DataInput::U64(*k), *n);
             for _ in 0..*n {
-                by_repeat.insert(&DataInput::U64(*k));
+                by_repeat.update(&DataInput::U64(*k));
             }
         }
 
@@ -289,7 +291,7 @@ proptest! {
 
     // ===== The pre-hashed entry point must address the same cells =====
     //
-    // `bulk_insert_many` is a literal loop over `insert_many`, so comparing
+    // `update_weighted_batch` is a literal loop over `update_weighted`, so comparing
     // the two would hold by construction. The law with content is that a
     // caller which hashes on its own thread lands in the same cells.
 
@@ -310,10 +312,10 @@ proptest! {
 
         let mut by_loop = CmFast::with_dimensions(rows, cols);
         for (value, n) in &pairs {
-            by_loop.insert_many(value, *n);
+            by_loop.update_weighted(value, *n);
         }
         let mut by_hashes = CmFast::with_dimensions(rows, cols);
-        by_hashes.bulk_insert_many_with_hashes(&hashed);
+        by_hashes.update_weighted_batch_with_hashes(&hashed);
 
         prop_assert_eq!(cm_fast_cells(&by_hashes), cm_fast_cells(&by_loop));
     }
@@ -363,7 +365,7 @@ proptest! {
     ) {
         let base = cms_of(rows, cols, &a);
         let mut merged = base.clone();
-        merged.merge(&CountMinSketch::new(rows, cols)).expect("merge");
+        merged.merge(&PortableCountMinSketch::new(rows, cols)).expect("merge");
 
         prop_assert_eq!(merged.sketch(), base.sketch());
     }
@@ -412,7 +414,7 @@ proptest! {
         let s = cms_of(rows, cols, &updates);
 
         let bytes = s.to_msgpack().expect("encode");
-        let restored = CountMinSketch::from_msgpack(&bytes).expect("decode");
+        let restored = PortableCountMinSketch::from_msgpack(&bytes).expect("decode");
 
         prop_assert_eq!(restored.rows(), s.rows());
         prop_assert_eq!(restored.cols(), s.cols());
@@ -430,7 +432,7 @@ proptest! {
     ) {
         let mut sketch = CmWire::with_dimensions(rows, cols);
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         round_trip!(
@@ -456,7 +458,7 @@ proptest! {
             .collect();
 
         for (step, arrival) in stream.iter().enumerate() {
-            sketch.insert(&DataInput::U64(*arrival));
+            sketch.update(&DataInput::U64(*arrival));
             for probe in 0..DOMAIN {
                 let now = sketch.estimate(&DataInput::U64(probe));
                 prop_assert!(
@@ -486,7 +488,7 @@ proptest! {
     ) {
         let mut sketch = CmFast::with_dimensions(rows, cols);
         for (k, w) in &updates {
-            sketch.insert_many(&DataInput::U64(*k), *w);
+            sketch.update_weighted(&DataInput::U64(*k), *w);
         }
 
         let truth = truth_of(&updates);
@@ -561,8 +563,8 @@ proptest! {
         let mut fixed = CmFixedI32::default();
         let mut dynamic = CmFast::with_dimensions(fixed.rows(), fixed.cols());
         for (k, w) in &updates {
-            fixed.insert_many(&DataInput::U64(*k), *w);
-            dynamic.insert_many(&DataInput::U64(*k), *w);
+            fixed.update_weighted(&DataInput::U64(*k), *w);
+            dynamic.update_weighted(&DataInput::U64(*k), *w);
         }
 
         for r in 0..fixed.rows() {
@@ -583,8 +585,8 @@ proptest! {
         let mut fixed = CmFixedI64::default();
         let mut dynamic = CmWire::with_dimensions(fixed.rows(), fixed.cols());
         for (k, w) in &updates {
-            fixed.insert_many(&DataInput::U64(*k), *w);
-            dynamic.insert_many(&DataInput::U64(*k), *w);
+            fixed.update_weighted(&DataInput::U64(*k), *w);
+            dynamic.update_weighted(&DataInput::U64(*k), *w);
         }
 
         for r in 0..fixed.rows() {
@@ -616,7 +618,7 @@ proptest! {
             .map(|k| str_columns_of(rows, cols, k))
             .collect();
         let mut model = vec![0i64; keys.len()];
-        let mut sketch = CountMinSketch::new(rows, cols);
+        let mut sketch = PortableCountMinSketch::new(rows, cols);
         holds_model(&sketch, &model, &keys, &columns, (rows, cols), "before the first op")?;
 
         for (step, op) in ops.iter().enumerate() {
@@ -649,7 +651,7 @@ proptest! {
                 }
                 Op::RoundTrip => {
                     let bytes = sketch.to_msgpack().expect("encode");
-                    let restored = CountMinSketch::from_msgpack(&bytes).expect("decode");
+                    let restored = PortableCountMinSketch::from_msgpack(&bytes).expect("decode");
                     prop_assert_eq!(
                         restored.sketch(), sketch.sketch(),
                         "step {}: the decoded matrix differs", step
@@ -658,7 +660,7 @@ proptest! {
                 }
                 Op::MergeMismatched(over_rows, over_cols) => {
                     let before = sketch.sketch();
-                    let peer = CountMinSketch::new(rows + over_rows, cols + over_cols);
+                    let peer = PortableCountMinSketch::new(rows + over_rows, cols + over_cols);
                     prop_assert!(
                         sketch.merge(&peer).is_err(),
                         "step {}: merging a {}x{} peer into a {}x{} sketch was accepted",

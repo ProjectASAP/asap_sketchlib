@@ -4,8 +4,8 @@
 //! either an L1 (size-based) or L2 (mass-based) invariant, enabling approximate
 //! queries over time-windowed streams with bounded memory.
 
-use super::EHSketchList;
-use super::eh_sketch_list::SketchNorm;
+use super::EhBucketSketch;
+use super::eh_bucket_sketch::SketchNorm;
 use crate::DataInput;
 
 mod wire;
@@ -14,9 +14,9 @@ const MASS_EPSILON: f64 = 1e-9;
 
 #[derive(Clone, Debug)]
 /// One EH bucket with its sketch payload and time range.
-pub struct EHBucket {
+pub struct EhBucket {
     /// Sketch stored in the bucket.
-    pub bucket: EHSketchList,
+    pub bucket: EhBucketSketch,
     /// Aggregate size represented by the bucket.
     pub size: usize,
     /// Cached L2 mass for L2-based merging.
@@ -31,7 +31,7 @@ pub struct EHBucket {
 /// Sliding-window exponential histogram over sketch buckets.
 pub struct ExponentialHistogram {
     /// Buckets ordered from oldest to newest.
-    pub payload: Vec<EHBucket>,
+    pub payload: Vec<EhBucket>,
     /// Sliding window width in time units.
     pub window: u64,
     /// EH merge parameter controlling bucket count.
@@ -39,10 +39,10 @@ pub struct ExponentialHistogram {
     /// Merge rule used for bucket consolidation.
     pub merge_norm: SketchNorm,
     /// Prototype sketch cloned for new buckets.
-    pub type_to_clone: EHSketchList,
+    pub prototype: EhBucketSketch,
 }
 
-fn infer_merge_norm(eh_sketch: &EHSketchList) -> SketchNorm {
+fn infer_merge_norm(eh_sketch: &EhBucketSketch) -> SketchNorm {
     if eh_sketch.supports_norm(SketchNorm::L2) && !eh_sketch.supports_norm(SketchNorm::L1) {
         SketchNorm::L2
     } else {
@@ -50,15 +50,15 @@ fn infer_merge_norm(eh_sketch: &EHSketchList) -> SketchNorm {
     }
 }
 
-fn compute_l2_mass(eh_sketch: &EHSketchList) -> f64 {
+fn compute_l2_mass(eh_sketch: &EhBucketSketch) -> f64 {
     eh_sketch.eh_l2_mass().unwrap_or(0.0)
 }
 
-impl EHBucket {
+impl EhBucket {
     /// Merges another bucket into this one. When the two sketches refuse to
     /// merge the error is returned and this bucket's size, time range and
     /// cached mass are left as they were.
-    pub fn to_merge(&mut self, other: EHBucket) -> Result<(), String> {
+    pub fn merge(&mut self, other: EhBucket) -> Result<(), String> {
         self.bucket.merge(&other.bucket)?;
         self.size += other.size;
         self.max_time = self.max_time.max(other.max_time);
@@ -70,14 +70,14 @@ impl EHBucket {
 
 impl ExponentialHistogram {
     /// Creates a new exponential histogram.
-    pub fn new(k: usize, window: u64, eh_type: EHSketchList) -> Self {
+    pub fn new(k: usize, window: u64, eh_type: EhBucketSketch) -> Self {
         let k_eff = k.max(1);
         ExponentialHistogram {
             payload: Vec::new(),
             window,
             k: k_eff,
             merge_norm: infer_merge_norm(&eh_type),
-            type_to_clone: eh_type,
+            prototype: eh_type,
         }
     }
 
@@ -89,14 +89,14 @@ impl ExponentialHistogram {
     /// Inserts one value at timestamp `time`.
     pub fn update(&mut self, time: u64, val: &DataInput) {
         self.update_with(time, |sketch| {
-            sketch.insert(val);
+            sketch.update(val);
         });
     }
 
     /// Inserts one timestamped update using a custom bucket updater.
     pub fn update_with<F>(&mut self, time: u64, update_fn: F)
     where
-        F: FnOnce(&mut EHSketchList),
+        F: FnOnce(&mut EhBucketSketch),
     {
         let expired_count = self
             .payload
@@ -108,9 +108,9 @@ impl ExponentialHistogram {
             self.payload.drain(0..expired_count);
         }
 
-        let mut sketch = self.type_to_clone.clone();
+        let mut sketch = self.prototype.clone();
         update_fn(&mut sketch);
-        let new_eh_vol = EHBucket {
+        let new_eh_vol = EhBucket {
             l2_mass: compute_l2_mass(&sketch),
             bucket: sketch,
             size: 1,
@@ -203,7 +203,7 @@ impl ExponentialHistogram {
             return Ok(());
         }
         let vol_to_merge = self.payload[index + 1].clone();
-        self.payload[index].to_merge(vol_to_merge)?;
+        self.payload[index].merge(vol_to_merge)?;
         self.payload.remove(index + 1);
         Ok(())
     }
@@ -221,12 +221,12 @@ impl ExponentialHistogram {
     }
 
     /// Returns the latest timestamp currently retained.
-    pub fn get_max_time(&self) -> Option<u64> {
+    pub fn max_time(&self) -> Option<u64> {
         self.payload.last().map(|b| b.max_time)
     }
 
     /// Returns the earliest timestamp currently retained.
-    pub fn get_min_time(&self) -> Option<u64> {
+    pub fn min_time(&self) -> Option<u64> {
         self.payload.first().map(|b| b.min_time)
     }
 
@@ -238,7 +238,7 @@ impl ExponentialHistogram {
     /// Merges buckets overlapping the requested interval. Returns `None` when
     /// the payload is empty, and when two of the covered buckets refuse to
     /// merge rather than handing back a partial answer.
-    pub fn query_interval_merge(&self, t1: u64, t2: u64) -> Option<EHSketchList> {
+    pub fn query_interval(&self, t1: u64, t2: u64) -> Option<EhBucketSketch> {
         if self.payload.is_empty() {
             return None;
         }
@@ -294,7 +294,7 @@ impl ExponentialHistogram {
     }
 
     /// Get memory statistics
-    pub fn get_memory_info(&self) -> (usize, Vec<usize>) {
+    pub fn memory_info(&self) -> (usize, Vec<usize>) {
         let count = self.payload.len();
         let sizes = self.payload.iter().map(|b| b.size).collect();
         (count, sizes)
@@ -310,14 +310,19 @@ mod tests {
         let eh_l1 = ExponentialHistogram::new(
             2,
             1000,
-            EHSketchList::CM(crate::CountMin::<crate::Vector2D<i32>, crate::FastPath>::default()),
+            EhBucketSketch::CountMinSketch(crate::CountMinSketch::<
+                crate::Vector2D<i32>,
+                crate::FastPath,
+            >::default()),
         );
         assert_eq!(eh_l1.merge_norm, SketchNorm::L1);
 
         let eh_l2 = ExponentialHistogram::new(
             2,
             1000,
-            EHSketchList::COUNTL2HH(crate::CountL2HH::with_dimensions(5, 2048)),
+            EhBucketSketch::CountSketchWithL2Norm(crate::CountSketchWithL2Norm::with_dimensions(
+                5, 2048,
+            )),
         );
         assert_eq!(eh_l2.merge_norm, SketchNorm::L2);
     }
@@ -327,7 +332,10 @@ mod tests {
         let mut eh = ExponentialHistogram::new(
             2,
             100,
-            EHSketchList::CM(crate::CountMin::<crate::Vector2D<i32>, crate::FastPath>::default()),
+            EhBucketSketch::CountMinSketch(crate::CountMinSketch::<
+                crate::Vector2D<i32>,
+                crate::FastPath,
+            >::default()),
         );
 
         for i in 0..10 {
@@ -342,22 +350,24 @@ mod tests {
         let mut eh = ExponentialHistogram::new(
             1,
             100,
-            EHSketchList::COUNTL2HH(crate::CountL2HH::with_dimensions(5, 2048)),
+            EhBucketSketch::CountSketchWithL2Norm(crate::CountSketchWithL2Norm::with_dimensions(
+                5, 2048,
+            )),
         );
 
         eh.update_with(1, |chapter| {
-            if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&DataInput::I64(1), 1);
+            if let EhBucketSketch::CountSketchWithL2Norm(sketch) = chapter {
+                sketch.update_weighted(&DataInput::I64(1), 1);
             }
         });
         eh.update_with(2, |chapter| {
-            if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&DataInput::I64(2), 1);
+            if let EhBucketSketch::CountSketchWithL2Norm(sketch) = chapter {
+                sketch.update_weighted(&DataInput::I64(2), 1);
             }
         });
         eh.update_with(3, |chapter| {
-            if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&DataInput::I64(3), 20);
+            if let EhBucketSketch::CountSketchWithL2Norm(sketch) = chapter {
+                sketch.update_weighted(&DataInput::I64(3), 20);
             }
         });
 
@@ -370,22 +380,24 @@ mod tests {
         let mut eh = ExponentialHistogram::new(
             1,
             100,
-            EHSketchList::COUNTL2HH(crate::CountL2HH::with_dimensions(5, 2048)),
+            EhBucketSketch::CountSketchWithL2Norm(crate::CountSketchWithL2Norm::with_dimensions(
+                5, 2048,
+            )),
         );
 
         eh.update_with(1, |chapter| {
-            if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&DataInput::I64(7), 2);
+            if let EhBucketSketch::CountSketchWithL2Norm(sketch) = chapter {
+                sketch.update_weighted(&DataInput::I64(7), 2);
             }
         });
         eh.update_with(2, |chapter| {
-            if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&DataInput::I64(8), 2);
+            if let EhBucketSketch::CountSketchWithL2Norm(sketch) = chapter {
+                sketch.update_weighted(&DataInput::I64(8), 2);
             }
         });
         eh.update_with(3, |chapter| {
-            if let EHSketchList::COUNTL2HH(sketch) = chapter {
-                sketch.fast_insert_with_count(&DataInput::I64(9), 16);
+            if let EhBucketSketch::CountSketchWithL2Norm(sketch) = chapter {
+                sketch.update_weighted(&DataInput::I64(9), 16);
             }
         });
 
@@ -398,14 +410,14 @@ mod tests {
         let mut eh = ExponentialHistogram::new(
             2,
             1000,
-            EHSketchList::HLL(crate::HyperLogLog::<crate::ErtlMLE>::default()),
+            EhBucketSketch::Hll(crate::HyperLogLog::<crate::Ertl>::default()),
         );
 
         eh.update(100, &DataInput::I64(1));
 
         assert_eq!(eh.bucket_count(), 1);
-        assert_eq!(eh.get_min_time(), Some(100));
-        assert_eq!(eh.get_max_time(), Some(100));
-        assert!(eh.query_interval_merge(100, 100).is_some());
+        assert_eq!(eh.min_time(), Some(100));
+        assert_eq!(eh.max_time(), Some(100));
+        assert!(eh.query_interval(100, 100).is_some());
     }
 }

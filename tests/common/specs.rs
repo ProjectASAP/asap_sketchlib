@@ -476,7 +476,7 @@ impl CountMinSpec {
 /// `rows / 2 + 1` at `d = 4, kappa = 3` reports a per-key failure probability
 /// of `P[Bin(4, 1/3) >= 3] = 0.111` where the estimator only earns
 /// `P[Bin(4, 1/3) >= 2] = 0.407`, and it makes the simultaneous `kappa` search
-/// stop early — a bound narrower than the theorem supports. `CountL2HH` runs at
+/// stop early — a bound narrower than the theorem supports. `CountSketchWithL2Norm` runs at
 /// four rows, so this was live.
 ///
 /// # Simultaneous form
@@ -632,7 +632,7 @@ impl CountSketchSpec {
 // Second moment (F2) from a Count Sketch row
 // ---------------------------------------------------------------------------
 
-/// F2 estimation from the counter matrix of a Count Sketch, as `CountL2HH`
+/// F2 estimation from the counter matrix of a Count Sketch, as `CountSketchWithL2Norm`
 /// and UnivMon do.
 ///
 /// Each row's `Y_r = sum_j C[r][j]^2` is the AMS tug-of-war estimator (Alon,
@@ -1001,7 +1001,7 @@ pub fn breakpoint_rank_interval_distance(estimated: &[(f64, f64)], sorted_truth:
 /// compares against has to follow the implementation it is testing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DdRankConvention {
-    /// `DDSketch::get_value_at_quantile`: `rank = ceil(q * n)`, 1-based, so the
+    /// `DdSketch::get_value_at_quantile`: `rank = ceil(q * n)`, 1-based, so the
     /// answer is `sorted[ceil(q*n) - 1]`. `q = 0` and `q = 1` short-circuit to
     /// the exact stored minimum and maximum.
     CeilNearestRank,
@@ -1073,7 +1073,7 @@ pub struct RelativeQuantileSpec {
 }
 
 impl RelativeQuantileSpec {
-    /// A spec for the core `DDSketch`.
+    /// A spec for the core `DdSketch`.
     pub fn core(alpha: f64) -> Self {
         Self {
             alpha,
@@ -1291,8 +1291,8 @@ impl CardinalityConfidenceSpec {
     }
 
     /// KMV is exact only while it has seen **fewer** than `k` distinct
-    /// elements: `KMV::estimate` returns the retained count verbatim when
-    /// `k_vals.len() < k`, and switches to `(k-1)/U_(k)` at `len == k`.
+    /// elements: `Kmv::estimate` returns the retained count verbatim when
+    /// `retained_hashes.len() < k`, and switches to `(k-1)/U_(k)` at `len == k`.
     ///
     /// The `n == k` boundary is therefore *estimated*, not exact — the earlier
     /// `n <= k` form silently demanded exactness of a number whose standard

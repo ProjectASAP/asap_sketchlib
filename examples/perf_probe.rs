@@ -1,4 +1,4 @@
-//! Throughput micro-benchmark probe for core sketches (CountMin, CountSketch, KLL).
+//! Throughput micro-benchmark probe for core sketches (CountMinSketch, CountSketch, KLL).
 //!
 //! Prints machine-readable `BENCH` lines (median ns/item and Mitems/s) suitable
 //! for parsing by scripts. Deterministic output across runs: inline xorshift64*
@@ -10,7 +10,9 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use asap_sketchlib::{Count, CountMin, DataInput, FastPath, KLL, RegularPath, Vector2D};
+use asap_sketchlib::{
+    CountMinSketch, CountSketch, DataInput, FastPath, Kll, RegularPath, Vector2D,
+};
 
 const N_ITEMS: usize = 200_000;
 const ESTIMATE_N: usize = 100_000;
@@ -96,10 +98,10 @@ fn main() {
     let zipf = zipf_keys(N_ITEMS, 0xDEAD_BEEF);
 
     bench("cms_fast_insert", N_ITEMS, || {
-        let mut sk = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+        let mut sk = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
         let start = Instant::now();
         for &k in &seq_keys {
-            sk.insert(&DataInput::U64(k));
+            sk.update(&DataInput::U64(k));
         }
         let elapsed = start.elapsed();
         std::hint::black_box(sk.estimate(&DataInput::U64(seq_keys[0])));
@@ -107,19 +109,19 @@ fn main() {
     });
 
     bench("cms_fast_insert_zipf", N_ITEMS, || {
-        let mut sk = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+        let mut sk = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
         let start = Instant::now();
         for &k in &zipf {
-            sk.insert(&DataInput::U64(k));
+            sk.update(&DataInput::U64(k));
         }
         let elapsed = start.elapsed();
         std::hint::black_box(sk.estimate(&DataInput::U64(zipf[0])));
         elapsed
     });
 
-    let mut filled = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut filled = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     for &k in &zipf {
-        filled.insert(&DataInput::U64(k));
+        filled.update(&DataInput::U64(k));
     }
     bench("cms_fast_estimate", ESTIMATE_N, || {
         let start = Instant::now();
@@ -133,10 +135,10 @@ fn main() {
     });
 
     bench("cms_regular_insert", N_ITEMS, || {
-        let mut sk = CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
+        let mut sk = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
         let start = Instant::now();
         for &k in &seq_keys {
-            sk.insert(&DataInput::U64(k));
+            sk.update(&DataInput::U64(k));
         }
         let elapsed = start.elapsed();
         std::hint::black_box(sk.estimate(&DataInput::U64(seq_keys[0])));
@@ -144,10 +146,10 @@ fn main() {
     });
 
     bench("cs_fast_insert", N_ITEMS, || {
-        let mut sk = Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+        let mut sk = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
         let start = Instant::now();
         for &k in &seq_keys {
-            sk.insert(&DataInput::U64(k));
+            sk.update(&DataInput::U64(k));
         }
         let elapsed = start.elapsed();
         std::hint::black_box(sk.estimate(&DataInput::U64(seq_keys[0])));
@@ -159,7 +161,7 @@ fn main() {
         (0..N_ITEMS).map(|_| rng.next_f64_unit() * 1000.0).collect()
     };
     bench("kll_update", N_ITEMS, || {
-        let mut sk = KLL::<f64>::init_with_seed(200, 8, 42);
+        let mut sk = Kll::<f64>::with_seed(200, 8, 42);
         let start = Instant::now();
         for &v in &kll_values {
             sk.update_data_input(&DataInput::F64(v)).unwrap();
@@ -169,7 +171,7 @@ fn main() {
         elapsed
     });
 
-    let mut kll_filled = KLL::<f64>::init_with_seed(200, 8, 42);
+    let mut kll_filled = Kll::<f64>::with_seed(200, 8, 42);
     for &v in &kll_values {
         kll_filled.update_data_input(&DataInput::F64(v)).unwrap();
     }
@@ -186,7 +188,7 @@ fn main() {
 
     // Same workload through the memoized CDF: rebuild cost paid once, then
     // binary search per query.
-    let mut kll_cached = KLL::<f64>::init_with_seed(200, 8, 42);
+    let mut kll_cached = Kll::<f64>::with_seed(200, 8, 42);
     for &v in &kll_values {
         kll_cached.update_data_input(&DataInput::F64(v)).unwrap();
     }

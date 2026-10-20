@@ -16,8 +16,8 @@ The Stream-Summary of the paper's section 3.1: buckets carrying a count, ordered
 by count in a doubly linked list, each owning a doubly linked list of the
 counters at that count, plus a key index into those counters. A unit arrival
 moves one counter to the neighbouring bucket and an eviction takes the head of
-the lowest bucket, so `insert` touches a constant number of links whatever the
-capacity. A weighted `insert_many` lands further along the bucket list and walks
+the lowest bucket, so `update` touches a constant number of links whatever the
+capacity. A weighted `update_weighted` lands further along the bucket list and walks
 it to reach its destination, one step per bucket it passes, so only the unit
 path is constant-work.
 
@@ -44,17 +44,17 @@ at or above the number of distinct keys makes the summary exact.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, value: &DataInput)
-fn insert_many(&mut self, value: &DataInput, count: u64)
-fn bulk_insert(&mut self, values: &[DataInput])
+fn update(&mut self, value: &DataInput)
+fn update_weighted(&mut self, value: &DataInput, weight: u64)
+fn update_batch(&mut self, values: &[DataInput])
 ```
 
 A monitored key rises by `count`. An unmonitored key seats itself at
 `min_count + count` and carries `min_count` as its error, taking a free counter
 while one is left and displacing the smallest monitored key after that. On a
 summary that has never merged, `min_count` is zero until every counter is in
-use, so a fresh key starts at `count` with no error. `insert_many` with a weight
-is the same as repeating `insert` that many times. A `count` of zero is a no-op,
+use, so a fresh key starts at `count` with no error. `update_weighted` with a weight
+is the same as repeating `update` that many times. A `count` of zero is a no-op,
 and counts saturate at `u64::MAX` rather than wrapping.
 
 ## Query
@@ -64,8 +64,8 @@ fn estimate(&self, value: &DataInput) -> u64
 fn upper_bound(&self, value: &DataInput) -> u64
 fn error(&self, value: &DataInput) -> u64
 fn is_guaranteed(&self, value: &DataInput) -> bool
-fn top_k(&self, k: usize) -> Vec<(HeapItem, u64, u64)>
-fn entries(&self) -> Vec<(HeapItem, u64, u64)>
+fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, u64, u64)>
+fn entries(&self) -> Vec<(OwnedDataInput, u64, u64)>
 fn min_count(&self) -> u64
 fn total(&self) -> u64
 fn len(&self) -> usize
@@ -117,8 +117,8 @@ longer a frequency.
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 These produce/consume the **ASAPv1** wire envelope (kind `0x18 0x00`) — see the
@@ -134,7 +134,7 @@ index reaches the wire and no crafted state can point one out of bounds or into
 a loop. `capacity` and the key type are ASAPv1 metadata; the payload is
 `[keys, counts, errors, total, discarded_max]`.
 
-Keys are `HeapItem`s, so the key type is a runtime property: the metadata's
+Keys are `OwnedDataInput`s, so the key type is a runtime property: the metadata's
 `key_type` names the **exact** variant (`"i32"` stays `"i32"`, never widened to
 `"i64"`) and the payload's key array is homogeneous in it, because a decoded key
 of a different variant would stop matching the caller's `DataInput` and read
@@ -160,7 +160,7 @@ use asap_sketchlib::{DataInput, SpaceSaving};
 
 let mut top: SpaceSaving = SpaceSaving::with_capacity(1024);
 for flow in &flows {
-    top.insert(&DataInput::Str(flow));
+    top.update(&DataInput::Str(flow));
 }
 
 for (key, count, error) in top.top_k(10) {
@@ -178,7 +178,7 @@ for (key, count, error) in top.top_k(10) {
   truth for an evicted key; use `upper_bound` when the caller needs a value
   that never does.
 - `top_k(k)` allocates and clones `k` keys.
-- A weighted `insert_many` is not constant work: both a fresh counter and a
+- A weighted `update_weighted` is not constant work: both a fresh counter and a
   raise walk the bucket list to their destination.
 
 ## Relation to the paper

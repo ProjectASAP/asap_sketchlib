@@ -21,19 +21,24 @@
 
 use std::collections::HashSet;
 
-use asap_sketchlib::CmsHeapItem;
+use asap_sketchlib::SetAggregator;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
+use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch;
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketchWire;
+use asap_sketchlib::message_pack_format::portable::countminsketch_topk::CmsHeapItem;
+use asap_sketchlib::message_pack_format::portable::countminsketch_topk::CountMinSketchWithHeap;
 use asap_sketchlib::message_pack_format::portable::countminsketch_topk::{
     CountMinSketchInnerWire, CountMinSketchWithHeapWire,
 };
-use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::DeltaResult;
+use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
+use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch;
+use asap_sketchlib::message_pack_format::portable::delta_set_aggregator::SetAggregatorDelta;
+use asap_sketchlib::message_pack_format::portable::hll::HllSketch;
+use asap_sketchlib::message_pack_format::portable::hll::HllVariant;
+use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketchWire;
+use asap_sketchlib::message_pack_format::portable::kll::KllSketch;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketchData;
-use asap_sketchlib::{
-    CountMinSketch, CountMinSketchWithHeap, CountSketch, DdSketch, HllSketch, HllVariant,
-    HydraKllSketch, KllSketch, SetAggregator,
-};
 
 // ===== round-trip: every wire-format-aligned type =====
 
@@ -136,9 +141,9 @@ fn delta_result_round_trip() {
     added.insert("a".to_string());
     let mut removed = HashSet::new();
     removed.insert("b".to_string());
-    let dr = DeltaResult { added, removed };
+    let dr = SetAggregatorDelta { added, removed };
     let bytes = dr.to_msgpack().expect("encode");
-    let restored = DeltaResult::from_msgpack(&bytes).expect("decode");
+    let restored = SetAggregatorDelta::from_msgpack(&bytes).expect("decode");
     assert!(restored.added.contains("a"));
     assert!(restored.removed.contains("b"));
 }

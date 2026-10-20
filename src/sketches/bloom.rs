@@ -5,7 +5,7 @@
 //!
 //! This is the *partitioned* variant. The filter is a [`BitMatrix`](crate::BitMatrix) of `rows`
 //! slices by `cols` bits, one slice per hash function, which is the same
-//! `rows x cols` shape [`CountMin`] probes — one cell per row,
+//! `rows x cols` shape [`CountMinSketch`] probes — one cell per row,
 //! folded from the same seeded hashes. A membership query is the minimum across
 //! rows, which over single bits is their AND.
 //!
@@ -218,7 +218,7 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
         self.bits.size_in_bytes()
     }
 
-    /// Number of `insert` calls this filter has seen, duplicates included.
+    /// Number of `update` calls this filter has seen, duplicates included.
     #[inline(always)]
     pub fn inserted(&self) -> u64 {
         self.inserted
@@ -274,7 +274,7 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
 impl<H: SketchHasher> Bloom<RegularPath, H> {
     /// Records `value` as a member.
     #[inline(always)]
-    pub fn insert(&mut self, value: &DataInput) {
+    pub fn update(&mut self, value: &DataInput) {
         let rows = self.bits.rows();
         let cols = self.bits.cols();
         for r in 0..rows {
@@ -286,9 +286,9 @@ impl<H: SketchHasher> Bloom<RegularPath, H> {
     }
 
     /// Records every value in `values`.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
@@ -312,7 +312,7 @@ impl<H: SketchHasher> Bloom<RegularPath, H> {
 impl<H: SketchHasher> Bloom<FastPath, H> {
     /// Records `value` as a member.
     #[inline(always)]
-    pub fn insert(&mut self, value: &DataInput) {
+    pub fn update(&mut self, value: &DataInput) {
         let hashed_val = <BitMatrix as FastPathHasher<H>>::hash_for_matrix(&self.bits, value);
         self.bits
             .fast_insert(|cell, _, _| *cell = true, (), &hashed_val);
@@ -320,9 +320,9 @@ impl<H: SketchHasher> Bloom<FastPath, H> {
     }
 
     /// Records every value in `values`.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
@@ -474,7 +474,7 @@ mod tests {
 
         let mut filter = Bloom::<RegularPath>::with_capacity(0, 0.01);
         let key = DataInput::Str("only");
-        filter.insert(&key);
+        filter.update(&key);
         assert!(
             filter.contains(&key),
             "a minimally sized filter lost its only member"
@@ -559,7 +559,7 @@ mod tests {
         let rows = BLOOM_MAX_SLICES;
         let mut filter = Bloom::<RegularPath>::with_dimensions(rows, WIDE_COLS);
         for key in keys(400) {
-            filter.insert(&key);
+            filter.update(&key);
         }
         let fill = filter.fill_ratio();
         assert!(
@@ -601,7 +601,7 @@ mod tests {
 
         let mut saturating = 0;
         for key in keys(1_000) {
-            filter.insert(&key);
+            filter.update(&key);
             saturating += 1;
             if filter.fill_ratio() == 1.0 {
                 break;
@@ -630,7 +630,7 @@ mod tests {
                 let key = DataInput::Str("solo");
 
                 let mut regular = Bloom::<RegularPath>::with_dimensions(rows, cols);
-                regular.insert(&key);
+                regular.update(&key);
                 assert_eq!(
                     regular.as_bits().count_ones(),
                     rows,
@@ -645,7 +645,7 @@ mod tests {
                 assert!(regular.contains(&key), "regular path lost its only member");
 
                 let mut fast = Bloom::<FastPath>::with_dimensions(rows, cols);
-                fast.insert(&key);
+                fast.update(&key);
                 assert_eq!(
                     fast.as_bits().count_ones(),
                     rows,
@@ -668,7 +668,7 @@ mod tests {
 
         let repeated = DataInput::Str("same");
         for _ in 0..5 {
-            filter.insert(&repeated);
+            filter.update(&repeated);
         }
         assert_eq!(
             filter.inserted(),
@@ -678,7 +678,7 @@ mod tests {
         );
         assert!(!filter.is_empty(), "an inserted-into filter reports empty");
 
-        filter.bulk_insert(&keys(3));
+        filter.update_batch(&keys(3));
         assert_eq!(
             filter.inserted(),
             8,
@@ -705,10 +705,10 @@ mod tests {
         let mut left = Bloom::<RegularPath>::with_dimensions(5, 512);
         let mut right = Bloom::<RegularPath>::with_dimensions(5, 512);
         for key in keys(30) {
-            left.insert(&key);
+            left.update(&key);
         }
         for value in 30..70u64 {
-            right.insert(&DataInput::U64(value));
+            right.update(&DataInput::U64(value));
         }
         let expected = left.inserted() + right.inserted();
 

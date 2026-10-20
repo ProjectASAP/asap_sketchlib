@@ -1,5 +1,5 @@
 //! Nitro sampling, end to end: the row-level accelerator behind
-//! `CountMin::fast_insert_nitro` / `Count::fast_insert_nitro`, and the
+//! `CountMinSketch::nitro_update` / `CountSketch::nitro_update`, and the
 //! `NitroBatch` wrapper's two ingestion paths.
 //!
 //! # The model every band here is computed from
@@ -27,7 +27,7 @@
 //!
 //! # The unit of work differs between the two APIs
 //!
-//! - **Row-level** (`fast_insert_nitro`): NitroSketch's per-row sampling. A
+//! - **Row-level** (`nitro_update`): NitroSketch's per-row sampling. A
 //!   `d`-row sketch turns `f` updates of a key into `f * d` *row slots*, each
 //!   admitted independently. So row `r`'s counter is an estimate of `f` from
 //!   `f` slots.
@@ -56,7 +56,7 @@ use crate::common;
 use common::specs::{CountMinSpec, SIMULTANEOUS_LEVEL, SamplingConfidenceSpec, Tally};
 use common::{FreqTruth, zipf_u64};
 
-use asap_sketchlib::{Count, CountMin, DataInput, FastPath, NitroBatch, Vector2D};
+use asap_sketchlib::{CountMinSketch, CountSketch, DataInput, FastPath, NitroBatch, Vector2D};
 
 /// Every rate the public constructors accept that the suite covers.
 ///
@@ -163,11 +163,11 @@ fn signed_row_masses(storage: &Vector2D<i32>) -> Vec<f64> {
 }
 
 fn row_countmin(rate: f64, seed: u64, f: usize) -> Vec<f64> {
-    let mut cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
     cm.enable_nitro_with_seed(rate, seed);
     let key = DataInput::U64(SOLO_KEY);
     for _ in 0..f {
-        cm.fast_insert_nitro(&key);
+        cm.nitro_update(&key);
     }
     signed_row_masses(cm.as_storage())
 }
@@ -176,11 +176,11 @@ fn row_countmin(rate: f64, seed: u64, f: usize) -> Vec<f64> {
 /// single key's row mass is `±` its admitted mass; the magnitude carries the
 /// same distribution as the Count-Min path.
 fn row_countsketch(rate: f64, seed: u64, f: usize) -> Vec<f64> {
-    let mut cs = Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut cs = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
     cs.enable_nitro_with_seed(rate, seed);
     let key = DataInput::U64(SOLO_KEY);
     for _ in 0..f {
-        cs.fast_insert_nitro(&key);
+        cs.nitro_update(&key);
     }
     signed_row_masses(cs.as_storage())
         .into_iter()
@@ -188,30 +188,30 @@ fn row_countsketch(rate: f64, seed: u64, f: usize) -> Vec<f64> {
         .collect()
 }
 
-fn batch_target(rate: f64, seed: u64) -> NitroBatch<CountMin<Vector2D<i32>, FastPath>> {
+fn batch_target(rate: f64, seed: u64) -> NitroBatch<CountMinSketch<Vector2D<i32>, FastPath>> {
     NitroBatch::with_target_and_seed(
         rate,
-        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
+        CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
         seed,
     )
 }
 
 fn batch_live(rate: f64, seed: u64, f: usize) -> Vec<f64> {
     let mut nb = batch_target(rate, seed);
-    nb.insert(&vec![SOLO_KEY as i64; f]);
+    nb.update_batch(&vec![SOLO_KEY as i64; f]);
     vec![nb.estimate_median(&DataInput::I64(SOLO_KEY as i64))]
 }
 
 fn batch_cached(rate: f64, seed: u64, f: usize) -> Vec<f64> {
     let mut nb = batch_target(rate, seed);
-    nb.insert_cached_step(&vec![SOLO_KEY as i64; f]);
+    nb.update_batch_cached_step(&vec![SOLO_KEY as i64; f]);
     vec![nb.estimate_median(&DataInput::I64(SOLO_KEY as i64))]
 }
 
 /// `NitroBatch<Vector2D<u32>>` — the bare-storage target reached by
-/// `init_nitro` — has **no public per-key query path**: `NitroEstimate` is
+/// `new` — has **no public per-key query path**: `NitroEstimate` is
 /// implemented only for the `Vector2D<i32>`-backed Count-Min and Count Sketch,
-/// and `CountMin::estimate` cannot be instantiated over a `u32` counter
+/// and `CountMinSketch::estimate` cannot be instantiated over a `u32` counter
 /// because it needs `Counter: From<i32>`. This does not invent one by
 /// re-deriving the fast-path hash — a test that re-derives it asserts its own
 /// arithmetic, not the estimator's.
@@ -222,8 +222,8 @@ fn batch_cached(rate: f64, seed: u64, f: usize) -> Vec<f64> {
 /// That every row carries the identical total is a structural invariant of the
 /// batch path and is asserted here rather than left to the band.
 fn batch_bare(rate: f64, seed: u64, f: usize) -> Vec<f64> {
-    let mut nb = NitroBatch::init_nitro_with_seed(rate, seed);
-    nb.insert(&vec![SOLO_KEY as i64; f]);
+    let mut nb = NitroBatch::with_seed(rate, seed);
+    nb.update_batch(&vec![SOLO_KEY as i64; f]);
     let target = nb.target();
     let masses: Vec<f64> = (0..target.rows())
         .map(|r| {
@@ -382,10 +382,10 @@ fn full_sampling_is_exact_and_the_query_reads_the_cells_the_insert_wrote() {
     }
 
     // The public per-key estimators, pinned on the same workload.
-    let mut cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
     cm.enable_nitro_with_seed(1.0, trial_seed(0));
     for _ in 0..F {
-        cm.fast_insert_nitro(&key);
+        cm.nitro_update(&key);
     }
     assert_eq!(
         cm.nitro_estimate(&key),
@@ -402,9 +402,9 @@ fn full_sampling_is_exact_and_the_query_reads_the_cells_the_insert_wrote() {
         let mut nb = batch_target(1.0, trial_seed(0));
         let data = vec![SOLO_KEY as i64; F];
         if run {
-            nb.insert_cached_step(&data);
+            nb.update_batch_cached_step(&data);
         } else {
-            nb.insert(&data);
+            nb.update_batch(&data);
         }
         assert_eq!(
             nb.estimate_median(&DataInput::I64(SOLO_KEY as i64)),
@@ -455,11 +455,11 @@ fn nitro_merge_lands_in_the_combined_band() {
 
     let row_level: Merged = |rate, sa, sb, half| {
         let build = |seed: u64| {
-            let mut cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+            let mut cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
             cm.enable_nitro_with_seed(rate, seed);
             let key = DataInput::U64(SOLO_KEY);
             for _ in 0..half {
-                cm.fast_insert_nitro(&key);
+                cm.nitro_update(&key);
             }
             cm
         };
@@ -470,7 +470,7 @@ fn nitro_merge_lands_in_the_combined_band() {
     let batch: Merged = |rate, sa, sb, half| {
         let build = |seed: u64| {
             let mut nb = batch_target(rate, seed);
-            nb.insert(&vec![SOLO_KEY as i64; half]);
+            nb.update_batch(&vec![SOLO_KEY as i64; half]);
             nb
         };
         let mut a = build(sa);
@@ -543,10 +543,10 @@ fn row_level_countmin_nitro_tracks_a_zipf_stream_within_the_combined_band() {
     // stretch of the skip table.
     for &rate in &[1.0f64, 0.3, 0.1, 0.07] {
         let spec = SamplingConfidenceSpec::new(rate, Z);
-        let mut cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+        let mut cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
         cm.enable_nitro_with_seed(rate, trial_seed(0));
         for k in &stream {
-            cm.fast_insert_nitro(&DataInput::U64(*k));
+            cm.nitro_update(&DataInput::U64(*k));
         }
 
         let collision_budget =
@@ -595,12 +595,12 @@ fn row_level_countmin_nitro_separates_keys_of_similar_frequency() {
 
     for &rate in &[1.0f64, 0.5, 0.3, 0.1] {
         let spec = SamplingConfidenceSpec::new(rate, Z);
-        let mut cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+        let mut cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
         cm.enable_nitro_with_seed(rate, trial_seed(1));
         let keys: Vec<u64> = (0..KEYS as u64).map(|i| 0x5EED_0000 + i * 7919).collect();
         for _ in 0..PER_KEY {
             for k in &keys {
-                cm.fast_insert_nitro(&DataInput::U64(*k));
+                cm.nitro_update(&DataInput::U64(*k));
             }
         }
 
@@ -649,16 +649,16 @@ fn nitro_saturates_oversized_weights_instead_of_wrapping() {
     // A rate low enough to push `1/rate` past `i32::MAX` must still leave
     // counters non-negative, on the batch path and the row-level path alike.
     let mut tiny = batch_target(1e-9, trial_seed(0));
-    tiny.insert(&vec![1i64; 4_000]);
+    tiny.update_batch(&vec![1i64; 4_000]);
     assert!(
         tiny.estimate_median(&DataInput::I64(1)) >= 0.0,
         "a saturating weight must not turn Count-Min counters negative"
     );
 
-    let mut row_level = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut row_level = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
     row_level.enable_nitro_with_seed(1e-9, trial_seed(0));
     for _ in 0..4_000 {
-        row_level.fast_insert_nitro(&DataInput::U64(SOLO_KEY));
+        row_level.nitro_update(&DataInput::U64(SOLO_KEY));
     }
     assert!(
         row_level.nitro_estimate(&DataInput::U64(SOLO_KEY)) >= 0.0,
@@ -674,18 +674,20 @@ fn nitro_saturates_oversized_weights_instead_of_wrapping() {
 /// is live and its state actually has to survive.
 const CONTINUATION_RATES: [f64; 2] = [0.3, 0.07];
 
-fn round_trip(cm: &CountMin<Vector2D<i32>, FastPath>) -> CountMin<Vector2D<i32>, FastPath> {
+fn round_trip(
+    cm: &CountMinSketch<Vector2D<i32>, FastPath>,
+) -> CountMinSketch<Vector2D<i32>, FastPath> {
     let bytes = rmp_serde::to_vec_named(cm).expect("serialize a Nitro-enabled CountMin");
     rmp_serde::from_slice(&bytes).expect("deserialize a Nitro-enabled CountMin")
 }
 
-fn nitro_enabled(rate: f64, seed: u64) -> CountMin<Vector2D<i32>, FastPath> {
-    let mut cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+fn nitro_enabled(rate: f64, seed: u64) -> CountMinSketch<Vector2D<i32>, FastPath> {
+    let mut cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
     cm.enable_nitro_with_seed(rate, seed);
     cm
 }
 
-fn cells(cm: &CountMin<Vector2D<i32>, FastPath>) -> Vec<i32> {
+fn cells(cm: &CountMinSketch<Vector2D<i32>, FastPath>) -> Vec<i32> {
     let s = cm.as_storage();
     (0..s.rows())
         .flat_map(|r| (0..s.cols()).map(move |c| (r, c)))
@@ -712,8 +714,8 @@ fn a_serde_round_trip_after_every_update_reproduces_the_uninterrupted_run() {
         let mut interrupted = nitro_enabled(rate, seed);
 
         for _ in 0..UPDATES {
-            continuous.fast_insert_nitro(&key);
-            interrupted.fast_insert_nitro(&key);
+            continuous.nitro_update(&key);
+            interrupted.nitro_update(&key);
             interrupted = round_trip(&interrupted);
         }
 
@@ -734,8 +736,8 @@ fn a_serde_round_trip_after_every_update_reproduces_the_uninterrupted_run() {
         // from a reset rounding stream can hold the right counters and still
         // diverge on the next update.
         for _ in 0..TAIL {
-            continuous.fast_insert_nitro(&key);
-            interrupted.fast_insert_nitro(&key);
+            continuous.nitro_update(&key);
+            interrupted.nitro_update(&key);
         }
         assert_eq!(
             cells(&interrupted),
@@ -782,8 +784,8 @@ fn a_payload_written_before_the_rounding_field_existed_still_decodes() {
     #[derive(serde::Serialize)]
     struct LegacyCountMin {
         counts: LegacyVector2D,
-        row: usize,
-        col: usize,
+        rows: usize,
+        cols: usize,
     }
 
     const RATE: f64 = 0.3;
@@ -809,12 +811,12 @@ fn a_payload_written_before_the_rounding_field_existed_still_decodes() {
                 mask: 0x1_0000,
             },
         },
-        row: ROWS,
-        col: COLS,
+        rows: ROWS,
+        cols: COLS,
     };
 
     let bytes = rmp_serde::to_vec_named(&legacy).expect("encode the legacy shape");
-    let mut decoded: CountMin<Vector2D<i32>, FastPath> =
+    let mut decoded: CountMinSketch<Vector2D<i32>, FastPath> =
         rmp_serde::from_slice(&bytes).expect("a payload without `rounding_state` must decode");
 
     assert_eq!(
@@ -827,7 +829,7 @@ fn a_payload_written_before_the_rounding_field_existed_still_decodes() {
     // its default rather than failing to decode.
     let key = DataInput::U64(SOLO_KEY);
     for _ in 0..2_000 {
-        decoded.fast_insert_nitro(&key);
+        decoded.nitro_update(&key);
     }
     let spec = SamplingConfidenceSpec::new(RATE, Z);
     let mass = signed_row_masses(decoded.as_storage())[0] - 4.0;
@@ -856,13 +858,13 @@ fn a_context_snapshot_restores_the_rest_of_the_stream_exactly() {
         let seed = trial_seed(3);
         let mut continuous = nitro_enabled(rate, seed);
         for _ in 0..PREFIX {
-            continuous.fast_insert_nitro(&key);
+            continuous.nitro_update(&key);
         }
         let snapshot = continuous.as_storage().nitro().context();
         let prefix_cells = cells(&continuous);
 
         for _ in 0..SUFFIX {
-            continuous.fast_insert_nitro(&key);
+            continuous.nitro_update(&key);
         }
 
         // A fresh sketch at the same rate, wound forward to the snapshot.
@@ -872,7 +874,7 @@ fn a_context_snapshot_restores_the_rest_of_the_stream_exactly() {
             .nitro_mut()
             .restore_context(snapshot);
         for _ in 0..SUFFIX {
-            restored.fast_insert_nitro(&key);
+            restored.nitro_update(&key);
         }
 
         let suffix_of_continuous: Vec<i32> = cells(&continuous)
@@ -917,14 +919,18 @@ fn counters(storage: &Vector2D<i32>) -> Vec<i32> {
 #[test]
 fn count_min_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() {
     let (stream, truth) = integration_stream();
-    let mut plain =
-        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
-    let mut sampled =
-        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+    let mut plain = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+        INTEGRATION_ROWS,
+        INTEGRATION_COLS,
+    );
+    let mut sampled = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+        INTEGRATION_ROWS,
+        INTEGRATION_COLS,
+    );
     sampled.enable_nitro(1.0);
     for k in &stream {
-        plain.insert(&DataInput::U64(*k));
-        sampled.fast_insert_nitro(&DataInput::U64(*k));
+        plain.update(&DataInput::U64(*k));
+        sampled.nitro_update(&DataInput::U64(*k));
     }
     assert_eq!(
         counters(sampled.as_storage()),
@@ -952,17 +958,19 @@ fn count_min_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() 
 #[test]
 fn count_min_after_disable_nitro_leaves_the_sampled_insert_path_inert() {
     let (stream, _) = integration_stream();
-    let mut sketch =
-        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+    let mut sketch = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+        INTEGRATION_ROWS,
+        INTEGRATION_COLS,
+    );
     sketch.enable_nitro(1.0);
     for k in &stream {
-        sketch.fast_insert_nitro(&DataInput::U64(*k));
+        sketch.nitro_update(&DataInput::U64(*k));
     }
     let before = counters(sketch.as_storage());
 
     sketch.disable_nitro();
     for k in &stream {
-        sketch.fast_insert_nitro(&DataInput::U64(*k));
+        sketch.nitro_update(&DataInput::U64(*k));
     }
     assert_eq!(
         counters(sketch.as_storage()),
@@ -971,7 +979,7 @@ fn count_min_after_disable_nitro_leaves_the_sampled_insert_path_inert() {
     );
 
     for k in &stream {
-        sketch.insert(&DataInput::U64(*k));
+        sketch.update(&DataInput::U64(*k));
     }
     assert_ne!(
         counters(sketch.as_storage()),
@@ -986,13 +994,13 @@ fn count_min_seeded_nitro_sampling_is_reproducible_and_admits_a_strict_subset() 
     let (stream, _) = integration_stream();
 
     let build = |seed: u64| {
-        let mut sketch = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        let mut sketch = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             INTEGRATION_ROWS,
             INTEGRATION_COLS,
         );
         sketch.enable_nitro_with_seed(RATE, seed);
         for k in &stream {
-            sketch.fast_insert_nitro(&DataInput::U64(*k));
+            sketch.nitro_update(&DataInput::U64(*k));
         }
         sketch
     };
@@ -1005,10 +1013,12 @@ fn count_min_seeded_nitro_sampling_is_reproducible_and_admits_a_strict_subset() 
         "two sketches at the same rate and seed must admit the same subset"
     );
 
-    let mut full =
-        CountMin::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+    let mut full = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+        INTEGRATION_ROWS,
+        INTEGRATION_COLS,
+    );
     for k in &stream {
-        full.insert(&DataInput::U64(*k));
+        full.update(&DataInput::U64(*k));
     }
     let sampled_slots = counters(first.as_storage())
         .iter()
@@ -1029,13 +1039,13 @@ fn count_min_seeded_nitro_sampling_is_reproducible_and_admits_a_strict_subset() 
 fn count_sketch_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() {
     let (stream, truth) = integration_stream();
     let mut plain =
-        Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+        CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
     let mut sampled =
-        Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+        CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
     sampled.enable_nitro(1.0);
     for k in &stream {
-        plain.insert(&DataInput::U64(*k));
-        sampled.fast_insert_nitro(&DataInput::U64(*k));
+        plain.update(&DataInput::U64(*k));
+        sampled.nitro_update(&DataInput::U64(*k));
     }
     assert_eq!(
         counters(sampled.as_storage()),
@@ -1057,11 +1067,13 @@ fn count_sketch_seeded_nitro_sampling_is_reproducible() {
     const RATE: f64 = 0.25;
     let (stream, _) = integration_stream();
     let build = |seed: u64| {
-        let mut sketch =
-            Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+        let mut sketch = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+            INTEGRATION_ROWS,
+            INTEGRATION_COLS,
+        );
         sketch.enable_nitro_with_seed(RATE, seed);
         for k in &stream {
-            sketch.fast_insert_nitro(&DataInput::U64(*k));
+            sketch.nitro_update(&DataInput::U64(*k));
         }
         sketch
     };

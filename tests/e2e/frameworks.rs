@@ -12,8 +12,9 @@ use common::{FreqTruth, assert_between, zipf_u64};
 
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::{
-    Count, CountMin, DataInput, EHSketchList, ExponentialHistogram, FastPath, FoldCMS,
-    FoldCMSConfig, Hydra, KLL, TumblingWindow, UnivMon, UnivMonPyramid, UnivSketchPool, Vector2D,
+    CountMinSketch, CountMinSketchFold, CountMinSketchFoldConfig, CountSketch, DataInput,
+    EhBucketSketch, ExponentialHistogram, FastPath, Hydra, Kll, TumblingWindow, UnivMon,
+    UnivMonPool, UnivMonTwoTier, Vector2D,
 };
 
 // ------------------------------------------------------------------- Hydra
@@ -49,8 +50,8 @@ fn hydra_cm_multilabel_frequencies() {
         4,
         4096,
         ["region", "user"],
-        HydraCounter::CM(
-            CountMin::<Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(4, 4096),
+        HydraCounter::CountMinSketch(
+            CountMinSketch::<Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(4, 4096),
         ),
     )
     .expect("schema");
@@ -102,7 +103,7 @@ fn hydra_kll_head_quantile_and_cdf() {
         4,
         512,
         ["shard"],
-        HydraCounter::KLL(KLL::init_kll_with_seed(200, 0x5EED_0600)),
+        HydraCounter::Kll(Kll::with_k_and_seed(200, 0x5EED_0600)),
     )
     .expect("schema");
     let values: Vec<f64> = common::uniform_u64(20_000, 1_000_000, 4001)
@@ -151,7 +152,7 @@ fn hydra_kll_head_quantile_and_cdf() {
 
 #[test]
 fn hydra_hll_head_cardinality() {
-    let mut hydra = Hydra::with_schema(4, 512, ["tenant"], HydraCounter::HLL(Default::default()))
+    let mut hydra = Hydra::with_schema(4, 512, ["tenant"], HydraCounter::Hll(Default::default()))
         .expect("schema");
     for t in ["t1", "t2"] {
         for i in 0..500u32 {
@@ -175,11 +176,15 @@ const MEASURE: &str = "hit";
 /// Per-cell counter for grid-focused tests, sized to a value domain of a few
 /// members rather than to a standalone deployment.
 fn cell_cm() -> HydraCounter {
-    HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 64))
+    HydraCounter::CountMinSketch(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+        3, 64,
+    ))
 }
 
 fn cell_cs() -> HydraCounter {
-    HydraCounter::CS(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 64))
+    HydraCounter::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+        3, 64,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -486,7 +491,7 @@ fn hydra_kll_weighted_updates_repeat_the_value() {
         5,
         128,
         ["region", "service"],
-        HydraCounter::KLL(KLL::init_kll_with_seed(200, 4_766)),
+        HydraCounter::Kll(Kll::with_k_and_seed(200, 4_766)),
     )
     .expect("two-column schema");
     let mut truth: HashMap<Vec<Option<&str>>, Vec<f64>> = HashMap::new();
@@ -541,7 +546,7 @@ fn hydra_hll_head_subpopulation_cardinalities() {
         5,
         128,
         ["region", "service"],
-        HydraCounter::HLL(Default::default()),
+        HydraCounter::Hll(Default::default()),
     )
     .expect("two-column schema");
     let mut truth: HashMap<Vec<Option<&str>>, std::collections::HashSet<u64>> = HashMap::new();
@@ -585,7 +590,7 @@ fn hydra_kll_head_subpopulation_quantiles() {
         5,
         128,
         ["region", "service"],
-        HydraCounter::KLL(KLL::init_kll_with_seed(200, 4_746)),
+        HydraCounter::Kll(Kll::with_k_and_seed(200, 4_746)),
     )
     .expect("two-column schema");
     let mut truth: HashMap<Vec<Option<&str>>, Vec<f64>> = HashMap::new();
@@ -716,11 +721,9 @@ fn hydra_columns_sharing_a_value_do_not_alias() {
 // ---------------------------------------------------------------------------
 
 fn round_trip(hydra: &Hydra) -> Hydra {
-    let bytes = hydra
-        .serialize_to_bytes()
-        .expect("serialize to MessagePack");
+    let bytes = hydra.to_asapv1().expect("serialize to MessagePack");
     assert!(!bytes.is_empty());
-    Hydra::deserialize_from_bytes(&bytes).expect("deserialize from MessagePack")
+    Hydra::from_asapv1(&bytes).expect("deserialize from MessagePack")
 }
 
 /// Answers a decoded Hydra must reproduce exactly, one query set per counter
@@ -775,7 +778,7 @@ fn hydra_serde_round_trip_preserves_answers_for_every_counter() {
         3,
         64,
         ["region", "service"],
-        HydraCounter::HLL(Default::default()),
+        HydraCounter::Hll(Default::default()),
     )
     .expect("two-column schema");
     for key in &keys {
@@ -799,7 +802,7 @@ fn hydra_serde_round_trip_preserves_answers_for_every_counter() {
         3,
         64,
         ["region", "service"],
-        HydraCounter::KLL(KLL::init_kll_with_seed(200, 5_301)),
+        HydraCounter::Kll(Kll::with_k_and_seed(200, 5_301)),
     )
     .expect("two-column schema");
     for (i, v) in common::uniform_u64(6_000, 100_000, 5_302)
@@ -826,7 +829,7 @@ fn hydra_serde_round_trip_preserves_answers_for_every_counter() {
         3,
         16,
         ["region", "service"],
-        HydraCounter::UNIVERSAL(UnivMon::init_univmon(16, 3, 256, 4)),
+        HydraCounter::UnivMon(UnivMon::new(16, 3, 256, 4)),
     )
     .expect("two-column schema");
     for (i, k) in zipf_u64(6_000, 400, 1.2, 5_303).iter().enumerate() {
@@ -1158,7 +1161,7 @@ fn assert_head_routes_to_the_right_cell<F>(
         hydra.update(&[region, service], &v, None).expect("arity 2");
         for (slot, key) in lattice.iter().enumerate() {
             if h2_matches(key, region, service) {
-                reference[slot].insert(&v, None);
+                reference[slot].update(&v, None);
             }
         }
     }
@@ -1199,7 +1202,7 @@ fn hydra_cs_head_routes_records_to_the_right_cell() {
 fn hydra_hll_head_routes_records_to_the_right_cell() {
     assert_head_routes_to_the_right_cell(
         "HLL",
-        HydraCounter::HLL(Default::default()),
+        HydraCounter::Hll(Default::default()),
         30_000,
         4_610,
         |i| DataInput::U32((i as u32).wrapping_mul(2_654_435_761) % 12_000),
@@ -1212,7 +1215,7 @@ fn hydra_kll_head_routes_records_to_the_right_cell() {
     let values = common::normal_f64(30_000, 500.0, 80.0, 4_640);
     assert_head_routes_to_the_right_cell(
         "KLL",
-        HydraCounter::KLL(KLL::init_kll_with_seed(200, 4_641)),
+        HydraCounter::Kll(Kll::with_k_and_seed(200, 4_641)),
         30_000,
         4_630,
         move |i| DataInput::F64(values[i]),
@@ -1225,7 +1228,7 @@ fn hydra_univmon_head_routes_records_to_the_right_cell() {
     let items = zipf_u64(30_000, 1000, 1.2, 4_660);
     assert_head_routes_to_the_right_cell(
         "UnivMon",
-        HydraCounter::UNIVERSAL(UnivMon::init_univmon(32, 5, 256, 8)),
+        HydraCounter::UnivMon(UnivMon::new(32, 5, 256, 8)),
         30_000,
         4_650,
         move |i| DataInput::U32(items[i] as u32),
@@ -1246,7 +1249,7 @@ fn hydra_univmon_head_subpopulation_metrics() {
         5,
         128,
         ["region", "service"],
-        HydraCounter::UNIVERSAL(UnivMon::init_univmon(32, 5, 256, 8)),
+        HydraCounter::UnivMon(UnivMon::new(32, 5, 256, 8)),
     )
     .expect("two-column schema");
     let mut truth: HashMap<Vec<Option<&str>>, FreqTruth> = HashMap::new();
@@ -1315,7 +1318,7 @@ fn hydra_univmon_head_l1_is_exact_per_subpopulation() {
         5,
         256,
         ["region", "service"],
-        HydraCounter::UNIVERSAL(UnivMon::init_univmon(32, 5, 256, 8)),
+        HydraCounter::UnivMon(UnivMon::new(32, 5, 256, 8)),
     )
     .expect("two-column schema");
     let mut truth: HashMap<Vec<Option<&str>>, FreqTruth> = HashMap::new();
@@ -1398,7 +1401,7 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
 
     // HLL merges register-wise by max, so likewise exact.
     let hll_values = common::uniform_u64(n, 9_000, 4_677);
-    let (single, merged) = run(HydraCounter::HLL(Default::default()), &|i| {
+    let (single, merged) = run(HydraCounter::Hll(Default::default()), &|i| {
         DataInput::U32(hll_values[i] as u32)
     });
     for key in &probe {
@@ -1421,10 +1424,9 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
     let kll_values: Vec<f64> = (0..n)
         .map(|i| if shards[i] == 0 { low[i] } else { high[i] })
         .collect();
-    let (_, merged) = run(
-        HydraCounter::KLL(KLL::init_kll_with_seed(200, 4_681)),
-        &|i| DataInput::F64(kll_values[i]),
-    );
+    let (_, merged) = run(HydraCounter::Kll(Kll::with_k_and_seed(200, 4_681)), &|i| {
+        DataInput::F64(kll_values[i])
+    });
     let mut region_values: Vec<f64> = Vec::new();
     for (i, (region, _)) in keys.iter().enumerate() {
         if *region == "eu-west" {
@@ -1446,10 +1448,9 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
     // UnivMon L1 is a weighted record count, exact through the merge and equal
     // to the single pass.
     let um_items = zipf_u64(n, 800, 1.2, 4_690);
-    let (single, merged) = run(
-        HydraCounter::UNIVERSAL(UnivMon::init_univmon(32, 5, 256, 8)),
-        &|i| DataInput::U32(um_items[i] as u32),
-    );
+    let (single, merged) = run(HydraCounter::UnivMon(UnivMon::new(32, 5, 256, 8)), &|i| {
+        DataInput::U32(um_items[i] as u32)
+    });
     let mut region_truth = FreqTruth::default();
     for (i, (region, _)) in keys.iter().enumerate() {
         if *region == "eu-west" {
@@ -1482,7 +1483,7 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
 
 #[test]
 fn univmon_weighted_metrics_and_fast_insert_parity() {
-    let build = || UnivMon::init_univmon(32, 5, 2048, 8);
+    let build = || UnivMon::new(32, 5, 2048, 8);
     let mut um = build();
     let mut fast = build();
     let mut truth = common::FreqTruth::default();
@@ -1490,29 +1491,33 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
     let stream = zipf_u64(20_000, 1000, 1.2, 4003);
     for (i, k) in stream.iter().enumerate() {
         let w = 1 + (i % 7) as i64;
-        um.insert(&DataInput::U32(*k as u32), w);
-        fast.fast_insert(&DataInput::U32(*k as u32), w);
+        um.update_weighted(&DataInput::U32(*k as u32), w);
+        fast.update_weighted_terminal(&DataInput::U32(*k as u32), w);
         truth.observe_weighted(*k as i64, w);
     }
 
     let total = truth.total();
-    assert_eq!(um.calc_l1(), total as f64, "L1 must be exact");
-    assert_eq!(fast.calc_l1(), total as f64, "fast-insert L1 must be exact");
+    assert_eq!(um.estimate_l1(), total as f64, "L1 must be exact");
+    assert_eq!(
+        fast.estimate_l1(),
+        total as f64,
+        "fast-insert L1 must be exact"
+    );
 
     let l2_truth = truth.l2_norm();
     let (lo, hi) = univmon_l2_band(l2_truth, 5, 2048);
-    assert_between(um.calc_l2(), lo, hi, "L2");
+    assert_between(um.estimate_l2(), lo, hi, "L2");
     let h_truth = truth.entropy(true);
     // UnivMon entropy is a ~10%-accurate estimator (repo tests allow 15%).
     assert_between(
-        um.calc_entropy(),
+        um.estimate_entropy(),
         h_truth * 0.88,
         h_truth * 1.12,
         "entropy (bits)",
     );
     let card_truth = truth.distinct() as f64;
     assert_between(
-        um.calc_card(),
+        um.estimate_cardinality(),
         card_truth * 0.94,
         card_truth * 1.06,
         "cardinality",
@@ -1520,7 +1525,7 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
 
     // fast_insert path tracks the standard estimator within loose bounds.
     assert_between(
-        fast.calc_l2(),
+        fast.estimate_l2(),
         l2_truth * 0.85,
         l2_truth * 1.15,
         "fast L2 parity",
@@ -1529,24 +1534,29 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
 
 #[test]
 fn univmon_pyramid_weighted_metrics() {
-    let mut up = UnivMonPyramid::with_defaults();
+    let mut up = UnivMonTwoTier::with_defaults();
     let mut truth = common::FreqTruth::default();
     let stream = zipf_u64(15_000, 800, 1.3, 4004);
     for (i, k) in stream.iter().enumerate() {
         let w = 1 + (i % 3) as i64;
-        up.insert(&DataInput::U32(*k as u32), w);
+        up.update_weighted(&DataInput::U32(*k as u32), w);
         truth.observe_weighted(*k as i64, w);
     }
     assert_eq!(
-        up.calc_l1(),
+        up.estimate_l1(),
         truth.total() as f64,
         "pyramid L1 must be exact"
     );
     let l2_truth = truth.l2_norm();
-    assert_between(up.calc_l2(), l2_truth * 0.85, l2_truth * 1.15, "pyramid L2");
+    assert_between(
+        up.estimate_l2(),
+        l2_truth * 0.85,
+        l2_truth * 1.15,
+        "pyramid L2",
+    );
     let card_truth = truth.distinct() as f64;
     assert_between(
-        up.calc_card(),
+        up.estimate_cardinality(),
         card_truth * 0.80,
         card_truth * 1.20,
         "pyramid cardinality",
@@ -1559,9 +1569,10 @@ fn univmon_pyramid_weighted_metrics() {
 fn exponential_histogram_sliding_window_counts() {
     // Single event type: merged-bucket count is additive and one-sided.
     let window = 100u64;
-    let eh_type = EHSketchList::CM(
-        CountMin::<Vector2D<i32>, asap_sketchlib::FastPath>::with_dimensions(3, 2048),
-    );
+    let eh_type = EhBucketSketch::CountMinSketch(CountMinSketch::<
+        Vector2D<i32>,
+        asap_sketchlib::FastPath,
+    >::with_dimensions(3, 2048));
     let mut eh = ExponentialHistogram::new(8, window, eh_type);
 
     for t in 0..500u64 {
@@ -1572,7 +1583,7 @@ fn exponential_histogram_sliding_window_counts() {
     // Multiples of 3 in [400, 499]: 402..498 -> 33 events. Bucket-boundary
     // snapping makes interval merges approximate in both directions; allow
     // granularity slack around the exact figure.
-    let merged = eh.query_interval_merge(400, 499).expect("interval covered");
+    let merged = eh.query_interval(400, 499).expect("interval covered");
     let est = merged.query(&DataInput::Str("req")).expect("CM query");
     assert!(
         (26.0..=40.0).contains(&est),
@@ -1581,8 +1592,8 @@ fn exponential_histogram_sliding_window_counts() {
 
     // Window expiry retains only recent buckets (window=100): the retained
     // span must be covered, anything past the observed max must not be.
-    let retained_min = eh.get_min_time().expect("buckets present");
-    let retained_max = eh.get_max_time().expect("buckets present");
+    let retained_min = eh.min_time().expect("buckets present");
+    let retained_max = eh.max_time().expect("buckets present");
     assert_eq!(retained_max, 498);
     assert!(eh.cover(retained_min, 498), "must cover retained span");
     assert!(!eh.cover(500, 600), "cannot cover beyond observed span");
@@ -1592,17 +1603,17 @@ fn exponential_histogram_sliding_window_counts() {
 
 #[test]
 fn tumbling_foldcms_weighted_windows_exact_counts() {
-    let cfg = FoldCMSConfig {
+    let cfg = CountMinSketchFoldConfig {
         rows: 3,
         full_cols: 2048,
         fold_level: 0,
-        top_k: 32,
+        heap_size: 32,
     };
-    let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(10, 16, cfg, 4);
+    let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(10, 16, cfg, 4);
 
     for t in 0..35u64 {
-        tw.insert(t, &DataInput::Str("A"), 2);
-        tw.insert(t, &DataInput::Str("B"), 1);
+        tw.update_weighted(t, &DataInput::Str("A"), 2);
+        tw.update_weighted(t, &DataInput::Str("B"), 1);
     }
     assert_eq!(
         tw.closed_count(),
@@ -1611,13 +1622,13 @@ fn tumbling_foldcms_weighted_windows_exact_counts() {
     );
 
     let all = tw.query_all();
-    assert_eq!(all.query(&DataInput::Str("A")), 70);
-    assert_eq!(all.query(&DataInput::Str("B")), 35);
+    assert_eq!(all.estimate(&DataInput::Str("A")), 70);
+    assert_eq!(all.estimate(&DataInput::Str("B")), 35);
 
     // Last two windows + active cover t in [10,35): 25 inserts.
     let recent = tw.query_recent(2);
-    assert_eq!(recent.query(&DataInput::Str("A")), 50);
-    assert_eq!(recent.query(&DataInput::Str("B")), 25);
+    assert_eq!(recent.estimate(&DataInput::Str("A")), 50);
+    assert_eq!(recent.estimate(&DataInput::Str("B")), 25);
 
     // flush() closes the active window unconditionally (even if partially
     // filled or empty), so [30,40) and an empty [40,50) both land in closed.
@@ -1628,8 +1639,8 @@ fn tumbling_foldcms_weighted_windows_exact_counts() {
         "flush closes active + opens/closes empty"
     );
     let post = tw.query_all();
-    assert_eq!(post.query(&DataInput::Str("A")), 70);
-    assert_eq!(post.query(&DataInput::Str("B")), 35);
+    assert_eq!(post.estimate(&DataInput::Str("A")), 70);
+    assert_eq!(post.estimate(&DataInput::Str("B")), 35);
 }
 
 #[test]
@@ -1638,7 +1649,7 @@ fn hydra_query_frequency_is_the_frequency_query_it_wraps() {
         4,
         4_096,
         ["region", "user"],
-        HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        HydraCounter::CountMinSketch(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             4, 4_096,
         )),
     )
@@ -1693,7 +1704,7 @@ fn hydra_query_quantile_is_the_cumulative_query_it_wraps() {
         4,
         512,
         ["shard"],
-        HydraCounter::KLL(KLL::init_kll_with_seed(HYDRA_KLL_K as i32, 0x5EED_0700)),
+        HydraCounter::Kll(Kll::with_k_and_seed(HYDRA_KLL_K as i32, 0x5EED_0700)),
     )
     .expect("schema");
     let values: Vec<f64> = common::uniform_u64(20_000, 1_000_000, 4_101)
@@ -1710,7 +1721,7 @@ fn hydra_query_quantile_is_the_cumulative_query_it_wraps() {
     let kll_eps = KllRankSpec::datasketches(HYDRA_KLL_K).epsilon();
     for x in [100_000.0f64, 250_000.0, 500_000.0, 750_000.0, 900_000.0] {
         let wrapper = hydra
-            .query_quantile(&[Some("s0")], x)
+            .query_cdf(&[Some("s0")], x)
             .expect("quantile convenience query");
         let explicit = hydra
             .query_key(&[Some("s0")], &HydraQuery::Cdf(x))
@@ -1729,57 +1740,57 @@ fn hydra_query_quantile_is_the_cumulative_query_it_wraps() {
 
     assert_eq!(
         hydra
-            .query_quantile(&[Some("ghost")], 500_000.0)
+            .query_cdf(&[Some("ghost")], 500_000.0)
             .expect("absent cell"),
         0.0,
         "an unseen subpopulation reports no cumulative mass"
     );
     assert!(
-        hydra.query_quantile(&[], 500_000.0).is_err(),
+        hydra.query_cdf(&[], 500_000.0).is_err(),
         "an empty key must be an arity error"
     );
 }
 
 #[test]
 fn univmon_generic_g_sum_reproduces_every_named_estimator() {
-    let mut um = UnivMon::init_univmon(32, 5, 2_048, 8);
+    let mut um = UnivMon::new(32, 5, 2_048, 8);
     let stream = zipf_u64(20_000, 1_000, 1.2, 4_201);
     let mut truth = common::FreqTruth::default();
     for (i, k) in stream.iter().enumerate() {
         let w = 1 + (i % 7) as i64;
-        um.insert(&DataInput::U32(*k as u32), w);
+        um.update_weighted(&DataInput::U32(*k as u32), w);
         truth.observe_weighted(*k as i64, w);
     }
 
     assert_eq!(
-        um.calc_g_sum(|x| x * x, false).sqrt(),
-        um.calc_l2(),
+        um.estimate_g_sum(|x| x * x, false).sqrt(),
+        um.estimate_l2(),
         "g(x)=x^2 under a square root is the L2 estimator"
     );
     assert_eq!(
-        um.calc_g_sum(|_| 1.0, true),
-        um.calc_card(),
+        um.estimate_g_sum(|_| 1.0, true),
+        um.estimate_cardinality(),
         "g(x)=1 in cardinality mode is the distinct-count estimator"
     );
-    let x_log_x = um.calc_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
+    let x_log_x = um.estimate_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
     assert_between(
-        um.calc_entropy(),
-        um.calc_l1().log2() - x_log_x / um.calc_l1() - 1e-9,
-        um.calc_l1().log2() - x_log_x / um.calc_l1() + 1e-9,
+        um.estimate_entropy(),
+        um.estimate_l1().log2() - x_log_x / um.estimate_l1() - 1e-9,
+        um.estimate_l1().log2() - x_log_x / um.estimate_l1() + 1e-9,
         "the entropy estimator is the x*log2(x) g-sum rearranged",
     );
     assert_eq!(
-        um.calc_g_sum(|x| x * x, false),
+        um.estimate_g_sum(|x| x * x, false),
         um.calc_g_sum_heuristic(|x| x * x, false),
         "the public g-sum must be the heuristic it delegates to"
     );
     assert_eq!(
-        um.calc_g_sum(|_| 0.0, false),
+        um.estimate_g_sum(|_| 0.0, false),
         0.0,
         "the zero function must sum to zero"
     );
 
-    let identity = um.calc_g_sum(|x| x, false);
+    let identity = um.estimate_g_sum(|x| x, false);
     let l1 = truth.total() as f64;
     assert_between(
         identity,
@@ -1791,17 +1802,17 @@ fn univmon_generic_g_sum_reproduces_every_named_estimator() {
 
 #[test]
 fn univmon_g_sum_is_zero_on_an_empty_sketch() {
-    let um = UnivMon::init_univmon(32, 5, 256, 4);
-    assert_eq!(um.calc_l1(), 0.0, "an empty sketch has no mass");
-    assert_eq!(um.calc_entropy(), 0.0, "an empty sketch has no entropy");
-    assert_eq!(um.calc_g_sum(|x| x * x, false), 0.0, "no second moment");
-    assert_eq!(um.calc_card(), 0.0, "no distinct values");
+    let um = UnivMon::new(32, 5, 256, 4);
+    assert_eq!(um.estimate_l1(), 0.0, "an empty sketch has no mass");
+    assert_eq!(um.estimate_entropy(), 0.0, "an empty sketch has no entropy");
+    assert_eq!(um.estimate_g_sum(|x| x * x, false), 0.0, "no second moment");
+    assert_eq!(um.estimate_cardinality(), 0.0, "no distinct values");
 }
 
 #[test]
 fn a_univmon_pool_recycles_a_returned_sketch_and_hands_back_a_cleared_one() {
     const CAP: usize = 2;
-    let mut pool = UnivSketchPool::new(CAP, 16, 3, 256, 4);
+    let mut pool = UnivMonPool::new(CAP, 16, 3, 256, 4);
     assert_eq!(pool.available(), CAP, "a fresh pool holds its capacity");
     assert_eq!(pool.total_allocated(), CAP);
 
@@ -1819,15 +1830,15 @@ fn a_univmon_pool_recycles_a_returned_sketch_and_hands_back_a_cleared_one() {
 
     let mut dirty = first;
     for k in zipf_u64(5_000, 512, 1.1, 4_202) {
-        dirty.insert(&DataInput::U32(k as u32), 1);
+        dirty.update_weighted(&DataInput::U32(k as u32), 1);
     }
-    assert!(dirty.calc_l1() > 0.0, "the fixture must carry mass");
+    assert!(dirty.estimate_l1() > 0.0, "the fixture must carry mass");
     pool.put(dirty);
     assert_eq!(pool.available(), 1, "a returned sketch is available again");
 
     let recycled = pool.take();
     assert_eq!(
-        recycled.calc_l1(),
+        recycled.estimate_l1(),
         0.0,
         "a recycled sketch must come back cleared"
     );
@@ -1843,7 +1854,7 @@ fn a_univmon_pool_recycles_a_returned_sketch_and_hands_back_a_cleared_one() {
 // The documented input matrix
 // ---------------------------------------------------------------------------
 
-/// `tests/TEST_COVERAGE.md` writes UnivMon and UnivMonPyramid against the
+/// `tests/TEST_COVERAGE.md` writes UnivMon and UnivMonTwoTier against the
 /// twelve numbered inputs with weighted updates, and Hydra's three counter
 /// heads against the string inputs `(13)`/`(14)`, the float inputs `(7)`/`(8)`
 /// and a distinct-key stream respectively.
@@ -1879,17 +1890,17 @@ mod documented_matrix {
 
     fn univmon_documented_input(id: u8) {
         let input = key_input(id);
-        let mut um = UnivMon::init_univmon(UM_HEAP, UM_ROWS, UM_COLS, UM_LAYERS);
-        let mut fast = UnivMon::init_univmon(UM_HEAP, UM_ROWS, UM_COLS, UM_LAYERS);
-        let mut pyramid = UnivMonPyramid::with_defaults();
+        let mut um = UnivMon::new(UM_HEAP, UM_ROWS, UM_COLS, UM_LAYERS);
+        let mut fast = UnivMon::new(UM_HEAP, UM_ROWS, UM_COLS, UM_LAYERS);
+        let mut pyramid = UnivMonTwoTier::with_defaults();
         let mut truth = common::FreqTruth::default();
 
         for (i, key) in input.keys.iter().enumerate() {
             let w = 1 + (i % 7) as i64;
             let d = input.data(*key);
-            um.insert(&d, w);
-            fast.fast_insert(&d, w);
-            pyramid.insert(&d, w);
+            um.update_weighted(&d, w);
+            fast.update_weighted_terminal(&d, w);
+            pyramid.update_weighted(&d, w);
             truth.observe_weighted(*key, w);
         }
 
@@ -1900,21 +1911,21 @@ mod documented_matrix {
             truth.distinct()
         );
         let l1 = truth.total() as f64;
-        assert_eq!(um.calc_l1(), l1, "UnivMon L1 must be exact. {context}");
+        assert_eq!(um.estimate_l1(), l1, "UnivMon L1 must be exact. {context}");
         assert_eq!(
-            fast.calc_l1(),
+            fast.estimate_l1(),
             l1,
             "the fast-insert path's L1 must be exact. {context}"
         );
         assert_eq!(
-            pyramid.calc_l1(),
+            pyramid.estimate_l1(),
             l1,
             "UnivMonPyramid L1 must be exact. {context}"
         );
 
         let entropy = truth.entropy(true);
         assert_between(
-            um.calc_entropy(),
+            um.estimate_entropy(),
             entropy * 0.88,
             entropy * 1.15,
             &format!("UnivMon entropy on ({id}); {context}"),
@@ -1922,19 +1933,19 @@ mod documented_matrix {
 
         let l2 = truth.l2_norm();
         assert_between(
-            um.calc_l2(),
+            um.estimate_l2(),
             l2 * (1.0 - UM_L2),
             l2 * (1.0 + UM_L2),
             &format!("UnivMon L2 on ({id}); {context}"),
         );
         assert_between(
-            fast.calc_l2(),
+            fast.estimate_l2(),
             l2 * (1.0 - UM_FAST_L2),
             l2 * (1.0 + UM_FAST_L2),
             &format!("UnivMon fast-insert L2 on ({id}); {context}"),
         );
         assert_between(
-            pyramid.calc_l2(),
+            pyramid.estimate_l2(),
             l2 * (1.0 - PYRAMID_L2),
             l2 * (1.0 + PYRAMID_L2),
             &format!("UnivMonPyramid L2 on ({id}); {context}"),
@@ -1942,13 +1953,13 @@ mod documented_matrix {
 
         let distinct = truth.distinct() as f64;
         assert_between(
-            um.calc_card(),
+            um.estimate_cardinality(),
             distinct * (1.0 - UM_CARDINALITY),
             distinct * (1.0 + UM_CARDINALITY),
             &format!("UnivMon cardinality on ({id}); {context}"),
         );
         assert_between(
-            pyramid.calc_card(),
+            pyramid.estimate_cardinality(),
             distinct * (1.0 - PYRAMID_CARDINALITY),
             distinct * (1.0 + PYRAMID_CARDINALITY),
             &format!("UnivMonPyramid cardinality on ({id}); {context}"),
@@ -2016,9 +2027,9 @@ mod documented_matrix {
             HYDRA_ROWS,
             HYDRA_COLS,
             ["region", "user"],
-            HydraCounter::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
-                HYDRA_ROWS, HYDRA_COLS,
-            )),
+            HydraCounter::CountMinSketch(
+                CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(HYDRA_ROWS, HYDRA_COLS),
+            ),
         )
         .expect("schema");
 
@@ -2138,7 +2149,7 @@ mod documented_matrix {
             4,
             512,
             ["shard"],
-            HydraCounter::KLL(KLL::init_kll_with_seed(KLL_K, 0x5EED_0700 + id as u64)),
+            HydraCounter::Kll(Kll::with_k_and_seed(KLL_K, 0x5EED_0700 + id as u64)),
         )
         .expect("schema");
 
@@ -2209,7 +2220,7 @@ mod documented_matrix {
 
         let input = key_input(id);
         let mut hydra =
-            Hydra::with_schema(4, 512, ["tenant"], HydraCounter::HLL(Default::default()))
+            Hydra::with_schema(4, 512, ["tenant"], HydraCounter::Hll(Default::default()))
                 .expect("schema");
 
         let mut per_tenant: Vec<HashSet<i64>> = vec![HashSet::new(); TENANTS.len()];

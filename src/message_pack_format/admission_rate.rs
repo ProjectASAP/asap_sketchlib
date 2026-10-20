@@ -72,75 +72,66 @@ mod tests {
 
     use crate::input::HydraCounter;
     use crate::message_pack_format::envelope;
-    use crate::sketch_framework::eh_sketch_list::wire::{SketchState, rebuild_sketch};
+    use crate::sketch_framework::eh_bucket_sketch::wire::{SketchState, rebuild_sketch};
     use crate::sketches::CountSketchDelta;
     use crate::*;
 
     type Hll = HyperLogLog<Classic>;
-    type HllDelta = HyperLogLogDelta<Classic, HllBucketListP14>;
-    type Cms = CountMin<Vector2D<i64>, RegularPath>;
-    type CmsDelta = CountMinDelta<i64, RegularPath>;
-    type Cs = Count<Vector2D<i64>, RegularPath>;
+    type HllRegisterDelta = HyperLogLogDelta<Classic, HllRegistersP14>;
+    type Cms = CountMinSketch<Vector2D<i64>, RegularPath>;
+    type CmsDelta = CountMinSketchDelta<i64, RegularPath>;
+    type Cs = CountSketch<Vector2D<i64>, RegularPath>;
     type CsDelta = CountSketchDelta<i64, RegularPath>;
 
     type Encoded = Result<Vec<u8>, rmp_serde::encode::Error>;
 
     /// Every kind that carries the key, state and delta, encoded at rate `p`.
     fn encode_all(p: f64) -> Vec<(&'static str, Encoded)> {
-        let dd_delta = DDSketchDelta::new(0.01, vec![0], vec![1], vec![], vec![], 0).unwrap();
+        let dd_delta = DdSketchDelta::new(0.01, vec![0], vec![1], vec![], vec![], 0).unwrap();
         vec![
-            (
-                "HLL",
-                Hll::default().with_admission_rate(p).serialize_to_bytes(),
-            ),
+            ("HLL", Hll::default().with_admission_rate(p).to_asapv1()),
             (
                 "HLL HIP",
-                HyperLogLogHIP::default()
-                    .with_admission_rate(p)
-                    .serialize_to_bytes(),
+                HyperLogLogHip::default().with_admission_rate(p).to_asapv1(),
             ),
             (
                 "HLL delta",
-                HllDelta::new(vec![0], vec![1])
+                HllRegisterDelta::new(vec![0], vec![1])
                     .unwrap()
                     .with_admission_rate(p)
-                    .serialize_to_bytes(),
+                    .to_asapv1(),
             ),
             (
                 "CMS",
                 Cms::with_dimensions(2, 3)
                     .with_admission_rate(p)
-                    .serialize_to_bytes(),
+                    .to_asapv1(),
             ),
             (
                 "CMS delta",
                 CmsDelta::new(2, 3, vec![0], vec![1])
                     .unwrap()
                     .with_admission_rate(p)
-                    .serialize_to_bytes(),
+                    .to_asapv1(),
             ),
             (
                 "CS",
-                Cs::with_dimensions(2, 4)
-                    .with_admission_rate(p)
-                    .serialize_to_bytes(),
+                Cs::with_dimensions(2, 4).with_admission_rate(p).to_asapv1(),
             ),
             (
                 "CS delta",
                 CsDelta::new(2, 4, vec![0], vec![1])
                     .unwrap()
                     .with_admission_rate(p)
-                    .serialize_to_bytes(),
+                    .to_asapv1(),
             ),
             (
                 "DDSketch",
-                DDSketch::new(0.01)
-                    .with_admission_rate(p)
-                    .serialize_to_bytes(),
+                DdSketch::new(0.01).with_admission_rate(p).to_asapv1(),
             ),
             (
                 "DDSketch delta",
-                dd_delta.with_admission_rate(p).serialize_to_bytes(),
+                dd_delta.with_admission_rate(p).to_asapv1(),
             ),
         ]
     }
@@ -148,15 +139,15 @@ mod tests {
     /// Whether `bytes` decode as the kind `label` names.
     fn decodes(label: &str, bytes: &[u8]) -> bool {
         match label {
-            "HLL" => Hll::deserialize_from_bytes(bytes).is_ok(),
-            "HLL HIP" => HyperLogLogHIP::deserialize_from_bytes(bytes).is_ok(),
-            "HLL delta" => HllDelta::deserialize_from_bytes(bytes).is_ok(),
-            "CMS" => Cms::deserialize_from_bytes(bytes).is_ok(),
-            "CMS delta" => CmsDelta::deserialize_from_bytes(bytes).is_ok(),
-            "CS" => Cs::deserialize_from_bytes(bytes).is_ok(),
-            "CS delta" => CsDelta::deserialize_from_bytes(bytes).is_ok(),
-            "DDSketch" => DDSketch::deserialize_from_bytes(bytes).is_ok(),
-            "DDSketch delta" => DDSketchDelta::deserialize_from_bytes(bytes).is_ok(),
+            "HLL" => Hll::from_asapv1(bytes).is_ok(),
+            "HLL HIP" => HyperLogLogHip::from_asapv1(bytes).is_ok(),
+            "HLL delta" => HllRegisterDelta::from_asapv1(bytes).is_ok(),
+            "CMS" => Cms::from_asapv1(bytes).is_ok(),
+            "CMS delta" => CmsDelta::from_asapv1(bytes).is_ok(),
+            "CS" => Cs::from_asapv1(bytes).is_ok(),
+            "CS delta" => CsDelta::from_asapv1(bytes).is_ok(),
+            "DDSketch" => DdSketch::from_asapv1(bytes).is_ok(),
+            "DDSketch delta" => DdSketchDelta::from_asapv1(bytes).is_ok(),
             _ => unreachable!("{label}"),
         }
     }
@@ -168,39 +159,23 @@ mod tests {
             assert!(at_half.is_ok() && at_one.is_err(), "{label}");
         };
         match label {
-            "HLL" => assert_eq!(
-                Hll::deserialize_from_bytes(bytes).unwrap().admission_rate(),
-                0.5
-            ),
+            "HLL" => assert_eq!(Hll::from_asapv1(bytes).unwrap().admission_rate(), 0.5),
             "HLL HIP" => assert_eq!(
-                HyperLogLogHIP::deserialize_from_bytes(bytes)
-                    .unwrap()
-                    .admission_rate(),
+                HyperLogLogHip::from_asapv1(bytes).unwrap().admission_rate(),
                 0.5
             ),
-            "CMS" => assert_eq!(
-                Cms::deserialize_from_bytes(bytes).unwrap().admission_rate(),
-                0.5
-            ),
-            "CS" => assert_eq!(
-                Cs::deserialize_from_bytes(bytes).unwrap().admission_rate(),
-                0.5
-            ),
-            "DDSketch" => assert_eq!(
-                DDSketch::deserialize_from_bytes(bytes)
-                    .unwrap()
-                    .admission_rate(),
-                0.5
-            ),
+            "CMS" => assert_eq!(Cms::from_asapv1(bytes).unwrap().admission_rate(), 0.5),
+            "CS" => assert_eq!(Cs::from_asapv1(bytes).unwrap().admission_rate(), 0.5),
+            "DDSketch" => assert_eq!(DdSketch::from_asapv1(bytes).unwrap().admission_rate(), 0.5),
             "HLL delta" => {
-                let delta = HllDelta::deserialize_from_bytes(bytes).unwrap();
+                let delta = HllRegisterDelta::from_asapv1(bytes).unwrap();
                 merges(
                     Hll::default().with_admission_rate(0.5).merge_delta(&delta),
                     Hll::default().merge_delta(&delta),
                 );
             }
             "CMS delta" => {
-                let delta = CmsDelta::deserialize_from_bytes(bytes).unwrap();
+                let delta = CmsDelta::from_asapv1(bytes).unwrap();
                 let state = || Cms::with_dimensions(2, 3);
                 merges(
                     state().with_admission_rate(0.5).merge_delta(&delta),
@@ -208,7 +183,7 @@ mod tests {
                 );
             }
             "CS delta" => {
-                let delta = CsDelta::deserialize_from_bytes(bytes).unwrap();
+                let delta = CsDelta::from_asapv1(bytes).unwrap();
                 let state = || Cs::with_dimensions(2, 4);
                 merges(
                     state().with_admission_rate(0.5).merge_delta(&delta),
@@ -216,8 +191,8 @@ mod tests {
                 );
             }
             "DDSketch delta" => {
-                let delta = DDSketchDelta::deserialize_from_bytes(bytes).unwrap();
-                let state = || DDSketch::new(0.01);
+                let delta = DdSketchDelta::from_asapv1(bytes).unwrap();
+                let state = || DdSketch::new(0.01);
                 merges(
                     state().with_admission_rate(0.5).merge_delta(&delta),
                     state().merge_delta(&delta),
@@ -302,23 +277,26 @@ mod tests {
         assert!(!panics(&mut || cs.clone().merge(&cs)));
         assert!(panics(&mut || Cs::with_dimensions(2, 4).merge(&cs)));
 
-        let dd = DDSketch::new(0.01).with_admission_rate(0.5);
+        let dd = DdSketch::new(0.01).with_admission_rate(0.5);
         assert!(dd.clone().merge(&dd).is_ok());
-        assert!(DDSketch::new(0.01).merge(&dd).is_err());
+        assert!(DdSketch::new(0.01).merge(&dd).is_err());
 
-        let plain_cm = || CountMin::<Vector2D<i32>, FastPath>::with_dimensions(2, 4);
+        let plain_cm = || CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(2, 4);
         let sampled_cm = plain_cm().with_admission_rate(0.5);
-        let err = EHSketchList::CM(plain_cm()).merge(&EHSketchList::CM(sampled_cm.clone()));
+        let err = EhBucketSketch::CountMinSketch(plain_cm())
+            .merge(&EhBucketSketch::CountMinSketch(sampled_cm.clone()));
         assert!(err.unwrap_err().contains("admission_rate"));
-        let err = EHSketchList::DDS(DDSketch::new(0.01)).merge(&EHSketchList::DDS(dd));
+        let err =
+            EhBucketSketch::DdSketch(DdSketch::new(0.01)).merge(&EhBucketSketch::DdSketch(dd));
         assert!(err.unwrap_err().contains("admission_rate"));
-        let err = HydraCounter::CM(plain_cm()).merge(&HydraCounter::CM(sampled_cm));
+        let err = HydraCounter::CountMinSketch(plain_cm())
+            .merge(&HydraCounter::CountMinSketch(sampled_cm));
         assert!(err.unwrap_err().contains("admission_rate"));
     }
 
     #[test]
     fn a_delta_merges_only_at_the_state_rate_and_a_refused_one_changes_nothing() {
-        let delta = HllDelta::new(vec![0], vec![1]).unwrap();
+        let delta = HllRegisterDelta::new(vec![0], vec![1]).unwrap();
         let mut hll = Hll::default().with_admission_rate(0.5);
         assert!(hll.merge_delta(&delta).is_err());
         assert_eq!(hll.registers_as_slice()[0], 0);
@@ -342,8 +320,8 @@ mod tests {
         assert!(cs.merge_delta(&delta).is_ok());
         assert_eq!(cs.as_storage().as_slice()[0], 1);
 
-        let delta = DDSketchDelta::new(0.01, vec![0], vec![1], vec![], vec![], 0).unwrap();
-        let mut dd = DDSketch::new(0.01).with_admission_rate(0.5);
+        let delta = DdSketchDelta::new(0.01, vec![0], vec![1], vec![], vec![], 0).unwrap();
+        let mut dd = DdSketch::new(0.01).with_admission_rate(0.5);
         assert!(dd.merge_delta(&delta).is_err());
         assert_eq!(dd.get_count(), 0);
         assert!(dd.merge_delta(&delta.with_admission_rate(0.5)).is_ok());
@@ -352,25 +330,25 @@ mod tests {
 
     #[test]
     fn a_sketch_nested_in_another_kind_holds_no_rate() {
-        let cm = || CountMin::<Vector2D<i32>, FastPath>::with_dimensions(2, 4);
-        let cs = || Count::<Vector2D<i32>, FastPath>::with_dimensions(2, 4);
-        let hll = HyperLogLog::<ErtlMLE>::default;
-        let dd = || DDSketch::new(0.01);
+        let cm = || CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(2, 4);
+        let cs = || CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(2, 4);
+        let hll = HyperLogLog::<Ertl>::default;
+        let dd = || DdSketch::new(0.01);
 
         let lists = |p: f64| {
             [
-                EHSketchList::CM(cm().with_admission_rate(p)),
-                EHSketchList::CS(cs().with_admission_rate(p)),
-                EHSketchList::DDS(dd().with_admission_rate(p)),
-                EHSketchList::HLL(hll().with_admission_rate(p)),
+                EhBucketSketch::CountMinSketch(cm().with_admission_rate(p)),
+                EhBucketSketch::CountSketch(cs().with_admission_rate(p)),
+                EhBucketSketch::DdSketch(dd().with_admission_rate(p)),
+                EhBucketSketch::Hll(hll().with_admission_rate(p)),
             ]
         };
         for (plain, sampled) in lists(1.0).iter().zip(lists(0.5).iter()) {
-            assert!(plain.serialize_to_bytes().is_ok());
-            assert!(sampled.serialize_to_bytes().is_err());
+            assert!(plain.to_asapv1().is_ok());
+            assert!(sampled.to_asapv1().is_err());
         }
         for (p, rebuilds) in [(1.0, true), (0.5, false)] {
-            let bytes = cm().with_admission_rate(p).serialize_to_bytes().unwrap();
+            let bytes = cm().with_admission_rate(p).to_asapv1().unwrap();
             let (kind_id, descriptor, state) = envelope::split(&bytes).unwrap();
             let triple = SketchState {
                 kind_id: kind_id.to_vec(),
@@ -382,33 +360,34 @@ mod tests {
 
         let counters = |p: f64| {
             [
-                HydraCounter::CM(cm().with_admission_rate(p)),
-                HydraCounter::CS(cs().with_admission_rate(p)),
-                HydraCounter::HLL(hll().with_admission_rate(p)),
+                HydraCounter::CountMinSketch(cm().with_admission_rate(p)),
+                HydraCounter::CountSketch(cs().with_admission_rate(p)),
+                HydraCounter::Hll(hll().with_admission_rate(p)),
             ]
         };
         for (plain, sampled) in counters(1.0).into_iter().zip(counters(0.5)) {
             let grid = |counter| Hydra::with_schema(1, 2, ["k"], counter).unwrap();
-            assert!(grid(plain.clone()).serialize_to_bytes().is_ok());
-            assert!(grid(sampled.clone()).serialize_to_bytes().is_err());
+            assert!(grid(plain.clone()).to_asapv1().is_ok());
+            assert!(grid(sampled.clone()).to_asapv1().is_err());
             let mut one_cell = grid(plain);
-            one_cell.sketches.as_mut_slice()[1] = sampled;
-            assert!(one_cell.serialize_to_bytes().is_err());
+            one_cell.cells.as_mut_slice()[1] = sampled;
+            assert!(one_cell.to_asapv1().is_err());
         }
 
-        let mut cms_heap = CMSHeap::<Vector2D<i64>, RegularPath>::new(2, 4, 3);
-        assert!(cms_heap.serialize_to_bytes().is_ok());
-        *cms_heap.cms_mut() = cms_heap.cms().clone().with_admission_rate(0.5);
-        assert!(cms_heap.serialize_to_bytes().is_err());
+        let mut cms_heap = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(2, 4, 3);
+        assert!(cms_heap.to_asapv1().is_ok());
+        *cms_heap.count_min_sketch_mut() =
+            cms_heap.count_min_sketch().clone().with_admission_rate(0.5);
+        assert!(cms_heap.to_asapv1().is_err());
 
-        let mut cs_heap = CSHeap::<Vector2D<i64>, RegularPath>::new(2, 4, 3);
-        assert!(cs_heap.serialize_to_bytes().is_ok());
-        *cs_heap.cs_mut() = cs_heap.cs().clone().with_admission_rate(0.5);
-        assert!(cs_heap.serialize_to_bytes().is_err());
+        let mut cs_heap = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(2, 4, 3);
+        assert!(cs_heap.to_asapv1().is_ok());
+        *cs_heap.count_sketch_mut() = cs_heap.count_sketch().clone().with_admission_rate(0.5);
+        assert!(cs_heap.to_asapv1().is_err());
 
-        let mut elastic: Elastic = Elastic::init_with_dimensions(4, 2, 4);
-        assert!(elastic.serialize_to_bytes().is_ok());
+        let mut elastic: ElasticSketch = ElasticSketch::with_heavy_and_light(4, 2, 4);
+        assert!(elastic.to_asapv1().is_ok());
         elastic.light = elastic.light.clone().with_admission_rate(0.5);
-        assert!(elastic.serialize_to_bytes().is_err());
+        assert!(elastic.to_asapv1().is_err());
     }
 }

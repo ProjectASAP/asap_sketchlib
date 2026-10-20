@@ -117,6 +117,130 @@ signals a backwards-compatible change.
 
 ### Changed
 
+- **The legacy MessagePack wrappers leave the crate root** (breaking).
+  `CountMinSketch`, `CountMinSketchDelta`, `CountMinSketchWithHeap`,
+  `CmsHeapItem`, `CountSketch`, `CountSketchDelta`,
+  `COUNT_SKETCH_TOPK_CAPACITY`, `CountSketchWithHeap`, `CsHeapItem`,
+  `DdSketch`, `DdSketchDelta`, `DDSKETCH_GROW_CHUNK`, `HllSketch`,
+  `HllSketchDelta`, `HllVariant`, `HydraKllSketch`, `KllSketch`,
+  `KllSketchData` and the sampling helpers are imported from
+  `message_pack_format::portable::...`; `MessagePackCodec` from
+  `message_pack_format`. `CountSketchDelta` at the root is the ASAPv1
+  Count Sketch delta.
+- **Every sketch write is `update`** (breaking). `insert` -> `update`;
+  `insert_many` and weighted `insert` -> `update_weighted`; `bulk_insert`,
+  batch `insert_many`, `insert_batch`, `bulk_update` -> `update_batch`;
+  `bulk_insert_many` -> `update_weighted_batch`; `insert_with_hash`,
+  `insert_by_hash` -> `update_with_hash`; `bulk_insert_with_hashes`,
+  `insert_many_with_hashes` -> `update_batch_with_hashes`;
+  `bulk_insert_many_with_hashes` -> `update_weighted_batch_with_hashes`;
+  `insert_at*`/`bulk_insert_at*` -> `update_at*`/`update_batch_at*`;
+  `insert_heavy_only` -> `update_heavy_only`; `insert_cached_step` ->
+  `update_batch_cached_step`; `bulk_update_data_input` ->
+  `update_batch_data_input`; `tumbling_insert` -> `tumbling_update_weighted`;
+  `insert_emit_*` -> `update_emit_*`; `insert_hash_emit_delta` ->
+  `update_emit_delta_with_hash`; `insert_hashes_emit_delta`,
+  `insert_hashes_emit_keyed_delta` -> `update_emit_delta_with_row_hashes`,
+  `update_emit_keyed_delta_with_row_hashes`; `CocoBucket::add_v` -> `add`.
+  Weight parameters are named `weight`. Custom `sketch_catalog` and
+  `TumblingWindowSketch` impls break.
+- **Acronyms are one word in type names** (breaking). `KLL`, `KLLDynamic`,
+  `KLLConfig` -> `Kll`, `KllDynamic`, `KllConfig`; `DDSketch`, `DDSketchDelta`
+  -> `DdSketch`, `DdSketchDelta`; `KMV` -> `Kmv`; `HyperLogLogHIP*` ->
+  `HyperLogLogHip*`; `MicroCM` -> `MicroCm`; `EHBucket` -> `EhBucket`.
+- **ASAPv1 codec methods are `to_asapv1` / `from_asapv1`** (breaking), from
+  `serialize_to_bytes` / `deserialize_from_bytes`. `CountMinHll` and `MicroCm`
+  keep the old names: they write raw-serde MessagePack. The kind_id constants
+  live in one crate-private `kind` module.
+- **Count-Min and Count Sketch names** (breaking). `CountMin` ->
+  `CountMinSketch`, `Count` -> `CountSketch`, `CountMinDelta` ->
+  `CountMinSketchDelta`, `CMSHeap`/`CSHeap` (and deltas) ->
+  `CountMinSketchWithHeap`/`CountSketchWithHeap`, `CMSSpaceSaving`/
+  `CSSpaceSaving` -> `CountMinSketchWithSpaceSaving`/
+  `CountSketchWithSpaceSaving`, `FoldCMS`/`FoldCS` (and configs) ->
+  `CountMinSketchFold`/`CountSketchFold`; modules `countminsketch_heap`,
+  `countsketch_heap`, `count_min_fold`, `count_sketch_fold`. `cms()`/`cs()` ->
+  `count_min_sketch()`/`count_sketch()`; `top_k` -> `heap_size`; Fold
+  `new_full` -> `unfolded`, `query` -> `estimate`; `FoldCell::insert`/`query`
+  -> `add`/`get`; `fast_insert_with_hash_value` -> `update_with_hash`,
+  `fast_insert_many_with_hash_value` -> `update_weighted_with_hash`,
+  `fast_estimate_with_hash` -> `estimate_with_hash`, `fast_insert_nitro` ->
+  `nitro_update`; `CsHeapCounter` -> `CountSketchHeapCounter`,
+  `cs_heap_count` -> `heap_count_from_estimate`; `QUICKSTART_ROW_NUM`/
+  `QUICKSTART_COL_NUM` -> `QUICKSTART_ROWS`/`QUICKSTART_COLS`.
+- **`CountL2HH` -> `CountSketchWithL2Norm`** (breaking), with
+  `update_weighted*`, `estimate*`, `l2()`, `l2_squared()`, `seed_index` and
+  `with_dimensions_and_seed_index`; `l2hh_cell_for_row` ->
+  `CountSketchWithL2Norm::cell_for_row`.
+- **Elastic and Coco** (breaking). `Elastic` -> `ElasticSketch`, `Coco` ->
+  `CocoSketch`, `CocoWorkerSketch` -> `CocoSketchWorker`; `bktlen` ->
+  `heavy_buckets`, `init_with_length` -> `with_heavy_buckets`,
+  `init_with_dimensions` -> `with_heavy_and_light`, `query` -> `estimate`;
+  Coco `w`/`d` -> `cols`/`rows`, `estimate_key` -> `estimate`.
+- **KLL, CDF and DDSketch** (breaking). KLL `init`/`init_with_seed`/
+  `init_kll`/`init_kll_with_seed` -> `new`/`with_seed`/`with_k`/
+  `with_k_and_seed`; `wire_*` accessors -> `level_bounds_top_down()`,
+  `items_top_down()`, `coin_state()`, `num_levels()`, `m()`; `Cdf::quantile`/
+  `query` (and `_li`) -> `normalized_rank`/`value_at` (and `_interpolated`);
+  DDSketch `store_counts()`/`store_offset()` -> `positive_store_*`; `DdStore`
+  -> `DdSign`.
+- **HLL and KMV** (breaking). `ErtlMLE` -> `Ertl`; `REGISTER_BITS` ->
+  `RANK_HASH_BITS`, `P_MASK` -> `INDEX_MASK`; `HllBucketList*` ->
+  `HllRegisters*`, `impl_hll_bucket_list!` -> `impl_hll_registers!`; KMV
+  `k_vals` -> `retained_hashes`.
+- **UnivMon** (breaking). `UnivMonPyramid` -> `UnivMonTwoTier` (module
+  `univmon_two_tier`), `UnivSketchPool` -> `UnivMonPool`, `EHUnivOptimized`
+  -> `ExponentialHistogramUnivMon` (module `eh_univmon`) and its bucket and
+  result types; `layer_size`/`sketch_row`/`sketch_col` -> `layers`/`rows`/
+  `cols`; `bucket_size` -> `total_weight`; `l2_sketch_layers`/`hh_layers` ->
+  `layer_sketches`/`layer_heaps`; `init_univmon` -> `new`; `fast_insert` ->
+  `update_weighted_terminal`; `free` -> `clear`; `calc_*` -> `estimate_*`;
+  `bottom_layer_for_hash` -> `UnivMon::bottom_layer_for_hash`;
+  `UnivMonInput` -> `KeyedLayerHashes`; `LayeredCountDelta` ->
+  `UnivMonCellDelta`; `L2hhWorkerSketch` -> `CountSketchWithL2NormWorker`;
+  `MAX_LAYER_SIZE` -> `UNIVMON_MAX_LAYERS`; UnivMon-Q config fields `layers`,
+  `rows`, `top_layer_cols`, `cols_halving_period`, `heap_size`, `seed_index`,
+  `estimate_distinct` -> `estimate_cardinality`, `UnivMonQPoint` ->
+  `UnivMonQCdfEntry`, `OrderedQueryDiagnostics` ->
+  `UnivMonQOrderedQueryDiagnostics`.
+- **Hydra** (breaking). `row_num`/`col_num` -> `rows`/`cols`, `sketches` ->
+  `cells`, `type_to_clone` -> `prototype`, `HydraCounter` variants
+  `CountMinSketch`/`CountSketch`/`UnivMon`/`Hll`/`Kll`, `query_quantile` ->
+  `query_cdf`.
+- **Exponential histogram** (breaking). `EHSketchList` -> `EhBucketSketch`
+  (module `eh_bucket_sketch`) with variants named after their sketches;
+  `type_to_clone` -> `prototype`; `EhBucket::to_merge` -> `merge`;
+  `query_interval_merge` -> `query_interval`.
+- **Octo** (breaking). Promotion messages `CountMinSketchCellDelta`,
+  `CountSketchCellDelta` (and keyed forms), `HllRegisterDelta`,
+  `DdSketchBucketDelta`; their `value` -> `count` (`register_value`,
+  `votes`), `HllRegisterDelta.pos` -> `index`; `*_PROMASK` ->
+  `OCTO_*_DEFAULT_THRESHOLD`, `MAX_PROMASK` -> `OCTO_MAX_PROMOTION_THRESHOLD`;
+  workers, aggregators and plans named after their sketch
+  (`CountMinSketchOctoWorker`, ...); `*WorkerSketch` -> `*Worker`.
+- **Heaps and keys** (breaking). `HeapItem` -> `OwnedDataInput`, `ISIZE`/
+  `USIZE` -> `Isize`/`Usize`; `HHItem` -> `HeapEntry` (`new` ->
+  `from_input`, `create_item` -> `new`); `HHHeap` -> `TopKHeap` (`k` ->
+  `heap_size`); `TopKCounter` -> `HeapCounter`, `SpaceSavingCounter` ->
+  `CandidateCounter`; `KeepSmallest`/`KeepLargest` -> `RetainLargest`/
+  `RetainSmallest`; `KeyColumn::Str` -> `KeyColumn::String`.
+- **`DeltaResult` -> `SetAggregatorDelta`** (breaking).
+- **Hashing and seeds** (breaking). `hash_item64_seeded`/`hash_item128_seeded`
+  -> `hash64_seeded_owned`/`hash128_seeded_owned`; seed-table index
+  parameters are `seed_index`; `CANONICAL_HASH_SEED` ->
+  `DEFAULT_CANONICAL_SEED_INDEX`, `HYDRA_SEED` -> `HYDRA_SEED_INDEX`,
+  `BOTTOM_LAYER_FINDER` -> `UNIVMON_BOTTOM_LAYER_SEED_INDEX`, `SEEDLIST` ->
+  `SEED_LIST`; `MatrixHashMode` -> `MatrixHashLayout`, `MatrixHashType` ->
+  `MatrixHash`, `hash_mode_for_matrix` -> `hash_layout_for_matrix`.
+- **Storage** (breaking). `Vector1D::init` -> `with_capacity`;
+  `Vector2D`/`Vector3D::init` -> `unfilled`; `Vector3D` `depth` ->
+  `bucket_len`.
+- **Nitro and sampling** (breaking). `init_nitro*` -> `new`/`with_seed`;
+  `get_sampling_rate` -> `sampling_rate`; `Vector2D::get_delta` ->
+  `nitro_weight`, `get_nitro_skip` -> `nitro_skip`; `PRECOMPUTED_SAMPLE*` ->
+  `LN_ONE_MINUS_U_TABLE*`.
+- **Getters drop `get_`** (breaking): `max_time`, `min_time`, `memory_info`,
+  `mask_bits`, `required_bits`.
 - **KLL, UnivMon and Hydra metadata keys follow the spec.** Compact KLL
   writes `compaction_seed`; UnivMon writes `layers`, `rows` and `cols`; Hydra
   writes `cell_*` for its counter params (`cell_rows`, `cell_cols`,

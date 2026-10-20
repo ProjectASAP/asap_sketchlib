@@ -14,9 +14,9 @@ pub trait CommonHeapOrder<T> {
 
 /// Root is the smallest value; bounded heap retains the largest values.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct KeepSmallest;
+pub struct RetainLargest;
 
-impl<T: Ord> CommonHeapOrder<T> for KeepSmallest {
+impl<T: Ord> CommonHeapOrder<T> for RetainLargest {
     #[inline(always)]
     fn should_swap(&self, parent: &T, child: &T) -> bool {
         child < parent
@@ -31,9 +31,9 @@ impl<T: Ord> CommonHeapOrder<T> for KeepSmallest {
 
 /// Root is the largest value; bounded heap retains the smallest values.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeepLargest;
+pub struct RetainSmallest;
 
-impl<T: Ord> CommonHeapOrder<T> for KeepLargest {
+impl<T: Ord> CommonHeapOrder<T> for RetainSmallest {
     #[inline(always)]
     fn should_swap(&self, parent: &T, child: &T) -> bool {
         child > parent
@@ -281,19 +281,19 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
 }
 
 // Convenience constructors for common heap types
-impl<T: Ord> CommonHeap<T, KeepSmallest> {
+impl<T: Ord> CommonHeap<T, RetainLargest> {
     /// Creates a new min-heap with the specified capacity.
     #[inline]
     pub fn new_min(capacity: usize) -> Self {
-        Self::with_capacity(capacity, KeepSmallest)
+        Self::with_capacity(capacity, RetainLargest)
     }
 }
 
-impl<T: Ord> CommonHeap<T, KeepLargest> {
+impl<T: Ord> CommonHeap<T, RetainSmallest> {
     /// Creates a new max-heap with the specified capacity.
     #[inline]
     pub fn new_max(capacity: usize) -> Self {
-        Self::with_capacity(capacity, KeepLargest)
+        Self::with_capacity(capacity, RetainSmallest)
     }
 }
 

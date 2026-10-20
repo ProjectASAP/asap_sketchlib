@@ -28,7 +28,7 @@
 ## e2e/cardinality
 
 - HyperLogLog
-  - all classic, ErtlMLE, HIP
+  - all classic, Ertl, HIP
   - Precision: P=10-18
   - Input: (1) ~ (12)
   - error bound:
@@ -54,10 +54,10 @@
 ## e2e/composition
 
 - HashSketchEnsemble
-  - cells: CountMin (row 3, col 4096, FastPath) + HyperLogLog (ErtlMLE), one hash layer shared by every cell
+  - cells: CountMinSketch (row 3, col 4096, FastPath) + HyperLogLog (Ertl), one hash layer shared by every cell
   - Input: (1) ~ (12)
   - error bound:
-    - CountMin cell: same with sketch instance
+    - CountMinSketch cell: same with sketch instance
     - HyperLogLog cell: same with sketch instance
 
 ## e2e/experimental
@@ -71,7 +71,7 @@ Feature-gated behind `--features experimental`.
     - retained sample count within 15% of `n * rate`
     - `total_seen` is exact, and every retained sample must be a value that appeared in the stream
     - merge of two same-rate sketches unions the samples and sums `total_seen`
-- EHUnivOptimized
+- ExponentialHistogramUnivMon
   - Configuration: k=2, window 100, UnivMon defaults (heap 32, row 5, col 2048, layers 8)
   - map tier: interval queries fully inside the retained range are exact, both for the totals and for the per-key counts
 - KMV
@@ -99,8 +99,8 @@ Feature-gated behind `--features experimental`.
 
 - Hydra
   - Configuration: schema 2 dims (`region`, `user`), row 4, col 4096
-  - counter heads: CountMin (row 4, col 4096, FastPath), KLL (k=200, row 4, col 512), HyperLogLog (row 4, col 512)
-  - Input: (13) ~ (14) for the CountMin head, (7) ~ (8) for the KLL head, distinct keys for the HLL head
+  - counter heads: CountMinSketch (row 4, col 4096, FastPath), KLL (k=200, row 4, col 512), HyperLogLog (row 4, col 512)
+  - Input: (13) ~ (14) for the CountMinSketch head, (7) ~ (8) for the KLL head, distinct keys for the HLL head
   - Query: full key, subpopulation query with one key and one `None`, unseen key
   - error bound:
     - full key: absolute error 1000
@@ -119,7 +119,7 @@ Feature-gated behind `--features experimental`.
     - entropy: -12% / +15%
     - cardinality: -30% / +30%
     - reasoning: every metric above L1 comes out of the recursive g-sum over sampled layers, so the bound is empirical rather than a single-layer bound
-- UnivMonPyramid
+- UnivMonTwoTier
   - Configuration: defaults
   - Input: (1) ~ (12), with weighted updates
   - error bound:
@@ -129,7 +129,7 @@ Feature-gated behind `--features experimental`.
 
 ## e2e/frequency
 
-- CountMin sketch
+- CountMinSketch sketch
   - both vector based and fixed matrix based
   - both FastPath and RegularPath
   - size, combination of row and column:
@@ -516,20 +516,20 @@ Feature-gated behind `--features experimental`.
 |(12)|7|16384|228,904%|76.97%|
 |(12)|7|32768|161,859%|76.97%|
 
-- CountL2HH
+- CountSketchWithL2Norm
   - Configuration: row 4, col 2048
   - Input: (3) ~ (6), (9) ~ (12), with weighted and negative updates
   - error bound:
     - hottest key after a decrement: relative error 2%
     - `F2`: relative error 10%
-- FoldCMS / FoldCS
-  - Configuration: row 3, col 2048, fold level 0, top_k 32
-  - counts are exact on sparse dims, including signed weighted updates through FoldCS
+- CountMinSketchFold / CountSketchFold
+  - Configuration: row 3, col 2048, fold level 0, heap_size 32
+  - counts are exact on sparse dims, including signed weighted updates through CountSketchFold
   - same-level merge sums disjoint contributions; hierarchical merge of level-matched sketches preserves totals
 
 ## e2e/heavy_hitters
 
-- CountMin sketch
+- CountMinSketch sketch
   - both vector based and fixed matrix based
   - both FastPath and RegularPath
   - size, combination of row and column:
@@ -968,11 +968,11 @@ Feature-gated behind `--features experimental`.
 ## e2e/nitro
 
 - NitroBatch
-  - target sketches: CountMin (row 5, col 2048, FastPath) and Count sketch (row 5, col 2048, FastPath)
+  - target sketches: CountMinSketch (row 5, col 2048, FastPath) and Count sketch (row 5, col 2048, FastPath)
   - Configuration (sampling rate): 1.0, 0.5
   - Input: one key repeated 100K times, so the rescaling of the estimator is what the bound measures
   - error bound:
-    - CountMin target: relative error 5%
+    - CountMinSketch target: relative error 5%
     - Count sketch target: relative error 10%
 
 ## e2e/octo
@@ -983,7 +983,7 @@ Feature-gated behind `--features experimental`.
     - CMS: row 5, col 2048 or row 5, col 4096,  with the worker promotion threshold tau = 31
     - CS: row 5, col 4096, with the worker promotion threshold tau = 31
     - DD: alpha = 0.01, with the worker promotion threshold tau = 4
-    - HLL: Classic at P14 for the protocol runs, and P12/P14/P16 across Classic and ErtlMLE for the exactness sweep, with the worker promotion threshold tau = 0 so every register improvement promotes at once
+    - HLL: Classic at P14 for the protocol runs, and P12/P14/P16 across Classic and Ertl for the exactness sweep, with the worker promotion threshold tau = 0 so every register improvement promotes at once
     - UnivMon: heap 64, row 5, col 1024, 12 layers, with the worker promotion threshold tau = 31, applied both flat across the pyramid and scaled per layer
     - Coco: 512 buckets, 2 ways, with the worker promotion threshold tau = 31
     - Elastic: 256 heavy buckets over a light part of row 3, col 2048, with the worker promotion threshold tau = 31
@@ -1045,7 +1045,7 @@ Feature-gated behind `--features experimental`.
 - CMS_heap
   - Input: (3) ~ (6), (9) ~ (12)
   - Configuration:
-    - top_k: 32, 64, 128
+    - heap_size: 32, 64, 128
     - cms: row: 5; col: 32768
     - reasoning: CMS accuracy is tested elsewhere, so here is to test how the heap performs E2E
   - Error bound: for items in heap, relative error should be less than 2%
@@ -1053,7 +1053,7 @@ Feature-gated behind `--features experimental`.
 - CS_heap
   - Input: (3) ~ (6), (9) ~ (12)
   - Configuration:
-    - top_k: 32, 64, 128
+    - heap_size: 32, 64, 128
     - cs: row: 5; col: 32768
     - reasoning: CMS accuracy is tested elsewhere, so here is to test how the heap performs E2E
   - Error bound: for items in heap, relative error should be less than 2%
@@ -1066,13 +1066,13 @@ Feature-gated behind `--features experimental`.
 ## e2e/windows
 
 - ExponentialHistogram
-  - Configuration: k=8, window 100, payload CountMin (row 3, col 2048, FastPath)
+  - Configuration: k=8, window 100, payload CountMinSketch (row 3, col 2048, FastPath)
   - Input: (3) ~ (6), (14)
   - error bound: interval count relative error 21%
     - reasoning: interval merges snap to bucket boundaries in both directions, so the error is granularity, not sketch collision
   - expiry: the retained span must be covered, and anything past the observed maximum time must not be
-- TumblingWindow<FoldCMS>
-  - Configuration: window 10, 16 slots, FoldCMS row 3, col 2048, fold level 0, top_k 32
+- TumblingWindow<CountMinSketchFold>
+  - Configuration: window 10, 16 slots, CountMinSketchFold row 3, col 2048, fold level 0, heap_size 32
   - counts are exact per window
   - `query_all` and `query_recent(n)` cover exactly the expected spans; `flush` closes the active window even when it is partially filled or empty
 - TumblingWindow<KLL>
@@ -1085,9 +1085,9 @@ Feature-gated behind `--features experimental`.
   - Configuration: k=8, window 1,000,000 for the accuracy runs so nothing expires inside them; payload row 3, col 512; UnivMon payload row 5, col 2048
   - Input: 10K keys over a 2048 key domain
   - each variant keeps its own bound over the retained window:
-    - CountMin: the CountMin model -- the merged window estimate is one-sided and its excess is held to `eps * N` over the events still retained, exactly as for a standalone CountMin at row 3, col 512
+    - CountMinSketch: the CountMinSketch model -- the merged window estimate is one-sided and its excess is held to `eps * N` over the events still retained, exactly as for a standalone CountMinSketch at row 3, col 512
     - Count sketch: the L2 model
-    - CountL2HH: the L2 bound
+    - CountSketchWithL2Norm: the L2 bound
     - Elastic: one-sided -- on the 32 heaviest keys of the retained window a query must never read low
     - Coco: the merged window holds exactly the retained mass
     - HyperLogLog: the register error model
@@ -1103,8 +1103,8 @@ Feature-gated behind `--features experimental`.
   - Configuration: row 4, col 1024, T=8, c=2, count-based clock of 1000 items per sub-window
   - Input: 40K zipf i64, s=1.1, key-size=4096
   - reference window: `DeltaStrategy::Over` charges sub-windows `n-T ..= n` in full, and a count-based clock puts item `i` in sub-window `i / L`, so the exact window is items `[(n-T) * L, seen)` -- no tolerance is spent on granularity
-  - error bound: the CountMin model over that exact window, one-sided, at the simultaneous additive bound for row 4, col 1024
-    - the load is sized to stay at zoom 0 and the test asserts it, because a zoom adds rounding the CountMin contract does not model
+  - error bound: the CountMinSketch model over that exact window, one-sided, at the simultaneous additive bound for row 4, col 1024
+    - the load is sized to stay at zoom 0 and the test asserts it, because a zoom adds rounding the CountMinSketch contract does not model
   - other properties:
     - `Linear` sits exactly at the clock's residual fraction between `Under` and `Over`, for all 4096 keys, measured part-way through a sub-window; the bare ordering is not asserted, since scaling one non-negative quantity by 0, `p` and 1 orders itself whatever the cells hold
     - a key that stops appearing leaves the window **exactly**: the filler traffic is filtered to keys that provably share no cell with it, so the assertion is `== 0.0` rather than a collision bound. Expiry comes from the sub-window boundary sweep, which visits every cell, not from writes to that key's cells
@@ -1123,7 +1123,7 @@ Feature-gated behind `--features experimental`.
 ## e2e/wire
 
 - ASAPv1 envelope round trip, one kind at a time
-  - kinds covered: DDSketch, Bloom (both hash paths), Coco, Elastic, SpaceSaving, KLLDynamic, the heap-backed matrix types, ExponentialHistogram, EHSketchList, Hydra (naming the counter it carries), the UnivMon family, and the experimental kinds
+  - kinds covered: DDSketch, Bloom (both hash paths), Coco, Elastic, SpaceSaving, KllDynamic, the heap-backed matrix types, ExponentialHistogram, EhBucketSketch, Hydra (naming the counter it carries), the UnivMon family, and the experimental kinds
   - every envelope must round trip and name its own kind
   - an envelope is refused by every decoder but its own
   - the matrix and quantile envelopes carry their answers unchanged across the wire

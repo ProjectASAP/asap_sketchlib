@@ -12,11 +12,11 @@
 
 use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, keys};
 use asap_sketchlib::sketches::elastic::LAMBDA;
-use asap_sketchlib::{DefaultXxHasher, Elastic};
+use asap_sketchlib::{DefaultXxHasher, ElasticSketch};
 use proptest::prelude::*;
 use std::collections::HashMap;
 
-type E = Elastic<DefaultXxHasher>;
+type E = ElasticSketch<DefaultXxHasher>;
 
 fn flow(key: u64) -> String {
     format!("flow-{key}")
@@ -76,9 +76,9 @@ fn truth_of(stream: &[u64]) -> HashMap<u64, i64> {
 }
 
 fn sketch_of(buckets: i32, light_rows: usize, light_cols: usize, stream: &[u64]) -> E {
-    let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
+    let mut sketch = E::with_heavy_and_light(buckets, light_rows, light_cols);
     for key in stream {
-        sketch.insert(flow(*key));
+        sketch.update(flow(*key));
     }
     sketch
 }
@@ -155,16 +155,16 @@ proptest! {
         light_cols in edge_dimension(),
         stream in keys(200),
     ) {
-        let mut sketch = E::init_with_dimensions(buckets as i32, light_rows, light_cols);
+        let mut sketch = E::with_heavy_and_light(buckets as i32, light_rows, light_cols);
         for k in &stream {
-            sketch.insert(format!("flow-{k}"));
+            sketch.update(format!("flow-{k}"));
         }
 
         round_trip!(
             E,
             sketch,
             |s: &E| (0..PROBE_KEYS as u64)
-                .map(|k| s.query(format!("flow-{k}")))
+                .map(|k| s.estimate(format!("flow-{k}")))
                 .collect::<Vec<_>>(),
         );
     }
@@ -191,9 +191,9 @@ proptest! {
     fn weighted_arrivals_keep_the_same_mass_account(
         (buckets, light_rows, light_cols, stream) in crowded_weighted(300),
     ) {
-        let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
+        let mut sketch = E::with_heavy_and_light(buckets, light_rows, light_cols);
         for (key, weight) in &stream {
-            sketch.insert_many(flow(*key), *weight);
+            sketch.update_weighted(flow(*key), *weight);
         }
         let total: i64 = stream.iter().map(|(_, w)| *w as i64).sum();
 
@@ -221,9 +221,9 @@ proptest! {
                 continue;
             }
             prop_assert_eq!(
-                sketch.query(id.clone()) as i64, count,
+                sketch.estimate(id.clone()) as i64, count,
                 "{}: unflagged resident reads {} against a true {}",
-                id, sketch.query(id.clone()), count
+                id, sketch.estimate(id.clone()), count
             );
         }
     }
@@ -236,7 +236,7 @@ proptest! {
 
         for (key, count) in truth_of(&stream) {
             let id = flow(key);
-            let estimate = sketch.query(id.clone()) as i64;
+            let estimate = sketch.estimate(id.clone()) as i64;
             prop_assert!(
                 estimate >= count,
                 "{}: estimate {} below the true {}", id, estimate, count
@@ -250,11 +250,11 @@ proptest! {
     fn the_eviction_flag_is_never_cleared_by_an_insert(
         (buckets, light_rows, light_cols, stream) in crowded(300),
     ) {
-        let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
+        let mut sketch = E::with_heavy_and_light(buckets, light_rows, light_cols);
         let mut before = flags(&sketch);
 
         for (step, key) in stream.iter().enumerate() {
-            sketch.insert(flow(*key));
+            sketch.update(flow(*key));
             let after = flags(&sketch);
             for (idx, (was, now)) in before.iter().zip(&after).enumerate() {
                 prop_assert!(
@@ -271,10 +271,10 @@ proptest! {
     fn an_occupied_bucket_holds_fewer_than_lambda_negative_votes_per_positive(
         (buckets, light_rows, light_cols, stream) in crowded(300),
     ) {
-        let mut sketch = E::init_with_dimensions(buckets, light_rows, light_cols);
+        let mut sketch = E::with_heavy_and_light(buckets, light_rows, light_cols);
 
         for (step, key) in stream.iter().enumerate() {
-            sketch.insert(flow(*key));
+            sketch.update(flow(*key));
             for (idx, bucket) in sketch.heavy.iter().enumerate() {
                 if bucket.is_vacant() {
                     continue;
@@ -309,9 +309,9 @@ proptest! {
         split.merge_heavy(id.clone(), second, eviction);
 
         prop_assert_eq!(
-            split.query(id.clone()), whole.query(id.clone()),
+            split.estimate(id.clone()), whole.estimate(id.clone()),
             "{}: {} + {} split reads {} against {} whole",
-            id, first, second, split.query(id.clone()), whole.query(id.clone())
+            id, first, second, split.estimate(id.clone()), whole.estimate(id.clone())
         );
         prop_assert_eq!(
             resident_bucket(&split, &id).map(|b| b.eviction),
@@ -380,7 +380,7 @@ proptest! {
 
         for (key, count) in truth {
             let id = flow(key);
-            let estimate = a.query(id.clone()) as i64;
+            let estimate = a.estimate(id.clone()) as i64;
             prop_assert!(
                 estimate >= count,
                 "{}: merged estimate {} below the true {}", id, estimate, count

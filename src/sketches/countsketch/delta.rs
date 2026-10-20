@@ -10,16 +10,15 @@ use serde::{Deserialize, Serialize};
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::{add_cells, check_cells};
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::COUNT_SKETCH_DELTA;
 use crate::message_pack_format::wire_key::exact_vec;
 use crate::{DefaultXxHasher, HashProfile, RegularPath, SketchHasher, Vector2D};
 
 use super::wire::{CsWireCounter, CsWireMode, check_geometry, decode_metadata, encode_metadata};
-use super::{Count, CountSketchCounter};
+use super::{CountSketch, CountSketchCounter};
 
-/// Count Sketch delta kind_id: the state's `0x04 0x00` with the variant's top bit set.
-const CS_DELTA_KIND: &[u8] = &[0x04, 0x80];
-
-/// A change to a `rows x cols` [`Count`] state: each value of `deltas` is added
+/// A change to a `rows x cols` [`CountSketch`] state: each value of `deltas` is added
 /// to the cell its position names in `indices`, a row-major index
 /// `row * cols + col`. Indices are strictly ascending and below `rows * cols`,
 /// and no delta is zero.
@@ -78,22 +77,26 @@ where
     }
 
     /// Serializes the delta into an ASAPv1 MessagePack envelope.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata = encode_metadata::<T, Mode, H>(self.rows, self.cols, self.admission_rate)?;
         let payload = rmp_serde::to_vec(&CsDeltaPayload {
             indices: self.indices.clone(),
             deltas: self.deltas.clone(),
         })?;
-        Ok(envelope::encode(CS_DELTA_KIND, &metadata, &payload))
+        Ok(envelope::encode(
+            kind::COUNT_SKETCH_DELTA,
+            &metadata,
+            &payload,
+        ))
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != CS_DELTA_KIND {
+        if kind_id != kind::COUNT_SKETCH_DELTA {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "Count Sketch delta kind_id mismatch: stored {kind_id:?}, expected {CS_DELTA_KIND:?}"
+                "Count Sketch delta kind_id mismatch: stored {kind_id:?}, expected {COUNT_SKETCH_DELTA:?}"
             )));
         }
         let (rows, cols, admission_rate) = decode_metadata::<T, Mode, H>(metadata)?;
@@ -104,7 +107,7 @@ where
     }
 }
 
-impl<T, Mode, H> Count<Vector2D<T>, Mode, H>
+impl<T, Mode, H> CountSketch<Vector2D<T>, Mode, H>
 where
     T: CsWireCounter + CountSketchCounter,
     Mode: CsWireMode,
@@ -140,13 +143,13 @@ mod tests {
     fn delta_bytes(indices: &[u64], deltas: &[i64]) -> Vec<u8> {
         let metadata = encode_metadata::<i64, RegularPath, DefaultXxHasher>(2, 4, 1.0).unwrap();
         let payload = rmp_serde::to_vec(&(indices, deltas)).unwrap();
-        envelope::encode(CS_DELTA_KIND, &metadata, &payload)
+        envelope::encode(kind::COUNT_SKETCH_DELTA, &metadata, &payload)
     }
 
     #[test]
     fn decode_rejects_an_index_past_the_matrix() {
-        assert!(Delta::deserialize_from_bytes(&delta_bytes(&[7], &[-1])).is_ok());
-        assert!(Delta::deserialize_from_bytes(&delta_bytes(&[8], &[-1])).is_err());
+        assert!(Delta::from_asapv1(&delta_bytes(&[7], &[-1])).is_ok());
+        assert!(Delta::from_asapv1(&delta_bytes(&[8], &[-1])).is_err());
     }
 
     #[test]
@@ -154,10 +157,10 @@ mod tests {
         let delta = hex(include_str!(
             "../../../asapv1_golden/cs_i64_regular_2x4_delta.hex"
         ));
-        assert!(Delta::deserialize_from_bytes(&delta).is_ok());
+        assert!(Delta::from_asapv1(&delta).is_ok());
         let mut state_kind = delta.clone();
         state_kind[9] = 0x00;
-        assert!(Delta::deserialize_from_bytes(&state_kind).is_err());
+        assert!(Delta::from_asapv1(&state_kind).is_err());
     }
 
     #[test]
@@ -171,13 +174,13 @@ mod tests {
         let delta = |indices: Vec<u64>, deltas: Vec<i32>| {
             CountSketchDelta::<i32, RegularPath>::new(2, 4, indices, deltas).unwrap()
         };
-        let mut transposed = Count::<Vector2D<i32>, RegularPath>::with_dimensions(4, 2);
+        let mut transposed = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(4, 2);
         assert!(transposed.merge_delta(&delta(vec![0], vec![1])).is_err());
         assert_eq!(transposed.as_storage().as_slice(), &[0; 8]);
 
         let cells = |_, c| if c == 3 { i32::MIN } else { 0 };
         let mut full =
-            Count::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, cells));
+            CountSketch::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, cells));
         assert!(full.merge_delta(&delta(vec![0, 7], vec![-1, -1])).is_err());
         assert_eq!(
             full.as_storage().as_slice(),

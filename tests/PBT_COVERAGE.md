@@ -20,7 +20,7 @@ Compared against: the bit grid read via `as_bits`, and the stream's distinct key
 - membership
   - `contains(k)` for every inserted `k`; 1-7 slices x 8-255 bits
   - once `contains(p)`, always `contains(p)`; every probe re-read after every insert
-- both hash paths, `RegularPath` and `FastPath`, through their own `insert` / `contains`
+- both hash paths, `RegularPath` and `FastPath`, through their own `update` / `contains`
   - no member lost; `slices <= bits set <= slices * distinct` (non-empty stream); `fill_ratio() == bits set / bit_capacity()`; `bit_capacity() <= BLOOM_MAX_BITS`; `inserted() == arrivals`. Geometries 1-4 x 1-8 (saturates) and 1-7 x 256-1023 (mostly zero)
 - grid
   - `grid(S(xs)) == grid(S(perm(xs)))`
@@ -49,12 +49,12 @@ Compared against: a `(row, col)` scan of `table[i][j].full_key` / `.val`, and th
   - `estimate_projected(p, f) == that fold at one group`, including an empty group
   - `estimate_substring(p) == sum of buckets whose key contains p`; probes include `item1`, which is inside `item10`
   - `estimate_with_udf(p, pred) == sum of buckets pred accepts`
-  - `estimate_key(k) == val of k's bucket`, 0 if none; `<= stream total`
+  - `estimate(k) == val of k's bucket`, 0 if none; `<= stream total`
 - merge
   - merged mass `== mass(xs) + mass(ys)`
   - each key of either side in at most one bucket
 - wire
-  - ASAPv1 keeps `estimate_key` for 64 keys; `edge_dimension` x `edge_rows`
+  - ASAPv1 keeps `estimate` for 64 keys; `edge_dimension` x `edge_rows`
 
 ## count_min.rs — 19
 
@@ -62,8 +62,8 @@ Compared against: an exact `HashMap` count, columns via the public `hash_for_mat
 
 - paths
   - `cells(S(xs)) == cells(S(perm(xs)))`
-  - `insert_many(k, n) == n x insert(k)`, cell for cell
-  - `bulk_insert_many_with_hashes == insert_many`, cell for cell
+  - `update_weighted(k, n) == n x update(k)`, cell for cell
+  - `update_weighted_batch_with_hashes == insert_many`, cell for cell
   - `DefaultMatrixI32`, `QuickMatrixI64` == `Vector2D`, cell for cell, at their fixed geometries
 - estimator
   - `estimate(k)` never drops on a non-negative insert; all 32 keys probed after every insert
@@ -89,14 +89,14 @@ Compared against: a key's `(col, sign)` per row, read off a one-key sketch; the 
 
 - paths
   - `cells(S(xs)) == cells(S(perm(xs)))`
-  - `insert_many(k, n) == n x insert(k)`
+  - `update_weighted(k, n) == n x update(k)`
 - sign and column
   - `k` hits one fixed `(col, sign)` per row and nothing else in the row; checked after each of 120 background arrivals
   - one-key stream: `estimate(k) == truth(k)`; unit and signed weights
   - `min(row readings) <= estimate <= max(row readings)`; odd rows: `estimate == median`
 - linearity
   - insert `w` then `-w` for every `w`: cells back to start; signed stream over a background
-  - `insert(k, -1)` undoes `insert(k)`, cell for cell
+  - `update_weighted(k, -1)` undoes `update(k)`, cell for cell
   - `cells(S(xs)) + cells(S(ys)) == cells(S(xs ++ ys))`; integral weights, power-of-two widths
   - negate every weight: every cell negated
 - merge
@@ -107,7 +107,7 @@ Compared against: a key's `(col, sign)` per row, read off a one-key sketch; the 
 
 ## ddsketch.rs — 14
 
-Compared against: the sorted stream. `DDSketch::get_value_at_quantile` targets the `ceil(q*n)`-th value, portable `DdSketch::quantile` the `floor(q*(n-1))`-th. Streams carry negatives, zeros and positives inside the indexable band.
+Compared against: the sorted stream. `DdSketch::get_value_at_quantile` targets the `ceil(q*n)`-th value, portable `DdSketch::quantile` the `floor(q*(n-1))`-th. Streams carry negatives, zeros and positives inside the indexable band.
 
 - placement
   - negative store, zero counter, positive store hold exactly the three class counts; `get_count() == arrivals`
@@ -153,11 +153,11 @@ Compared against: an exact `HashMap` count; each arrival adds its weight to exac
 Compared against: a bare sketch of the member's type on the same stream. The layer hashes once per insert from a cached layout; members decode Count-Min packed columns, Count column and sign bit, and HLL low 64 bits from that one hash. Member lists carry both matrix families and all three HLL variants.
 
 - member == bare sketch
-  - each frequency member == bare `CountMin` / `Count` of its geometry; widths cycle through a pool, so one layer mixes widths on one hash
-  - no matrix member, hashing at `CANONICAL_HASH_SEED`: each HLL member == bare HLL
+  - each frequency member == bare `CountMinSketch` / `CountSketch` of its geometry; widths cycle through a pool, so one layer mixes widths on one hash
+  - no matrix member, hashing at `DEFAULT_CANONICAL_SEED_INDEX`: each HLL member == bare HLL
 - entry points
-  - `hash_input` + `bulk_insert_with_hashes == insert`; `estimate_with_hash == estimate`
-  - `bulk_insert_at(chosen, values)`: chosen members == fully fed, the rest == untouched
+  - `hash_input` + `update_batch_with_hashes == insert`; `estimate_with_hash == estimate`
+  - `update_batch_at(chosen, values)`: chosen members == fully fed, the rest == untouched
   - a mid-stream `push` lands last and sees only the rest of the stream; with a matrix member already fixing the layout, existing members do not move
 - contract
   - `sketch_type()` names the family; `estimate` succeeds exactly for frequency members, `cardinality` exactly for the rest; any accessor at `index >= len()` fails
@@ -172,26 +172,26 @@ Compared against: the raw arrival stream, from which the window and each bucket'
   - sizes are powers of two, non-increasing from oldest to newest
 - window
   - retained contains the window; `|retained| - |window| <= oldest bucket size`
-  - buckets tile the retained suffix: arrivals per bucket `== size`; `(min_time, max_time)` == first and last of its run; runs abut; `merge(all buckets) == CountMin(suffix)`
-  - `query_interval_merge` on bucket boundaries == exactly those buckets' arrivals, cell for cell; no two arrivals share a timestamp
+  - buckets tile the retained suffix: arrivals per bucket `== size`; `(min_time, max_time)` == first and last of its run; runs abut; `merge(all buckets) == CountMinSketch(suffix)`
+  - `query_interval` on bucket boundaries == exactly those buckets' arrivals, cell for cell; no two arrivals share a timestamp
 - tumbling windows, vs the retained set from stream, width and `max_windows`
   - `closed_count() == min(elapsed periods, max_windows)`, empty periods included
-  - `TumblingWindow<FoldCMS>`, `TumblingWindow<FoldCS>`: `merge(retained windows)` flat counters == one sketch on the retained arrivals
-  - `TumblingWindow<KLL>`, `k = 512`, no compaction: merged buffer == retained observations, one level
-  - `TumblingWindow<KLL>`, `k = 32`, compacted: merged weight `>= retained count`; every item arrived; quantiles inside the retained range
+  - `TumblingWindow<CountMinSketchFold>`, `TumblingWindow<CountSketchFold>`: `merge(retained windows)` flat counters == one sketch on the retained arrivals
+  - `TumblingWindow<Kll>`, `k = 512`, no compaction: merged buffer == retained observations, one level
+  - `TumblingWindow<Kll>`, `k = 32`, compacted: merged weight `>= retained count`; every item arrived; quantiles inside the retained range
   - `TumblingWindow<UnivMonQ>`: merged count == retained count; merged extremes == retained extremes
 - pool recycling: recycled == fresh, on return and after both eat the same second half of a stream
-  - `SketchPool<FoldCMS>`, `SketchPool<FoldCS>`: counters, entry count, heap length
-  - `SketchPool<KLL>`: count, items, levels, compaction coin
+  - `SketchPool<CountMinSketchFold>`, `SketchPool<CountSketchFold>`: counters, entry count, heap length
+  - `SketchPool<Kll>`: count, items, levels, compaction coin
   - `SketchPool<UnivMonQ>`: count, extremes, L1, F2, CDF
-  - `UnivSketchPool`: L1, L2, cardinality, candidate flags
+  - `UnivMonPool`: L1, L2, cardinality, candidate flags
 
 ## fold.rs — 21
 
 Every law is an equality. Compared against: the sketch definition over an exact `HashMap`; a key's `(col, sign)` read off a level-0 one-key sketch via `cell` / `iter`. Regime: 48 keys, 8-64 full cols, folded 0-6 levels, so `FoldCell::Collided` occurs.
 
-- per `FoldCMS` and `FoldCS` (12)
-  - `fold(S, level).query(k) == S.query(k)` at every admitted level; `cols() == full_cols >> level`
+- per `CountMinSketchFold` and `CountSketchFold` (12)
+  - `fold(S, level).estimate(k) == S.estimate(k)` at every admitted level; `cols() == full_cols >> level`
   - `unfold_to(t)` keeps every query, for every `t <= level`
   - each row holds at most one entry per full column, at every level
   - `unfold_to(h).unfold_to(l) == unfold_to(l)`; `unfold_full() == unfold_to(0)`
@@ -212,7 +212,7 @@ Every law is an equality. Compared against: the sketch definition over an exact 
 
 ## heaps.rs — 12
 
-Compared against: the offers sorted and truncated. `HHHeap` is path dependent once full, so its exact laws run only where the path cannot matter.
+Compared against: the offers sorted and truncated. `TopKHeap` is path dependent once full, so its exact laws run only where the path cannot matter.
 
 - `CommonHeap`
   - `len() == min(pushed, capacity)`; `len() <= capacity`; `is_full()` agrees
@@ -221,7 +221,7 @@ Compared against: the offers sorted and truncated. `HHHeap` is path dependent on
   - heap property at every parent-child pair, both orderings
   - `pop` drains non-decreasing, yields `min(pushed, capacity)` values, leaves the heap empty
   - `clear`: `len() == 0`; `peek() == None`; capacity kept
-- `HHHeap`
+- `TopKHeap`
   - `len() <= k` at every step
   - a resident's count == the last count offered for its key
   - domain `<= k`: every distinct key resident at its last count
@@ -230,17 +230,17 @@ Compared against: the offers sorted and truncated. `HHHeap` is path dependent on
 
 ## hll.rs — 101
 
-Models use only what the paper fixes; register indexing and rank mapping stay free. For `Classic` and `ErtlMLE`, `estimate` is a function of the registers, so laws relate estimates rather than restate the formula. Registers `<= 40`, so `sum(2^-M[j])` is exact in f64.
+Models use only what the paper fixes; register indexing and rank mapping stay free. For `Classic` and `Ertl`, `estimate` is a function of the registers, so laws relate estimates rather than restate the formula. Registers `<= 40`, so `sum(2^-M[j])` is exact in f64.
 
 - insertion, per precision 4, 6, 8, 10 (16)
   - registers are a function of the distinct set; repeats and interleaving invisible
-  - `insert_many_with_hashes` over `canonical_hash` == `insert`, register for register
+  - `update_batch_with_hashes` over `canonical_hash` == `update`, register for register
   - no register decreases; whole array checked every arrival
   - one arrival moves at most one register
-- estimation, per `Classic` and `ErtlMLE` at those precisions (40); registers set via public `insert_with_hash` and asserted equal to the target
+- estimation, per `Classic` and `Ertl` at those precisions (40); registers set via public `update_with_hash` and asserted equal to the target
   - all registers 0: `estimate() == 0`
   - `estimate(perm(registers)) == estimate(registers)`
-  - every register +1: `estimate` doubles; drift `0..=1` for `Classic` (truncates), `-1..=1` for `ErtlMLE` (rounds)
+  - every register +1: `estimate` doubles; drift `0..=1` for `Classic` (truncates), `-1..=1` for `Ertl` (rounds)
   - `estimate(S(xs)) == estimate(S(perm(xs)))`
   - a register rises: `estimate` does not fall
 - merge, per precision (20)
@@ -255,11 +255,11 @@ Models use only what the paper fixes; register indexing and rank mapping stay fr
 - portable `HllSketch` (5)
   - merge commutative, idempotent, empty identity, `== S(xs ++ ys)`; precisions 4-11
   - msgpack keeps variant, precision, registers, estimate; `Regular`, `Datafusion`, `Hip`; precisions 4-13
-  - ASAPv1 on `HyperLogLog<ErtlMLE>` keeps registers and estimate; empty included
+  - ASAPv1 on `HyperLogLog<Ertl>` keeps registers and estimate; empty included
 
 ## hydra.rs — 7
 
-Compared against: the map rebuilt from the subkey encoding (`label ":" value`, joined by `";"`, escaped) and the public matrix hash at `HYDRA_SEED`. All records share one payload value, so each cell's Count-Min is exact. Labels and values include the escaped characters. Cols in {1, 2, 3, 8, 64, 251, 256}.
+Compared against: the map rebuilt from the subkey encoding (`label ":" value`, joined by `";"`, escaped) and the public matrix hash at `HYDRA_SEED_INDEX`. All records share one payload value, so each cell's Count-Min is exact. Labels and values include the escaped characters. Cols in {1, 2, 3, 8, 64, 251, 256}.
 
 - write
   - a record writes each of its `2^D - 1` non-empty equality subsets to the cell that subkey names, per row, and nothing else
@@ -326,11 +326,11 @@ The dynamic item path. Compared against: the sorted stream. Streams `>= 30 k`, s
 
 ## nitro.rs — 10
 
-Compared against: a bare target fed through its own `insert`, not `NitroTarget::update_sample`; and integer arithmetic in the test. Below rate 1.0 a single insert has no deterministic expected value, so nothing asserts one.
+Compared against: a bare target fed through its own `update`, not `NitroTarget::update_sample`; and integer arithmetic in the test. Below rate 1.0 a single insert has no deterministic expected value, so nothing asserts one.
 
 - rate 1.0
-  - `CountMin` target cells == bare `CountMin`; via `insert` and `insert_cached_step`
-  - same for a `Count` target
+  - `CountMinSketch` target cells == bare `CountMinSketch`; via `update` and `update_batch_cached_step`
+  - same for a `CountSketch` target
   - `merge == bare S(xs ++ ys)`
 - the seed fixes the sample
   - same seed and stream: same cells, both paths, rates 1.0 down to 0.01
@@ -349,7 +349,7 @@ Compared against: a bare target fed through its own `insert`, not `NitroTarget::
 A worker holds counts back until one reaches `tau`, promotes that `tau` step, and keeps the rest as residual. Compared against: a single-threaded sketch on the same stream; `parent + residuals` must reconstruct it. Per type: addition for Count-Min, Count, DDSketch and UnivMon layers; max for HLL; replay through the parent's election for Coco and Elastic.
 
 - Count-Min, Count: addition
-  - `parent + residual == reference`, cell for cell; `|residual| < tau`; via `insert_emit_delta_with_threshold`, and via `CmWorkerSketch` / `CountWorkerSketch` with a byte-wide residual
+  - `parent + residual == reference`, cell for cell; `|residual| < tau`; via `update_emit_delta_with_threshold`, and via `CountMinSketchWorker` / `CountSketchWorker` with a byte-wide residual
   - flush over 1-4 shards: `parent == reference`; every worker counter 0
 - DDSketch: addition, sparse
   - `parent + residual == reference` per bucket; no bucket the stream never filled; `promoted + held == reference count`; `residual < tau`
@@ -372,11 +372,11 @@ A worker holds counts back until one reaches `tau`, promotes that `tau` step, an
   - `parent + residual == layer cells`; flush closes the gap; a delta-only parent has `L2 == reference L2`
   - a delta carries `max(tau >> layer, 1)`, worker id, the worker's running weight, the key
 - keyed deltas beside the aggregator heap
-  - `CmTopKOctoPlan`, keyed `CountWorkerSketch`: `parent + residual == cells`; heap holds `min(promoted keys, top_k)`, only arrived keys, and (Count-Min) no count `> parent estimate`
+  - `CountMinSketchWithHeapOctoPlan`, keyed `CountSketchWorker`: `parent + residual == cells`; heap holds `min(promoted keys, top_k)`, only arrived keys, and (Count-Min) no count `> parent estimate`
 - default thresholds
-  - `CM_PROMASK`, `COUNT_PROMASK`, `DD_PROMASK`, `COCO_PROMASK`, `ELASTIC_PROMASK`, `UNIVMON_PROMASK` in `1..=MAX_PROMASK`; each fires within 600-800 inserts of one key; equals every promotion step of its type
-  - `max_hll_threshold(p) == 64 - p`; `HLL_PROMASK` below it at default precision; a worker at it holds nothing back
-  - `MAX_PROMASK == i8::MAX`; `OctoThreshold` clamps 0 up to 1 and above down to `MAX_PROMASK`; every promotion fits an `i8`
+  - `OCTO_COUNT_MIN_DEFAULT_THRESHOLD`, `OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD`, `OCTO_DDSKETCH_DEFAULT_THRESHOLD`, `OCTO_COCO_DEFAULT_THRESHOLD`, `OCTO_ELASTIC_DEFAULT_THRESHOLD`, `OCTO_UNIVMON_DEFAULT_THRESHOLD` in `1..=OCTO_MAX_PROMOTION_THRESHOLD`; each fires within 600-800 inserts of one key; equals every promotion step of its type
+  - `max_hll_threshold(p) == 64 - p`; `OCTO_HLL_DEFAULT_THRESHOLD` below it at default precision; a worker at it holds nothing back
+  - `OCTO_MAX_PROMOTION_THRESHOLD == i8::MAX`; `OctoThreshold` clamps 0 up to 1 and above down to `OCTO_MAX_PROMOTION_THRESHOLD`; every promotion fits an `i8`
 
 ## set_aggregator.rs — 9
 
@@ -413,8 +413,8 @@ Compared against: an exact `HashMap` count. Every bound is deterministic.
   - `min_count` non-decreasing over the stream
 - domain `<= capacity`
   - exact: `count == truth`; `error == 0`; `upper_bound == truth`; order-free
-  - `insert(k, w) == w x insert(k)`: counters, total, `min_count`
-  - `bulk_insert == one at a time`
+  - `update_weighted(k, w) == w x update(k)`: counters, total, `min_count`
+  - `update_batch == one at a time`
   - `clear` then a different stream `== fresh`
 - merge
   - bounds hold on `xs ++ ys` after merging two capacities; `total()` adds
@@ -429,37 +429,37 @@ Compared against: an exact `HashMap` count. Every bound is deterministic.
 Path laws compare two real implementations: the wrapper's matrix must equal the bare sketch's.
 
 - matrix
-  - `CMSHeap.cms()` cells == bare `CountMin`
-  - `CSHeap.cs()` cells == bare Count sketch
+  - `CountMinSketchWithHeap.count_min_sketch()` cells == bare `CountMinSketch`
+  - `CountSketchWithHeap.count_sketch()` cells == bare Count sketch
 - heap
-  - `CMSHeap` resident: `truth(k) <= count <= estimate(k)`
-  - `CSHeap` resident: `count == estimate at its last insert`
+  - `CountMinSketchWithHeap` resident: `truth(k) <= count <= estimate(k)`
+  - `CountSketchWithHeap` resident: `count == estimate at its last insert`
   - `len() <= top_k` always; `capacity() == top_k`
   - domain `<= top_k`: every key resident, heaviest included
 - merge
   - merged keys are a subset of `a.keys + b.keys`
   - every merged resident: `count == merged estimate(k)`
   - room for the union: merged keys `== a.keys + b.keys`
-- `CountL2HH`, via hash-taking entry points
-  - `fast_insert_with_count_without_l2_and_hash` writes the cells `l2hh_cell_for_row` names, with the row sign
-  - `fast_get_est_with_hash == median(sign-corrected cells)`
-  - `get_l2_sqr() == median over rows of sum of squares`, every update
+- `CountSketchWithL2Norm`, via hash-taking entry points
+  - `update_weighted_with_hash_without_l2` writes the cells `CountSketchWithL2Norm::cell_for_row` names, with the row sign
+  - `estimate_with_hash == median(sign-corrected cells)`
+  - `l2_squared() == median over rows of sum of squares`, every update
   - merge adds cells and recomputes L2 from them
 - wire
-  - `CMSHeap`, `CSHeap` at `edge_rows` x `edge_dimension`: 64 estimates and heap `(key, count)` kept
+  - `CountMinSketchWithHeap`, `CountSketchWithHeap` at `edge_rows` x `edge_dimension`: 64 estimates and heap `(key, count)` kept
 
 ## univmon.rs — 10
 
-Layer placement is a deterministic hash, so nesting is exact. Layer membership compared against: the trailing-ones closed form over `hash64_seeded(BOTTOM_LAYER_FINDER, key)`, not the pyramid's loop. Heaps as wide as the 48-key domain, so nothing evicts.
+Layer placement is a deterministic hash, so nesting is exact. Layer membership compared against: the trailing-ones closed form over `hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key)`, not the pyramid's loop. Heaps as wide as the 48-key domain, so nothing evicts.
 
 - layers
   - `layer[i].keys == {k arrived : deepest(k) >= i}`
-  - `bottom_layer_for_hash(h, layers)` == set bits of `h` above bit 0, capped at depth
+  - `UnivMon::bottom_layer_for_hash(h, layers)` == set bits of `h` above bit 0, capped at depth
   - `layer[i].keys` contains `layer[i+1].keys`
 - counters
-  - `layer[i]` cells == signed mass of exactly the keys reaching `i`, placed by `l2hh_cell_for_row` under that layer's seed; the expected cells are the stream summed directly
+  - `layer[i]` cells == signed mass of exactly the keys reaching `i`, placed by `CountSketchWithL2Norm::cell_for_row` under that layer's seed; the expected cells are the stream summed directly
 - one key
-  - `calc_l1() == weight` exactly; `calc_l2() == weight`, `calc_card() == 1`, `calc_entropy() == 0` to `REL_TOL`
+  - `estimate_l1() == weight` exactly; `estimate_l2() == weight`, `estimate_cardinality() == 1`, `estimate_entropy() == 0` to `REL_TOL`
 - merge
   - cells add per layer; L1 adds
   - each layer's heap rebuilt from the union of both key sets, scored on the merged counters
@@ -501,13 +501,13 @@ A Count-Min grid of HLL registers. Compared against: a standalone `HyperLogLogIm
 
 ## kmv.rs — 12 (experimental)
 
-Retained set == the `k` smallest distinct hashes, so laws are mostly equalities. Compared against: a `BTreeSet` truncated to `k`. Laws drive `insert_by_hash`; one covers the key path. Hash domains: below the smallest bound, straddling the largest, full u64.
+Retained set == the `k` smallest distinct hashes, so laws are mostly equalities. Compared against: a `BTreeSet` truncated to `k`. Laws drive `update_with_hash`; one covers the key path. Hash domains: below the smallest bound, straddling the largest, full u64.
 
 - retention
   - `retained == k smallest distinct hashes`; `capacity == k`
   - reinserting a seen hash changes nothing
   - `S(xs) == S(perm(xs))`
-  - the key path hashes once, at `CANONICAL_HASH_SEED`
+  - the key path hashes once, at `DEFAULT_CANONICAL_SEED_INDEX`
 - estimate
   - full sketch: `estimate == (k - 1) / U(k)`, finite, `> 0`; `U(k)` in `(0, 1]` for every u64; `estimate >= k - 1`; within 4 ulps of `(k - 1) * 2^64 / (kth + 1)`; a larger `kth` never raises it
   - `estimate` non-decreasing over the stream, every arrival

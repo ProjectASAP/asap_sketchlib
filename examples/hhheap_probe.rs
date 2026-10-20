@@ -1,16 +1,16 @@
-//! Measures `HHHeap::update` across capacities.
+//! Measures `TopKHeap::update` across capacities.
 //!
-//! `HHHeap` maintains its key -> position index through each sift, so its rate
+//! `TopKHeap` maintains its key -> position index through each sift, so its rate
 //! should not fall as capacity grows. This probe runs it beside a standalone
 //! indexed heap and a linear scan over the same Zipf stream, and prints updates
 //! per second at several capacities. The scan column is what an unindexed heap
-//! costs; the indexed column is the floor `HHHeap` should stay near.
+//! costs; the indexed column is the floor `TopKHeap` should stay near.
 //!
 //! Run with `cargo run --release --example hhheap_probe`.
 
 use asap_sketchlib::{
-    CMSHeap, CountMin, DataInput, FastPath, HHHeap, HHItem, HeapItem, Vector2D, hash64_seeded,
-    input_to_owned,
+    CountMinSketch, CountMinSketchWithHeap, DataInput, FastPath, HeapEntry, OwnedDataInput,
+    TopKHeap, Vector2D, hash64_seeded, input_to_owned,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -45,7 +45,7 @@ impl Hasher for IdentityHasher {
 type SlotMap = HashMap<u64, Vec<usize>, BuildHasherDefault<IdentityHasher>>;
 
 struct IndexedHeap {
-    data: Vec<HHItem>,
+    data: Vec<HeapEntry>,
     slots: Vec<u64>,
     index: SlotMap,
     k: usize,
@@ -81,8 +81,7 @@ impl IndexedHeap {
         let retained_every_key = self.data.len() < self.k;
         if self.data.len() < self.k {
             let idx = self.data.len();
-            self.data
-                .push(HHItem::create_item(input_to_owned(key), count));
+            self.data.push(HeapEntry::new(input_to_owned(key), count));
             self.slots.push(slot);
             self.register(slot, idx);
             self.bubble_up(idx);
@@ -95,7 +94,7 @@ impl IndexedHeap {
 
         let old_slot = self.slots[0];
         self.unregister(old_slot, 0);
-        self.data[0] = HHItem::create_item(input_to_owned(key), count);
+        self.data[0] = HeapEntry::new(input_to_owned(key), count);
         self.slots[0] = slot;
         self.register(slot, 0);
         self.bubble_down(0);
@@ -196,7 +195,7 @@ impl IndexedHeap {
 // ---------------------------------------------------------------------------
 
 struct ScanHeap {
-    data: Vec<HHItem>,
+    data: Vec<HeapEntry>,
     k: usize,
 }
 
@@ -219,15 +218,14 @@ impl ScanHeap {
 
         let retained_every_key = self.data.len() < self.k;
         if self.data.len() < self.k {
-            self.data
-                .push(HHItem::create_item(input_to_owned(key), count));
+            self.data.push(HeapEntry::new(input_to_owned(key), count));
             self.bubble_up(self.data.len() - 1);
             return retained_every_key;
         }
         if count <= self.data[0].count {
             return retained_every_key;
         }
-        self.data[0] = HHItem::create_item(input_to_owned(key), count);
+        self.data[0] = HeapEntry::new(input_to_owned(key), count);
         self.bubble_down(0);
         retained_every_key
     }
@@ -302,7 +300,7 @@ fn zipf_keys(n: usize, domain: usize, exponent: f64, seed: u64) -> Vec<u64> {
     out
 }
 
-fn build_stream(string_keys: bool) -> Vec<(HeapItem, i64)> {
+fn build_stream(string_keys: bool) -> Vec<(OwnedDataInput, i64)> {
     let mut truth: HashMap<u64, i64> = HashMap::new();
     zipf_keys(STREAM, DOMAIN, EXPONENT, 0x5eed_1234)
         .into_iter()
@@ -310,19 +308,19 @@ fn build_stream(string_keys: bool) -> Vec<(HeapItem, i64)> {
             let count = truth.entry(id).or_insert(0);
             *count += 1;
             let key = if string_keys {
-                HeapItem::String(format!("flow::{id:08}"))
+                OwnedDataInput::String(format!("flow::{id:08}"))
             } else {
-                HeapItem::U64(id)
+                OwnedDataInput::U64(id)
             };
             (key, *count)
         })
         .collect()
 }
 
-fn as_input(item: &HeapItem) -> DataInput<'_> {
+fn as_input(item: &OwnedDataInput) -> DataInput<'_> {
     match item {
-        HeapItem::String(s) => DataInput::Str(s),
-        HeapItem::U64(v) => DataInput::U64(*v),
+        OwnedDataInput::String(s) => DataInput::Str(s),
+        OwnedDataInput::U64(v) => DataInput::U64(*v),
         _ => unreachable!(),
     }
 }
@@ -330,10 +328,10 @@ fn as_input(item: &HeapItem) -> DataInput<'_> {
 fn sketch_ceiling() {
     let stream = build_stream(true);
 
-    let mut plain = CountMin::<Vector2D<i64>, FastPath>::with_dimensions(4, 4096);
+    let mut plain = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(4, 4096);
     let started = Instant::now();
     for (key, _) in &stream {
-        plain.insert(&as_input(key));
+        plain.update(&as_input(key));
     }
     let plain_rate = stream.len() as f64 / started.elapsed().as_secs_f64() / 1e6;
 
@@ -341,10 +339,10 @@ fn sketch_ceiling() {
     println!("  bare CountMin::insert: {plain_rate:.3} Minsert/s");
     println!("{:>6}  {:>16}  {:>12}", "top_k", "Minsert/s", "heap share");
     for cap in CAPACITIES {
-        let mut sketch = CMSHeap::<Vector2D<i64>, FastPath>::new(4, 4096, cap);
+        let mut sketch = CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(4, 4096, cap);
         let started = Instant::now();
         for (key, _) in &stream {
-            sketch.insert(&as_input(key));
+            sketch.update(&as_input(key));
         }
         let rate = stream.len() as f64 / started.elapsed().as_secs_f64() / 1e6;
         let share = 1.0 - rate / plain_rate;
@@ -370,7 +368,7 @@ fn main() {
         );
 
         for cap in CAPACITIES {
-            let mut baseline = HHHeap::new(cap);
+            let mut baseline = TopKHeap::new(cap);
             let started = Instant::now();
             for (key, count) in &stream {
                 baseline.update(&as_input(key), *count);

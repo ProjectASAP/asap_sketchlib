@@ -1,4 +1,4 @@
-//! Windowed frameworks: every `EHSketchList` variant inside an
+//! Windowed frameworks: every `EhBucketSketch` variant inside an
 //! `ExponentialHistogram`, and every `TumblingWindowSketch` implementation
 //! inside a `TumblingWindow`.
 //!
@@ -11,7 +11,7 @@
 //!
 //! ## Reading the ground truth off a bucket span
 //!
-//! `query_interval_merge` snaps a requested interval to bucket boundaries, so
+//! `query_interval` snaps a requested interval to bucket boundaries, so
 //! an arbitrary `[t1, t2]` has no exact reference. Every query below therefore
 //! asks for the histogram's **full retained span**, `[payload[0].min_time,
 //! payload.last().max_time]`, which merges every retained bucket and nothing
@@ -27,9 +27,10 @@ use common::specs::{
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
-    Coco, Count, CountL2HH, CountMin, DDSketch, DataInput, EHSketchList, Elastic, ErtlMLE,
-    ExponentialHistogram, FastPath, FoldCMS, FoldCMSConfig, FoldCS, FoldCSConfig, HyperLogLog, KLL,
-    KLLConfig, SketchNorm, SketchPool, TumblingWindow, UnivMon, UnivMonQ, UnivMonQConfig, Vector2D,
+    CocoSketch, CountMinSketch, CountMinSketchFold, CountMinSketchFoldConfig, CountSketch,
+    CountSketchFold, CountSketchFoldConfig, CountSketchWithL2Norm, DataInput, DdSketch,
+    EhBucketSketch, ElasticSketch, Ertl, ExponentialHistogram, FastPath, HyperLogLog, Kll,
+    KllConfig, SketchNorm, SketchPool, TumblingWindow, UnivMon, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
 const EH_K: usize = 8;
@@ -41,7 +42,7 @@ const EH_WINDOW: u64 = 1_000_000; // no expiry inside the accuracy runs
 const N: usize = 10_000;
 const DOMAIN: usize = 2_048;
 const STREAM_SEED: u64 = 0x0E11_0001;
-/// Generator seed for every `Coco` fixture.
+/// Generator seed for every `CocoSketch` fixture.
 const COCO_SEED: u64 = 0xC0C0;
 
 /// Matrix dimensions for the counter-backed variants, chosen so their bounds
@@ -74,11 +75,13 @@ fn every_eh_variant_selects_the_documented_merge_norm() {
     let l2_variants = [
         (
             "COUNTL2HH",
-            asap_sketchlib::EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(ROWS, COLS)),
+            asap_sketchlib::EhBucketSketch::CountSketchWithL2Norm(
+                CountSketchWithL2Norm::with_dimensions(ROWS, COLS),
+            ),
         ),
         (
             "UNIVMON",
-            asap_sketchlib::EHSketchList::UNIVMON(UnivMon::init_univmon(32, ROWS, COLS, 4)),
+            asap_sketchlib::EhBucketSketch::UnivMon(UnivMon::new(32, ROWS, COLS, 4)),
         ),
     ];
     for (name, proto) in l2_variants {
@@ -94,38 +97,40 @@ fn every_eh_variant_selects_the_documented_merge_norm() {
         );
     }
 
-    let l1_variants: Vec<(&str, asap_sketchlib::EHSketchList)> = vec![
+    let l1_variants: Vec<(&str, asap_sketchlib::EhBucketSketch)> = vec![
         (
             "CM",
-            asap_sketchlib::EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
-                ROWS, COLS,
-            )),
+            asap_sketchlib::EhBucketSketch::CountMinSketch(
+                CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
+            ),
         ),
         (
             "CS",
-            asap_sketchlib::EHSketchList::CS(Count::<Vector2D<i32>, FastPath>::with_dimensions(
-                ROWS, COLS,
-            )),
+            asap_sketchlib::EhBucketSketch::CountSketch(
+                CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
+            ),
         ),
         (
             "COCO",
-            asap_sketchlib::EHSketchList::COCO(Coco::init_with_size_and_seed(512, 4, COCO_SEED)),
+            asap_sketchlib::EhBucketSketch::CocoSketch(CocoSketch::init_with_size_and_seed(
+                512, 4, COCO_SEED,
+            )),
         ),
         (
             "ELASTIC",
-            asap_sketchlib::EHSketchList::ELASTIC(Elastic::init_with_length(512)),
+            asap_sketchlib::EhBucketSketch::ElasticSketch(ElasticSketch::with_heavy_buckets(512)),
         ),
         (
             "HLL",
-            asap_sketchlib::EHSketchList::HLL(HyperLogLog::<ErtlMLE>::new()),
+            asap_sketchlib::EhBucketSketch::Hll(HyperLogLog::<Ertl>::new()),
         ),
         (
             "KLL",
-            asap_sketchlib::EHSketchList::KLL(KLL::init_kll_with_seed(200, 0x5EED_0100)),
+            asap_sketchlib::EhBucketSketch::Kll(Kll::with_k_and_seed(200, 0x5EED_0100)),
         ),
         (
             "DDS",
-            asap_sketchlib::EHSketchList::DDS(DDSketch::new(0.01)),
+            asap_sketchlib::EhBucketSketch::DdSketch(DdSketch::new(0.01)),
         ),
     ];
     for (name, proto) in l1_variants {
@@ -147,8 +152,8 @@ fn every_eh_variant_selects_the_documented_merge_norm() {
 /// Feeds a Zipf key stream through a histogram and returns the merged payload
 /// over the full retained span, together with the exact truth for that span.
 fn run_keyed_variant(
-    proto: asap_sketchlib::EHSketchList,
-) -> (asap_sketchlib::EHSketchList, FreqTruth, String) {
+    proto: asap_sketchlib::EhBucketSketch,
+) -> (asap_sketchlib::EhBucketSketch, FreqTruth, String) {
     let keys = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut eh = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
     for (t, k) in keys.iter().enumerate() {
@@ -156,7 +161,7 @@ fn run_keyed_variant(
     }
     let (lo, hi) = full_span(&eh);
     let merged = eh
-        .query_interval_merge(lo, hi)
+        .query_interval(lo, hi)
         .expect("full-span interval must be covered");
     let mut truth = FreqTruth::default();
     for t in lo..=hi {
@@ -172,12 +177,9 @@ fn run_keyed_variant(
 
 #[test]
 fn eh_count_min_variant_conforms_to_the_count_min_model_over_the_retained_window() {
-    let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EHSketchList::CM(CountMin::<
-        Vector2D<i32>,
-        FastPath,
-    >::with_dimensions(
-        ROWS, COLS
-    )));
+    let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EhBucketSketch::CountMinSketch(
+        CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
+    ));
     CountMinSpec::new(ROWS, COLS).assert_contract(
         "EHSketchList::CM",
         &truth,
@@ -188,12 +190,13 @@ fn eh_count_min_variant_conforms_to_the_count_min_model_over_the_retained_window
 
 #[test]
 fn eh_count_sketch_variant_conforms_to_the_l2_model_over_the_retained_window() {
-    let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EHSketchList::CS(Count::<
-        Vector2D<i32>,
-        FastPath,
-    >::with_dimensions(
-        ROWS, COLS
-    )));
+    let (merged, truth, ctx) =
+        run_keyed_variant(asap_sketchlib::EhBucketSketch::CountSketch(CountSketch::<
+            Vector2D<i32>,
+            FastPath,
+        >::with_dimensions(
+            ROWS, COLS
+        )));
     CountSketchSpec::new(ROWS, COLS).assert_contract(
         "EHSketchList::CS",
         &truth,
@@ -204,9 +207,10 @@ fn eh_count_sketch_variant_conforms_to_the_l2_model_over_the_retained_window() {
 
 #[test]
 fn eh_countl2hh_variant_satisfies_the_l2_bound_over_the_retained_window() {
-    let (merged, truth, ctx) = run_keyed_variant(asap_sketchlib::EHSketchList::COUNTL2HH(
-        CountL2HH::with_dimensions(ROWS, COLS),
-    ));
+    let (merged, truth, ctx) =
+        run_keyed_variant(asap_sketchlib::EhBucketSketch::CountSketchWithL2Norm(
+            CountSketchWithL2Norm::with_dimensions(ROWS, COLS),
+        ));
     CountSketchSpec::new(ROWS, COLS).assert_contract(
         "EHSketchList::COUNTL2HH",
         &truth,
@@ -218,15 +222,15 @@ fn eh_countl2hh_variant_satisfies_the_l2_bound_over_the_retained_window() {
 /// Merges every retained bucket of an EH over `proto`, fed the zipf stream as
 /// string keys, and returns it with the truth over the retained span.
 fn run_heavy_hitter_variant(
-    proto: asap_sketchlib::EHSketchList,
-) -> (asap_sketchlib::EHSketchList, FreqTruth, String) {
+    proto: asap_sketchlib::EhBucketSketch,
+) -> (asap_sketchlib::EhBucketSketch, FreqTruth, String) {
     let keys = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut eh = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
     for (t, k) in keys.iter().enumerate() {
         eh.update(t as u64, &DataInput::String(format!("f{k}")));
     }
     let (lo, hi) = full_span(&eh);
-    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let merged = eh.query_interval(lo, hi).expect("full span");
     let mut truth = FreqTruth::default();
     for t in lo..=hi {
         truth.observe(keys[t as usize] as i64);
@@ -243,9 +247,9 @@ fn run_heavy_hitter_variant(
 /// bucket merging.
 #[test]
 fn eh_elastic_variant_stays_one_sided_over_the_retained_window() {
-    let (merged, truth, ctx) = run_heavy_hitter_variant(asap_sketchlib::EHSketchList::ELASTIC(
-        Elastic::init_with_length(1024),
-    ));
+    let (merged, truth, ctx) = run_heavy_hitter_variant(
+        asap_sketchlib::EhBucketSketch::ElasticSketch(ElasticSketch::with_heavy_buckets(1024)),
+    );
     let mut tally = Tally::default();
     for (k, c) in truth.top_k(32) {
         let est = merged
@@ -261,10 +265,11 @@ fn eh_elastic_variant_stays_one_sided_over_the_retained_window() {
 /// The merged Coco window holds exactly one unit of mass per retained event.
 #[test]
 fn eh_coco_variant_conserves_the_retained_mass() {
-    let (merged, truth, ctx) = run_heavy_hitter_variant(asap_sketchlib::EHSketchList::COCO(
-        Coco::init_with_size_and_seed(1024, 4, COCO_SEED),
-    ));
-    let asap_sketchlib::EHSketchList::COCO(coco) = &merged else {
+    let (merged, truth, ctx) =
+        run_heavy_hitter_variant(asap_sketchlib::EhBucketSketch::CocoSketch(
+            CocoSketch::init_with_size_and_seed(1024, 4, COCO_SEED),
+        ));
+    let asap_sketchlib::EhBucketSketch::CocoSketch(coco) = &merged else {
         panic!("a COCO histogram merges into a COCO payload");
     };
     let mass: u64 = coco.recorded_flows().map(|(_, v)| v).sum();
@@ -281,16 +286,16 @@ fn eh_hll_variant_satisfies_the_register_error_model_over_the_retained_window() 
     let mut eh = ExponentialHistogram::new(
         EH_K,
         EH_WINDOW,
-        asap_sketchlib::EHSketchList::HLL(HyperLogLog::<ErtlMLE>::new()),
+        asap_sketchlib::EhBucketSketch::Hll(HyperLogLog::<Ertl>::new()),
     );
     for (t, k) in keys.iter().enumerate() {
         eh.update(t as u64, &DataInput::U64(*k));
     }
     let (lo, hi) = full_span(&eh);
-    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let merged = eh.query_interval(lo, hi).expect("full span");
     let distinct: std::collections::HashSet<u64> = (lo..=hi).map(|t| keys[t as usize]).collect();
 
-    // `HyperLogLog<ErtlMLE>` here is the p14 default: m = 2^14 registers.
+    // `HyperLogLog<Ertl>` here is the p14 default: m = 2^14 registers.
     let spec = CardinalityConfidenceSpec::hll(14, 4.0);
     let mut tally = Tally::default();
     spec.tally_into(
@@ -323,7 +328,7 @@ fn eh_kll_variant_satisfies_the_rank_error_characterization_over_the_retained_wi
     let mut eh = ExponentialHistogram::new(
         EH_K,
         EH_WINDOW,
-        asap_sketchlib::EHSketchList::KLL(KLL::init_kll_with_seed(KLL_K, 0x5EED_0200)),
+        asap_sketchlib::EhBucketSketch::Kll(Kll::with_k_and_seed(KLL_K, 0x5EED_0200)),
     );
     for (t, v) in values.iter().enumerate() {
         eh.update(t as u64, &DataInput::F64(*v));
@@ -343,13 +348,13 @@ fn eh_kll_variant_satisfies_the_rank_error_characterization_over_the_retained_wi
         let mut trial_eh = ExponentialHistogram::new(
             EH_K,
             EH_WINDOW,
-            asap_sketchlib::EHSketchList::KLL(KLL::init_kll_with_seed(KLL_K, seed)),
+            asap_sketchlib::EhBucketSketch::Kll(Kll::with_k_and_seed(KLL_K, seed)),
         );
         for (t, v) in values.iter().enumerate() {
             trial_eh.update(t as u64, &DataInput::F64(*v));
         }
         let (tlo, thi) = full_span(&trial_eh);
-        let trial_merged = trial_eh.query_interval_merge(tlo, thi).expect("full span");
+        let trial_merged = trial_eh.query_interval(tlo, thi).expect("full span");
         let trial_truth = NumericTruth::new((tlo..=thi).map(|t| values[t as usize]).collect());
         // The KLL payload answers `query(q)` as `quantile(q)`.
         spec.record_trial(
@@ -382,13 +387,13 @@ fn eh_ddsketch_variant_satisfies_the_relative_value_error_contract_over_the_wind
     let mut eh = ExponentialHistogram::new(
         EH_K,
         EH_WINDOW,
-        asap_sketchlib::EHSketchList::DDS(DDSketch::new(ALPHA)),
+        asap_sketchlib::EhBucketSketch::DdSketch(DdSketch::new(ALPHA)),
     );
     for (t, v) in values.iter().enumerate() {
         eh.update(t as u64, &DataInput::F64(*v));
     }
     let (lo, hi) = full_span(&eh);
-    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let merged = eh.query_interval(lo, hi).expect("full span");
     let truth = NumericTruth::new((lo..=hi).map(|t| values[t as usize]).collect());
 
     // The DDS payload answers `query(q)` as `get_value_at_quantile(q)`.
@@ -422,18 +427,13 @@ fn eh_univmon_variant_reports_the_exact_l1_over_the_retained_window() {
     let mut eh = ExponentialHistogram::new(
         EH_K,
         EH_WINDOW,
-        asap_sketchlib::EHSketchList::UNIVMON(UnivMon::init_univmon(
-            32,
-            UNIVMON_ROWS,
-            UNIVMON_COLS,
-            8,
-        )),
+        asap_sketchlib::EhBucketSketch::UnivMon(UnivMon::new(32, UNIVMON_ROWS, UNIVMON_COLS, 8)),
     );
     for (t, k) in keys.iter().enumerate() {
         eh.update(t as u64, &DataInput::U64(*k));
     }
     let (lo, hi) = full_span(&eh);
-    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let merged = eh.query_interval(lo, hi).expect("full span");
     let mut truth = FreqTruth::default();
     for t in lo..=hi {
         truth.observe(keys[t as usize] as i64);
@@ -489,9 +489,9 @@ fn eh_expires_buckets_past_the_window_and_reports_its_retained_span() {
     let mut eh = ExponentialHistogram::new(
         EH_K,
         WINDOW,
-        asap_sketchlib::EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
-            ROWS, COLS,
-        )),
+        asap_sketchlib::EhBucketSketch::CountMinSketch(
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
+        ),
     );
     for t in 0..500u64 {
         if t % 3 == 0 {
@@ -499,8 +499,8 @@ fn eh_expires_buckets_past_the_window_and_reports_its_retained_span() {
         }
     }
 
-    let retained_min = eh.get_min_time().expect("buckets present");
-    let retained_max = eh.get_max_time().expect("buckets present");
+    let retained_min = eh.min_time().expect("buckets present");
+    let retained_max = eh.max_time().expect("buckets present");
     assert_eq!(retained_max, 498, "newest retained timestamp");
     assert!(eh.cover(retained_min, 498), "must cover its retained span");
     assert!(!eh.cover(500, 600), "cannot cover beyond the observed span");
@@ -519,7 +519,7 @@ fn eh_expires_buckets_past_the_window_and_reports_its_retained_span() {
     // The full-span query merges every retained bucket, so its count is the
     // exact number of retained events — no bucket-granularity slack needed.
     let (lo, hi) = full_span(&eh);
-    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let merged = eh.query_interval(lo, hi).expect("full span");
     let retained_events = (lo..=hi).filter(|t| t % 3 == 0).count();
     let est = merged.query(&DataInput::Str("req")).expect("CM query");
     assert!(
@@ -530,7 +530,7 @@ fn eh_expires_buckets_past_the_window_and_reports_its_retained_span() {
 
 // ------------------------------------------------------------ TumblingWindow
 
-/// `TumblingWindow<FoldCS>`: window bookkeeping is exact, and the folded Count
+/// `TumblingWindow<CountSketchFold>`: window bookkeeping is exact, and the folded Count
 /// Sketch inside each window carries the L2 bound at its *folded* width.
 #[test]
 fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
@@ -539,16 +539,16 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     const WINDOW: u64 = 500;
     const TOTAL: u64 = 3_000;
 
-    let cfg = FoldCSConfig {
+    let cfg = CountSketchFoldConfig {
         rows: ROWS,
         full_cols: FULL_COLS,
         fold_level: FOLD_LEVEL,
-        top_k: 32,
+        heap_size: 32,
     };
-    let mut tw: TumblingWindow<FoldCS> = TumblingWindow::new(WINDOW, 16, cfg, 4);
+    let mut tw: TumblingWindow<CountSketchFold> = TumblingWindow::new(WINDOW, 16, cfg, 4);
     let keys = zipf_u64(TOTAL as usize, 512, 1.1, STREAM_SEED);
     for (t, k) in keys.iter().enumerate() {
-        tw.insert(t as u64, &DataInput::U64(*k), 1);
+        tw.update_weighted(t as u64, &DataInput::U64(*k), 1);
     }
 
     assert_eq!(
@@ -571,7 +571,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     spec.assert_contract(
         "TumblingWindow<FoldCS> active window",
         &active_truth,
-        |k| active.query(&DataInput::U64(k as u64)) as f64,
+        |k| active.estimate(&DataInput::U64(k as u64)) as f64,
         &format!(
             "rows={ROWS} full_cols={FULL_COLS} fold_level={FOLD_LEVEL} -> {folded_cols} cols, \
              window={WINDOW} zipf(1.1) domain=512 seed={STREAM_SEED:#x}"
@@ -587,7 +587,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     spec.assert_contract(
         "TumblingWindow<FoldCS> query_all",
         &all_truth,
-        |k| all.query(&DataInput::U64(k as u64)) as f64,
+        |k| all.estimate(&DataInput::U64(k as u64)) as f64,
         &format!("all {TOTAL} observations across {} windows", TOTAL / WINDOW),
     );
 
@@ -601,7 +601,7 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     spec.assert_contract(
         "TumblingWindow<FoldCS> query_recent(2)",
         &recent_truth,
-        |k| recent.query(&DataInput::U64(k as u64)) as f64,
+        |k| recent.estimate(&DataInput::U64(k as u64)) as f64,
         "last three windows",
     );
 
@@ -609,9 +609,9 @@ fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     // clean active window, not one carrying the previous window's counters.
     tw.flush(TOTAL);
     let closed_after_flush = tw.closed_count();
-    tw.insert(TOTAL, &DataInput::U64(7), 1);
+    tw.update_weighted(TOTAL, &DataInput::U64(7), 1);
     assert_eq!(
-        tw.active_sketch().query(&DataInput::U64(7)),
+        tw.active_sketch().estimate(&DataInput::U64(7)),
         1,
         "a recycled window sketch must start empty; got a carried-over count"
     );
@@ -631,10 +631,10 @@ fn tumbling_univmon_q_windows_carry_exact_aggregates_through_rotation() {
     const TOTAL: u64 = 3_000;
 
     let cfg = UnivMonQConfig {
-        levels: 6,
-        width: 1_024,
-        depth: 5,
-        candidates: 256,
+        layers: 6,
+        top_layer_cols: 1_024,
+        rows: 5,
+        heap_size: 256,
         ordered_samples: 512,
         ..UnivMonQConfig::default()
     };
@@ -644,7 +644,7 @@ fn tumbling_univmon_q_windows_carry_exact_aggregates_through_rotation() {
         .map(|v| v as f64)
         .collect();
     for (t, v) in values.iter().enumerate() {
-        tw.insert(t as u64, &DataInput::F64(*v), 0);
+        tw.update_weighted(t as u64, &DataInput::F64(*v), 0);
     }
 
     assert_eq!(
@@ -679,7 +679,7 @@ fn tumbling_univmon_q_windows_carry_exact_aggregates_through_rotation() {
 
     // Rotation through the pool must hand back a cleared sketch.
     tw.flush(TOTAL);
-    tw.insert(TOTAL, &DataInput::F64(42.0), 0);
+    tw.update_weighted(TOTAL, &DataInput::F64(42.0), 0);
     let active = tw.active_sketch();
     assert_eq!(
         active.count(),
@@ -691,50 +691,54 @@ fn tumbling_univmon_q_windows_carry_exact_aggregates_through_rotation() {
 }
 
 /// Every payload variant that owns a mergeable sketch must have a merge arm in
-/// `EHSketchList::merge`. A missing arm is invisible at runtime — `EHBucket::to_merge`
+/// `EhBucketSketch::merge`. A missing arm is invisible at runtime — `EhBucket::merge`
 /// discards the `Result` — so the histogram keeps counting bucket sizes while
 /// silently dropping the merged sketch's contents, and every query afterwards
 /// reads a single bucket. `ELASTIC` shipped without its arm and lost the whole
 /// window; this pins every variant so the next one cannot.
 #[test]
 fn every_eh_variant_can_merge_into_its_own_kind() {
-    use asap_sketchlib::EHSketchList;
+    use asap_sketchlib::EhBucketSketch;
 
-    let variants: Vec<(&str, EHSketchList)> = vec![
+    let variants: Vec<(&str, EhBucketSketch)> = vec![
         (
             "CM",
-            EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 256)),
+            EhBucketSketch::CountMinSketch(
+                CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 256),
+            ),
         ),
         (
             "CS",
-            EHSketchList::CS(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 256)),
+            EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+                3, 256,
+            )),
         ),
         (
             "COCO",
-            EHSketchList::COCO(Coco::init_with_size_and_seed(256, 4, COCO_SEED)),
+            EhBucketSketch::CocoSketch(CocoSketch::init_with_size_and_seed(256, 4, COCO_SEED)),
         ),
         (
             "COUNTL2HH",
-            EHSketchList::COUNTL2HH(CountL2HH::with_dimensions(3, 256)),
+            EhBucketSketch::CountSketchWithL2Norm(CountSketchWithL2Norm::with_dimensions(3, 256)),
         ),
-        ("DDS", EHSketchList::DDS(DDSketch::new(0.01))),
+        ("DDS", EhBucketSketch::DdSketch(DdSketch::new(0.01))),
         (
             "ELASTIC",
-            EHSketchList::ELASTIC(Elastic::init_with_length(256)),
+            EhBucketSketch::ElasticSketch(ElasticSketch::with_heavy_buckets(256)),
         ),
-        ("HLL", EHSketchList::HLL(HyperLogLog::<ErtlMLE>::new())),
+        ("HLL", EhBucketSketch::Hll(HyperLogLog::<Ertl>::new())),
         (
             "KLL",
-            EHSketchList::KLL(KLL::init_kll_with_seed(200, 0x5EED_0300)),
+            EhBucketSketch::Kll(Kll::with_k_and_seed(200, 0x5EED_0300)),
         ),
         (
             "UNIVMON",
-            EHSketchList::UNIVMON(UnivMon::init_univmon(32, 3, 256, 4)),
+            EhBucketSketch::UnivMon(UnivMon::new(32, 3, 256, 4)),
         ),
         #[cfg(feature = "experimental")]
         (
             "UNIFORM",
-            EHSketchList::UNIFORM(asap_sketchlib::UniformSampling::with_seed(0.5, 7)),
+            EhBucketSketch::Uniform(asap_sketchlib::UniformSampling::with_seed(0.5, 7)),
         ),
     ];
 
@@ -743,10 +747,10 @@ fn every_eh_variant_can_merge_into_its_own_kind() {
         let mut right = proto.clone();
         // Feed each side something it can actually ingest, then merge.
         for i in 0..64u64 {
-            left.insert(&DataInput::String(format!("k{i}")));
-            left.insert(&DataInput::F64(1.0 + i as f64));
-            right.insert(&DataInput::String(format!("k{}", i + 64)));
-            right.insert(&DataInput::F64(100.0 + i as f64));
+            left.update(&DataInput::String(format!("k{i}")));
+            left.update(&DataInput::F64(1.0 + i as f64));
+            right.update(&DataInput::String(format!("k{}", i + 64)));
+            right.update(&DataInput::F64(100.0 + i as f64));
         }
         assert!(
             left.merge(&right).is_ok(),
@@ -772,13 +776,13 @@ fn eh_uniform_sampling_variant_reports_exact_retention_bookkeeping() {
     let mut eh = ExponentialHistogram::new(
         EH_K,
         EH_WINDOW,
-        asap_sketchlib::EHSketchList::UNIFORM(UniformSampling::with_seed(RATE, SAMPLER_SEED)),
+        asap_sketchlib::EhBucketSketch::Uniform(UniformSampling::with_seed(RATE, SAMPLER_SEED)),
     );
     for (t, v) in values.iter().enumerate() {
         eh.update(t as u64, &DataInput::F64(*v));
     }
     let (lo, hi) = full_span(&eh);
-    let merged = eh.query_interval_merge(lo, hi).expect("full span");
+    let merged = eh.query_interval(lo, hi).expect("full span");
 
     // `total_seen` is a maintained counter: exact over the merged span.
     let seen = merged
@@ -818,17 +822,17 @@ fn tumbling_fold_cms_hierarchical_merge_covers_every_observation() {
     const WINDOW: u64 = 500;
     const TOTAL: u64 = 3_000;
 
-    let cfg = FoldCMSConfig {
+    let cfg = CountMinSketchFoldConfig {
         rows: ROWS,
         full_cols: FULL_COLS,
         fold_level: FOLD_LEVEL,
-        top_k: 32,
+        heap_size: 32,
     };
-    let mut tw: TumblingWindow<FoldCMS> = TumblingWindow::new(WINDOW, 16, cfg, 4);
+    let mut tw: TumblingWindow<CountMinSketchFold> = TumblingWindow::new(WINDOW, 16, cfg, 4);
     let keys = zipf_u64(TOTAL as usize, 512, 1.1, STREAM_SEED);
     let mut truth = FreqTruth::default();
     for (t, k) in keys.iter().enumerate() {
-        tw.insert(t as u64, &DataInput::U64(*k), 1);
+        tw.update_weighted(t as u64, &DataInput::U64(*k), 1);
         truth.observe(*k as i64);
     }
 
@@ -845,7 +849,7 @@ fn tumbling_fold_cms_hierarchical_merge_covers_every_observation() {
     spec.assert_contract(
         "TumblingWindow<FoldCMS> query_all_hierarchical",
         &truth,
-        |k| hierarchical.query(&DataInput::U64(k as u64)) as f64,
+        |k| hierarchical.estimate(&DataInput::U64(k as u64)) as f64,
         &format!(
             "rows={ROWS} full_cols={FULL_COLS} fold_level={FOLD_LEVEL} -> {} cols after \
              hierarchical merge, window={WINDOW}, {TOTAL} observations",
@@ -855,8 +859,8 @@ fn tumbling_fold_cms_hierarchical_merge_covers_every_observation() {
 
     for (key, count) in truth.pairs() {
         let probe = DataInput::U64(key as u64);
-        let h = hierarchical.query(&probe);
-        let f = flat.query(&probe);
+        let h = hierarchical.estimate(&probe);
+        let f = flat.estimate(&probe);
         assert!(
             h >= count,
             "key {key}: hierarchical merge underestimated {count} as {h}"
@@ -878,12 +882,12 @@ fn tumbling_window_pool_accounting_tracks_every_recycled_sketch() {
     const MAX_WINDOWS: usize = 2;
     const POOL_CAP: usize = 4;
 
-    let cfg = KLLConfig {
+    let cfg = KllConfig {
         k: 200,
         m: 8,
         seed: Some(0x7001_0001),
     };
-    let mut tw: TumblingWindow<KLL> = TumblingWindow::new(WINDOW, MAX_WINDOWS, cfg, POOL_CAP);
+    let mut tw: TumblingWindow<Kll> = TumblingWindow::new(WINDOW, MAX_WINDOWS, cfg, POOL_CAP);
     assert_eq!(
         tw.pool_total_allocated(),
         POOL_CAP,
@@ -896,7 +900,7 @@ fn tumbling_window_pool_accounting_tracks_every_recycled_sketch() {
     );
 
     for t in 0..(WINDOW * 8) {
-        tw.insert(t, &DataInput::U64(t % 97), 1);
+        tw.update_weighted(t, &DataInput::U64(t % 97), 1);
     }
     assert_eq!(
         tw.closed_count(),
@@ -921,12 +925,12 @@ fn tumbling_window_pool_accounting_tracks_every_recycled_sketch() {
 #[test]
 fn a_sketch_pool_reuses_a_returned_sketch_before_allocating_a_new_one() {
     const CAP: usize = 2;
-    let cfg = KLLConfig {
+    let cfg = KllConfig {
         k: 200,
         m: 8,
         seed: Some(0x7001_0002),
     };
-    let mut pool: SketchPool<KLL> = SketchPool::new(CAP, cfg);
+    let mut pool: SketchPool<Kll> = SketchPool::new(CAP, cfg);
     assert_eq!(pool.available(), CAP);
     assert_eq!(pool.total_allocated(), CAP);
 
@@ -965,9 +969,9 @@ fn a_sketch_pool_reuses_a_returned_sketch_before_allocating_a_new_one() {
 
 #[test]
 fn an_exponential_histogram_expires_against_the_window_length_it_was_last_given() {
-    let proto = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
-        ROWS, COLS,
-    ));
+    let proto = EhBucketSketch::CountMinSketch(
+        CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
+    );
     let mut eh = ExponentialHistogram::new(EH_K, 10_000, proto);
     for t in 0..200u64 {
         eh.update(t * 10, &DataInput::U64(t % 32));
@@ -987,7 +991,7 @@ fn an_exponential_histogram_expires_against_the_window_length_it_was_last_given(
         narrow_span.0
     );
     assert!(
-        eh.get_max_time() == Some(2_000),
+        eh.max_time() == Some(2_000),
         "the newest bucket must carry the timestamp just inserted"
     );
 
@@ -1001,9 +1005,9 @@ fn an_exponential_histogram_expires_against_the_window_length_it_was_last_given(
 
 #[test]
 fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
-    let proto = EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
-        ROWS, COLS,
-    ));
+    let proto = EhBucketSketch::CountMinSketch(
+        CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
+    );
     let mut by_update = ExponentialHistogram::new(EH_K, EH_WINDOW, proto.clone());
     let mut by_custom = ExponentialHistogram::new(EH_K, EH_WINDOW, proto);
 
@@ -1011,7 +1015,7 @@ fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
         let key = DataInput::U64(t % 64);
         by_update.update(t, &key);
         by_custom.update_with(t, |sketch| {
-            sketch.insert(&key);
+            sketch.update(&key);
         });
     }
 
@@ -1022,10 +1026,10 @@ fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
     );
     let (lo, hi) = full_span(&by_update);
     let merged_update = by_update
-        .query_interval_merge(lo, hi)
+        .query_interval(lo, hi)
         .expect("update path merges its own span");
     let merged_custom = by_custom
-        .query_interval_merge(lo, hi)
+        .query_interval(lo, hi)
         .expect("custom path merges its own span");
     for k in 0..64u64 {
         let probe = DataInput::U64(k);
@@ -1039,20 +1043,20 @@ fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
     let mut doubled = ExponentialHistogram::new(
         EH_K,
         EH_WINDOW,
-        EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        EhBucketSketch::CountMinSketch(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
     );
     for t in 0..500u64 {
         let key = DataInput::U64(t % 64);
         doubled.update_with(t, |sketch| {
-            sketch.insert(&key);
-            sketch.insert(&key);
+            sketch.update(&key);
+            sketch.update(&key);
         });
     }
     let (dlo, dhi) = full_span(&doubled);
     let merged_doubled = doubled
-        .query_interval_merge(dlo, dhi)
+        .query_interval(dlo, dhi)
         .expect("doubled path merges its own span");
     for k in 0..64u64 {
         let probe = DataInput::U64(k);
@@ -1080,7 +1084,7 @@ fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
 ///
 /// # Why the interval count is two-sided
 ///
-/// `query_interval_merge` snaps the requested interval to bucket boundaries in
+/// `query_interval` snaps the requested interval to bucket boundaries in
 /// both directions, so the merged payload can cover slightly more or slightly
 /// less than what was asked for. The Count-Min payload can only over-count
 /// within whatever it does cover, but the snapping can drop events the
@@ -1109,9 +1113,9 @@ mod documented_matrix {
         ExponentialHistogram::new(
             DOC_K,
             DOC_WINDOW,
-            EHSketchList::CM(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
-                DOC_ROWS, DOC_COLS,
-            )),
+            EhBucketSketch::CountMinSketch(
+                CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(DOC_ROWS, DOC_COLS),
+            ),
         )
     }
 
@@ -1131,8 +1135,8 @@ mod documented_matrix {
             at.push((t, key.clone()));
         }
 
-        let min_time = eh.get_min_time().expect("buckets present");
-        let max_time = eh.get_max_time().expect("buckets present");
+        let min_time = eh.min_time().expect("buckets present");
+        let max_time = eh.max_time().expect("buckets present");
         assert_eq!(
             max_time,
             at.last().expect("non-empty stream").0,
@@ -1175,7 +1179,7 @@ mod documented_matrix {
         // of these events the buckets hold, a Count-Min over them cannot exceed
         // this key's count in the superset by more than the additive budget.
         let merged_span = eh
-            .query_interval_merge(min_time, max_time)
+            .query_interval(min_time, max_time)
             .expect("the retained span is covered");
         let spec = CountMinSpec::new(DOC_ROWS, DOC_COLS);
         let probed = retained.len();
@@ -1216,7 +1220,7 @@ mod documented_matrix {
             .expect("the interval carries events");
 
         let merged = eh
-            .query_interval_merge(lo, hi)
+            .query_interval(lo, hi)
             .expect("an interval inside the retained span is covered");
         let est = merged
             .query(&to_input(heaviest))
@@ -1292,7 +1296,7 @@ mod microscope {
     use super::common::specs::CountMinSpec;
     use super::common::{FreqTruth, zipf_u64};
     use asap_sketchlib::sketches::microscope::{
-        DeltaStrategy, MicroCM, MicroParams, SubWindowClock,
+        DeltaStrategy, MicroCm, MicroParams, SubWindowClock,
     };
     use asap_sketchlib::{DataInput, DefaultXxHasher, MatrixFastHash, SketchHasher};
 
@@ -1302,8 +1306,8 @@ mod microscope {
     const PER_SUB_WINDOW: u64 = 1_000;
     const ITEMS: usize = 40_000;
 
-    fn fresh() -> MicroCM {
-        MicroCM::with_dimensions(
+    fn fresh() -> MicroCm {
+        MicroCm::with_dimensions(
             ROWS,
             COLS,
             MicroParams::new(T, 2),
@@ -1321,7 +1325,7 @@ mod microscope {
         let stream = zipf_u64(ITEMS, 4096, 1.1, 20_250_909);
         let mut sk = fresh();
         for key in &stream {
-            sk.insert(&DataInput::U64(*key));
+            sk.update(&DataInput::U64(*key));
         }
 
         let n = sk.sub_window();
@@ -1369,12 +1373,12 @@ mod microscope {
         let stream = zipf_u64(ITEMS, 4096, 1.1, 4_242);
         let mut sk = fresh();
         for key in &stream {
-            sk.insert(&DataInput::U64(*key));
+            sk.update(&DataInput::U64(*key));
         }
         // Land part-way into a sub-window so the residual is strictly between
         // 0 and 1 and the three policies genuinely differ.
         for key in stream.iter().take(377) {
-            sk.insert(&DataInput::U64(*key));
+            sk.update(&DataInput::U64(*key));
         }
         let p = sk.residual_fraction();
         assert!(
@@ -1434,7 +1438,7 @@ mod microscope {
         let mut sk = fresh();
         let loud = DataInput::U64(QUIET);
         for _ in 0..3 * PER_SUB_WINDOW {
-            sk.insert(&loud);
+            sk.update(&loud);
         }
         assert!(sk.estimate_with(&loud, DeltaStrategy::Under) > 0.0);
 
@@ -1448,7 +1452,7 @@ mod microscope {
                 .zip(&occupied)
                 .all(|(a, b)| a != b);
             if disjoint {
-                sk.insert(&DataInput::U64(candidate));
+                sk.update(&DataInput::U64(candidate));
                 pushed += 1;
             }
             candidate += 1;

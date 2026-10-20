@@ -29,14 +29,14 @@ type Q = UnivMonQ<DefaultXxHasher>;
 /// candidate tables and the ordered sample both fill and evict.
 fn config(ordered_samples: usize) -> UnivMonQConfig {
     UnivMonQConfig {
-        levels: 4,
-        width: 32,
-        width_halving_period: 0,
-        depth: 3,
+        layers: 4,
+        top_layer_cols: 32,
+        cols_halving_period: 0,
+        rows: 3,
         counter_bits: 32,
-        candidates: 8,
+        heap_size: 8,
         ordered_samples,
-        hash_seed: 5,
+        seed_index: 5,
     }
 }
 
@@ -56,21 +56,21 @@ fn shapes() -> impl Strategy<Value = UnivMonQConfig> {
             |(
                 levels,
                 width,
-                width_halving_period,
+                cols_halving_period,
                 depth,
                 counter_bits,
                 candidates,
                 ordered_samples,
             )| {
                 UnivMonQConfig {
-                    levels,
-                    width,
-                    width_halving_period,
-                    depth,
+                    layers: levels,
+                    top_layer_cols: width,
+                    cols_halving_period,
+                    rows: depth,
                     counter_bits,
-                    candidates,
+                    heap_size: candidates,
                     ordered_samples,
-                    hash_seed: 5,
+                    seed_index: 5,
                 }
             },
         )
@@ -281,7 +281,7 @@ proptest! {
             |s: &Q| s.count(),
             |s: &Q| s.min().map(bits),
             |s: &Q| s.max().map(bits),
-            |s: &Q| s.cdf().iter().map(|p| (bits(p.value), bits(p.rank))).collect::<Vec<_>>(),
+            |s: &Q| s.cdf().iter().map(|p| (bits(p.value), bits(p.normalized_rank))).collect::<Vec<_>>(),
             |s: &Q| bits(s.estimate_f2()),
         );
     }

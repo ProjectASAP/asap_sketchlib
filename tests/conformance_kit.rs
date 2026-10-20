@@ -13,8 +13,9 @@ use common::{FreqTruth, zipf_u64};
 use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDds;
 use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::{
-    Bloom, CMSHeap, CSHeap, CountL2HH, CountMin, DDSketch, DataInput, FastPath, FoldCMS, FoldCS,
-    HyperLogLog, HyperLogLogHIP, KLL, KLLDynamic, RegularPath, SpaceSaving, UnivMonQ, Vector2D,
+    Bloom, CountMinSketch, CountMinSketchFold, CountMinSketchWithHeap, CountSketchFold,
+    CountSketchWithHeap, CountSketchWithL2Norm, DataInput, DdSketch, FastPath, HyperLogLog,
+    HyperLogLogHip, Kll, KllDynamic, RegularPath, SpaceSaving, UnivMonQ, Vector2D,
 };
 use std::cell::RefCell;
 
@@ -22,11 +23,11 @@ use std::cell::RefCell;
 // Adapters: one small impl block per sketch is all it takes to onboard.
 // ---------------------------------------------------------------------------
 
-struct CountMinAdapter(CountMin<Vector2D<i64>, FastPath>);
+struct CountMinAdapter(CountMinSketch<Vector2D<i64>, FastPath>);
 
 impl FrequencyOps<i64> for CountMinAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key)) as f64
@@ -43,7 +44,7 @@ struct BloomAdapter(Bloom<FastPath>);
 
 impl MembershipOps<i64> for BloomAdapter {
     fn add(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn contains(&self, key: &i64) -> bool {
         self.0.contains(&DataInput::I64(*key))
@@ -54,7 +55,7 @@ struct RegularBloomAdapter(Bloom<RegularPath>);
 
 impl MembershipOps<i64> for RegularBloomAdapter {
     fn add(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn contains(&self, key: &i64) -> bool {
         self.0.contains(&DataInput::I64(*key))
@@ -65,18 +66,18 @@ struct SpaceSavingAdapter(SpaceSaving);
 
 impl FrequencyOps<i64> for SpaceSavingAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key)) as f64
     }
 }
 
-struct CountSketchAdapter(asap_sketchlib::Count<Vector2D<i64>, RegularPath>);
+struct CountSketchAdapter(asap_sketchlib::CountSketch<Vector2D<i64>, RegularPath>);
 
 impl FrequencyOps<i64> for CountSketchAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key))
@@ -85,7 +86,7 @@ impl FrequencyOps<i64> for CountSketchAdapter {
 
 impl SignedFrequencyOps<i64> for CountSketchAdapter {
     fn ingest_weighted(&mut self, key: &i64, weight: i64) {
-        self.0.insert_many(&DataInput::I64(*key), weight);
+        self.0.update_weighted(&DataInput::I64(*key), weight);
     }
 }
 
@@ -100,31 +101,31 @@ struct HllClassicAdapter(HyperLogLog<asap_sketchlib::Classic>);
 impl CardinalityOps for HllClassicAdapter {
     fn ingest(&mut self, key: &[u8]) {
         self.0
-            .insert(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
+            .update(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
     }
     fn estimate(&self) -> f64 {
         self.0.estimate() as f64
     }
 }
 
-struct HllErtlAdapter(HyperLogLog<asap_sketchlib::ErtlMLE>);
+struct HllErtlAdapter(HyperLogLog<asap_sketchlib::Ertl>);
 
 impl CardinalityOps for HllErtlAdapter {
     fn ingest(&mut self, key: &[u8]) {
         self.0
-            .insert(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
+            .update(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
     }
     fn estimate(&self) -> f64 {
         self.0.estimate() as f64
     }
 }
 
-struct HllHipAdapter(HyperLogLogHIP);
+struct HllHipAdapter(HyperLogLogHip);
 
 impl CardinalityOps for HllHipAdapter {
     fn ingest(&mut self, key: &[u8]) {
         self.0
-            .insert(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
+            .update(&DataInput::U64(u64::from_be_bytes(key.try_into().unwrap())));
     }
     fn estimate(&self) -> f64 {
         self.0.estimate() as f64
@@ -142,18 +143,18 @@ impl CardinalityOps for PortableHllAdapter {
     }
 }
 
-struct KllAdapter(KLL);
+struct KllAdapter(Kll);
 
 impl QuantileOps for KllAdapter {
     fn update(&mut self, value: f64) {
-        KLL::update(&mut self.0, &value);
+        Kll::update(&mut self.0, &value);
     }
     fn quantile(&self, q: f64) -> f64 {
         self.0.quantile(q)
     }
 }
 
-struct KllCachedAdapter(RefCell<KLL>);
+struct KllCachedAdapter(RefCell<Kll>);
 
 impl QuantileOps for KllCachedAdapter {
     fn update(&mut self, value: f64) {
@@ -164,11 +165,11 @@ impl QuantileOps for KllCachedAdapter {
     }
 }
 
-struct KllDynamicAdapter(KLLDynamic<f64>);
+struct KllDynamicAdapter(KllDynamic<f64>);
 
 impl QuantileOps for KllDynamicAdapter {
     fn update(&mut self, value: f64) {
-        KLLDynamic::update(&mut self.0, &value);
+        KllDynamic::update(&mut self.0, &value);
     }
     fn quantile(&self, q: f64) -> f64 {
         self.0.quantile(q)
@@ -235,7 +236,7 @@ fn countmin_passes_frequency_and_merge_conformance() {
     conformance::frequency_battery(
         "CountMin<FastPath>",
         || {
-            CountMinAdapter(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(
+            CountMinAdapter(CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(
                 4, 4096,
             ))
         },
@@ -248,7 +249,7 @@ fn countmin_passes_frequency_and_merge_conformance() {
     conformance::merge_equivalence_battery(
         "CountMin<FastPath>",
         || {
-            CountMinAdapter(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(
+            CountMinAdapter(CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(
                 4, 4096,
             ))
         },
@@ -269,7 +270,7 @@ fn countsketch_passes_signed_frequency_conformance() {
     };
     let make = || {
         CountSketchAdapter(
-            asap_sketchlib::Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, 4096),
+            asap_sketchlib::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(5, 4096),
         )
     };
 
@@ -297,7 +298,7 @@ fn hll_variants_pass_cardinality_conformance() {
 
     conformance::cardinality_battery(
         "HyperLogLog<ErtlMLE>",
-        || HllErtlAdapter(HyperLogLog::<asap_sketchlib::ErtlMLE>::new()),
+        || HllErtlAdapter(HyperLogLog::<asap_sketchlib::Ertl>::new()),
         &unique,
         100_000,
         spec,
@@ -306,7 +307,7 @@ fn hll_variants_pass_cardinality_conformance() {
 
     conformance::cardinality_battery(
         "HyperLogLogHIP",
-        || HllHipAdapter(HyperLogLogHIP::new()),
+        || HllHipAdapter(HyperLogLogHip::new()),
         &unique,
         100_000,
         spec,
@@ -323,7 +324,7 @@ fn hll_variants_pass_cardinality_conformance() {
     .assert_ok();
 }
 
-/// Compaction-coin seed for the KLL adapters. The unseeded `init_kll`
+/// Compaction-coin seed for the KLL adapters. The unseeded `with_k`
 /// constructors draw from the wall clock, so a failure under them would not
 /// reproduce.
 const KIT_KLL_SEED: u64 = 0x4017_0001;
@@ -341,7 +342,7 @@ fn kll_family_passes_quantile_conformance() {
 
     conformance::quantile_battery(
         "KLL",
-        || KllAdapter(KLL::init_kll_with_seed(200, KIT_KLL_SEED)),
+        || KllAdapter(Kll::with_k_and_seed(200, KIT_KLL_SEED)),
         &values,
         QuantileSpec::default(),
     )
@@ -349,7 +350,7 @@ fn kll_family_passes_quantile_conformance() {
 
     conformance::quantile_battery(
         "KLLDynamic",
-        || KllDynamicAdapter(KLLDynamic::<f64>::init_kll_with_seed(200, KIT_KLL_SEED)),
+        || KllDynamicAdapter(KllDynamic::<f64>::with_k_and_seed(200, KIT_KLL_SEED)),
         &values,
         QuantileSpec::default(),
     )
@@ -357,7 +358,7 @@ fn kll_family_passes_quantile_conformance() {
 
     conformance::quantile_battery(
         "KLL-cached",
-        || KllCachedAdapter(RefCell::new(KLL::init_kll_with_seed(200, KIT_KLL_SEED))),
+        || KllCachedAdapter(RefCell::new(Kll::with_k_and_seed(200, KIT_KLL_SEED))),
         &values,
         QuantileSpec::default(),
     )
@@ -478,7 +479,7 @@ fn space_saving_passes_frequency_conformance() {
     .assert_ok();
 }
 
-struct CoreDdSketchAdapter(DDSketch);
+struct CoreDdSketchAdapter(DdSketch);
 
 impl QuantileOps for CoreDdSketchAdapter {
     fn update(&mut self, value: f64) {
@@ -489,11 +490,11 @@ impl QuantileOps for CoreDdSketchAdapter {
     }
 }
 
-struct CmsHeapAdapter(CMSHeap<Vector2D<i64>, FastPath>);
+struct CmsHeapAdapter(CountMinSketchWithHeap<Vector2D<i64>, FastPath>);
 
 impl FrequencyOps<i64> for CmsHeapAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key)) as f64
@@ -506,11 +507,11 @@ impl MergeOps for CmsHeapAdapter {
     }
 }
 
-struct CsHeapAdapter(CSHeap<Vector2D<i64>, RegularPath>);
+struct CsHeapAdapter(CountSketchWithHeap<Vector2D<i64>, RegularPath>);
 
 impl FrequencyOps<i64> for CsHeapAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key))
@@ -523,20 +524,20 @@ impl MergeOps for CsHeapAdapter {
     }
 }
 
-struct CountL2hhAdapter(CountL2HH);
+struct CountL2hhAdapter(CountSketchWithL2Norm);
 
 impl FrequencyOps<i64> for CountL2hhAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.fast_insert_with_count(&DataInput::I64(*key), 1);
+        self.0.update_weighted(&DataInput::I64(*key), 1);
     }
     fn estimate(&self, key: &i64) -> f64 {
-        self.0.fast_get_est(&DataInput::I64(*key))
+        self.0.estimate(&DataInput::I64(*key))
     }
 }
 
 impl SignedFrequencyOps<i64> for CountL2hhAdapter {
     fn ingest_weighted(&mut self, key: &i64, weight: i64) {
-        self.0.fast_insert_with_count(&DataInput::I64(*key), weight);
+        self.0.update_weighted(&DataInput::I64(*key), weight);
     }
 }
 
@@ -546,14 +547,14 @@ impl MergeOps for CountL2hhAdapter {
     }
 }
 
-struct FoldCmsAdapter(FoldCMS);
+struct FoldCmsAdapter(CountMinSketchFold);
 
 impl FrequencyOps<i64> for FoldCmsAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert_one(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
-        self.0.query(&DataInput::I64(*key)) as f64
+        self.0.estimate(&DataInput::I64(*key)) as f64
     }
 }
 
@@ -563,20 +564,20 @@ impl MergeOps for FoldCmsAdapter {
     }
 }
 
-struct FoldCsAdapter(FoldCS);
+struct FoldCsAdapter(CountSketchFold);
 
 impl FrequencyOps<i64> for FoldCsAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert_one(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
-        self.0.query(&DataInput::I64(*key)) as f64
+        self.0.estimate(&DataInput::I64(*key)) as f64
     }
 }
 
 impl SignedFrequencyOps<i64> for FoldCsAdapter {
     fn ingest_weighted(&mut self, key: &i64, weight: i64) {
-        self.0.insert(&DataInput::I64(*key), weight);
+        self.0.update_weighted(&DataInput::I64(*key), weight);
     }
 }
 
@@ -587,12 +588,12 @@ impl MergeOps for FoldCsAdapter {
 }
 
 #[cfg(feature = "experimental")]
-struct KmvAdapter(RefCell<asap_sketchlib::KMV>);
+struct KmvAdapter(RefCell<asap_sketchlib::Kmv>);
 
 #[cfg(feature = "experimental")]
 impl CardinalityOps for KmvAdapter {
     fn ingest(&mut self, key: &[u8]) {
-        self.0.borrow_mut().insert(&DataInput::Bytes(key));
+        self.0.borrow_mut().update(&DataInput::Bytes(key));
     }
     fn estimate(&self) -> f64 {
         self.0.borrow_mut().estimate()
@@ -638,7 +639,7 @@ fn core_ddsketch_passes_relative_quantile_conformance() {
     for alpha in [0.001f64, 0.01, 0.05] {
         conformance::relative_quantile_battery(
             "DDSketch",
-            || CoreDdSketchAdapter(DDSketch::new(alpha)),
+            || CoreDdSketchAdapter(DdSketch::new(alpha)),
             &values,
             common::specs::RelativeQuantileSpec::core(alpha),
             &conformance::DEFAULT_QUANTILE_QS,
@@ -657,7 +658,11 @@ fn heap_backed_frequency_sketches_pass_frequency_and_merge_conformance() {
         rel_tol: 0.01,
         abs_tol: 8.0,
     };
-    let make_cms = || CmsHeapAdapter(CMSHeap::<Vector2D<i64>, FastPath>::new(4, 4_096, 64));
+    let make_cms = || {
+        CmsHeapAdapter(CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(
+            4, 4_096, 64,
+        ))
+    };
     conformance::frequency_battery("CMSHeap<FastPath>", make_cms, &stream, &truth, one_sided)
         .assert_ok();
     conformance::merge_equivalence_battery("CMSHeap<FastPath>", make_cms, &stream, one_sided)
@@ -668,7 +673,11 @@ fn heap_backed_frequency_sketches_pass_frequency_and_merge_conformance() {
         rel_tol: 0.06,
         abs_tol: 25.0,
     };
-    let make_cs = || CsHeapAdapter(CSHeap::<Vector2D<i64>, RegularPath>::new(5, 4_096, 64));
+    let make_cs = || {
+        CsHeapAdapter(CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(
+            5, 4_096, 64,
+        ))
+    };
     conformance::frequency_battery("CSHeap<Regular>", make_cs, &stream, &truth, two_sided)
         .assert_ok();
     conformance::merge_equivalence_battery("CSHeap<Regular>", make_cs, &stream, two_sided)
@@ -684,7 +693,7 @@ fn count_l2hh_passes_signed_frequency_and_merge_conformance() {
         rel_tol: 0.06,
         abs_tol: 25.0,
     };
-    let make = || CountL2hhAdapter(CountL2HH::with_dimensions(5, 4_096));
+    let make = || CountL2hhAdapter(CountSketchWithL2Norm::with_dimensions(5, 4_096));
 
     conformance::frequency_battery("CountL2HH", make, &stream, &truth, spec).assert_ok();
     conformance::turnstile_battery("CountL2HH", make, 42i64).assert_ok();
@@ -701,7 +710,7 @@ fn folded_frequency_sketches_pass_frequency_and_merge_conformance() {
         rel_tol: 0.02,
         abs_tol: 12.0,
     };
-    let make_cms = || FoldCmsAdapter(FoldCMS::new(4, 8_192, 1, 64));
+    let make_cms = || FoldCmsAdapter(CountMinSketchFold::new(4, 8_192, 1, 64));
     conformance::frequency_battery("FoldCMS", make_cms, &stream, &truth, one_sided).assert_ok();
     conformance::merge_equivalence_battery("FoldCMS", make_cms, &stream, one_sided).assert_ok();
 
@@ -710,7 +719,7 @@ fn folded_frequency_sketches_pass_frequency_and_merge_conformance() {
         rel_tol: 0.08,
         abs_tol: 30.0,
     };
-    let make_cs = || FoldCsAdapter(FoldCS::new(5, 8_192, 1, 64));
+    let make_cs = || FoldCsAdapter(CountSketchFold::new(5, 8_192, 1, 64));
     conformance::frequency_battery("FoldCS", make_cs, &stream, &truth, two_sided).assert_ok();
     conformance::turnstile_battery("FoldCS", make_cs, 42i64).assert_ok();
     conformance::merge_equivalence_battery("FoldCS", make_cs, &stream, two_sided).assert_ok();
@@ -726,7 +735,7 @@ fn kmv_passes_cardinality_conformance() {
 
     conformance::cardinality_battery(
         "KMV",
-        || KmvAdapter(RefCell::new(asap_sketchlib::KMV::new(4_096))),
+        || KmvAdapter(RefCell::new(asap_sketchlib::Kmv::new(4_096))),
         &unique,
         100_000,
         spec,
@@ -773,7 +782,7 @@ fn uniform_sampling_at_full_rate_passes_quantile_conformance() {
 ///   hottest key's per-sub-window count well inside a byte, on both halves
 ///   of the merge split and on their sum.
 #[cfg(feature = "experimental")]
-struct MicroCmAdapter(asap_sketchlib::sketches::microscope::MicroCM);
+struct MicroCmAdapter(asap_sketchlib::sketches::microscope::MicroCm);
 
 #[cfg(feature = "experimental")]
 impl MicroCmAdapter {
@@ -783,8 +792,8 @@ impl MicroCmAdapter {
     const PER_SUB_WINDOW: u64 = 1_000;
 
     fn new() -> Self {
-        use asap_sketchlib::sketches::microscope::{MicroCM, MicroParams, SubWindowClock};
-        Self(MicroCM::with_dimensions(
+        use asap_sketchlib::sketches::microscope::{MicroCm, MicroParams, SubWindowClock};
+        Self(MicroCm::with_dimensions(
             Self::ROWS,
             Self::COLS,
             MicroParams::new(Self::T, 2),
@@ -797,7 +806,7 @@ impl MicroCmAdapter {
 #[cfg(feature = "experimental")]
 impl FrequencyOps<i64> for MicroCmAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         use asap_sketchlib::sketches::microscope::DeltaStrategy;

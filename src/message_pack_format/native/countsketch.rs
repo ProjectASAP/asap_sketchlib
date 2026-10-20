@@ -1,4 +1,4 @@
-//! Native MessagePack codec impl for [`crate::sketches::countsketch::Count`].
+//! Native MessagePack codec impl for [`crate::sketches::countsketch::CountSketch`].
 //!
 //! Only the canonical wire configs — `i32`, `i64` or `f64` counters
 //! (`CsWireCounter`) with a fast/regular mode (`CsWireMode`) — are
@@ -7,10 +7,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error, MessagePackCodec};
-use crate::sketches::countsketch::{Count, CountSketchCounter, CsWireCounter, CsWireMode};
+use crate::sketches::countsketch::{CountSketch, CountSketchCounter, CsWireCounter, CsWireMode};
 use crate::{HashProfile, SketchHasher, Vector2D};
 
-impl<T, Mode, H> MessagePackCodec for Count<Vector2D<T>, Mode, H>
+impl<T, Mode, H> MessagePackCodec for CountSketch<Vector2D<T>, Mode, H>
 where
     T: CsWireCounter
         + CountSketchCounter
@@ -21,10 +21,10 @@ where
     H: SketchHasher + HashProfile,
 {
     fn to_msgpack(&self) -> Result<Vec<u8>, Error> {
-        Ok(self.serialize_to_bytes()?)
+        Ok(self.to_asapv1()?)
     }
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, Error> {
-        Ok(Self::deserialize_from_bytes(bytes)?)
+        Ok(Self::from_asapv1(bytes)?)
     }
 }

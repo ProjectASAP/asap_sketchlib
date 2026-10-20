@@ -23,21 +23,21 @@ mod wire;
 pub use delta::CountSketchDelta;
 pub(crate) use wire::{CsWireCounter, CsWireMode};
 
-const DEFAULT_ROW_NUM: usize = 3;
-const DEFAULT_COL_NUM: usize = 4096;
+const DEFAULT_ROWS: usize = 3;
+const DEFAULT_COLS: usize = 4096;
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 /// A frequency-estimation sketch using random sign projections (Count Sketch).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
-pub struct Count<
+pub struct CountSketch<
     S: MatrixStorage = Vector2D<i32>,
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
 > {
     counts: S,
-    row: usize,
-    col: usize,
+    rows: usize,
+    cols: usize,
     #[serde(skip)]
     _mode: PhantomData<Mode>,
     #[serde(skip)]
@@ -81,142 +81,142 @@ impl CountSketchCounter for f64 {
 }
 
 // Default Count sketch for Vector2D<i32> (RegularPath).
-impl Default for Count<Vector2D<i32>, RegularPath> {
+impl Default for CountSketch<Vector2D<i32>, RegularPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i32> (FastPath).
-impl Default for Count<Vector2D<i32>, FastPath> {
+impl Default for CountSketch<Vector2D<i32>, FastPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i64> (RegularPath).
-impl Default for Count<Vector2D<i64>, RegularPath> {
+impl Default for CountSketch<Vector2D<i64>, RegularPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i64> (FastPath).
-impl Default for Count<Vector2D<i64>, FastPath> {
+impl Default for CountSketch<Vector2D<i64>, FastPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i128> (RegularPath).
-impl Default for Count<Vector2D<i128>, RegularPath> {
+impl Default for CountSketch<Vector2D<i128>, RegularPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i128> (FastPath).
-impl Default for Count<Vector2D<i128>, FastPath> {
+impl Default for CountSketch<Vector2D<i128>, FastPath> {
     fn default() -> Self {
-        Self::with_dimensions(DEFAULT_ROW_NUM, DEFAULT_COL_NUM)
+        Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for FixedMatrix (RegularPath).
-impl Default for Count<FixedMatrix, RegularPath> {
+impl Default for CountSketch<FixedMatrix, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(FixedMatrix::default())
+        CountSketch::from_storage(FixedMatrix::default())
     }
 }
 
 // Default Count sketch for FixedMatrix (FastPath).
-impl Default for Count<FixedMatrix, FastPath> {
+impl Default for CountSketch<FixedMatrix, FastPath> {
     fn default() -> Self {
-        Count::from_storage(FixedMatrix::default())
+        CountSketch::from_storage(FixedMatrix::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI32 (RegularPath).
-impl Default for Count<DefaultMatrixI32, RegularPath> {
+impl Default for CountSketch<DefaultMatrixI32, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI32::default())
+        CountSketch::from_storage(DefaultMatrixI32::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI32 (FastPath).
-impl Default for Count<DefaultMatrixI32, FastPath> {
+impl Default for CountSketch<DefaultMatrixI32, FastPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI32::default())
+        CountSketch::from_storage(DefaultMatrixI32::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI64 (RegularPath).
-impl Default for Count<DefaultMatrixI64, RegularPath> {
+impl Default for CountSketch<DefaultMatrixI64, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI64::default())
+        CountSketch::from_storage(DefaultMatrixI64::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI64 (FastPath).
-impl Default for Count<DefaultMatrixI64, FastPath> {
+impl Default for CountSketch<DefaultMatrixI64, FastPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI64::default())
+        CountSketch::from_storage(DefaultMatrixI64::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI128 (RegularPath).
-impl Default for Count<DefaultMatrixI128, RegularPath> {
+impl Default for CountSketch<DefaultMatrixI128, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI128::default())
+        CountSketch::from_storage(DefaultMatrixI128::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI128 (FastPath).
-impl Default for Count<DefaultMatrixI128, FastPath> {
+impl Default for CountSketch<DefaultMatrixI128, FastPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI128::default())
+        CountSketch::from_storage(DefaultMatrixI128::default())
     }
 }
 
 // Default Count sketch for QuickMatrixI64 (RegularPath).
-impl Default for Count<QuickMatrixI64, RegularPath> {
+impl Default for CountSketch<QuickMatrixI64, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(QuickMatrixI64::default())
+        CountSketch::from_storage(QuickMatrixI64::default())
     }
 }
 
 // Default Count sketch for QuickMatrixI64 (FastPath).
-impl Default for Count<QuickMatrixI64, FastPath> {
+impl Default for CountSketch<QuickMatrixI64, FastPath> {
     fn default() -> Self {
-        Count::from_storage(QuickMatrixI64::default())
+        CountSketch::from_storage(QuickMatrixI64::default())
     }
 }
 
 // Default Count sketch for QuickMatrixI128 (RegularPath).
-impl Default for Count<QuickMatrixI128, RegularPath> {
+impl Default for CountSketch<QuickMatrixI128, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(QuickMatrixI128::default())
+        CountSketch::from_storage(QuickMatrixI128::default())
     }
 }
 
 // Default Count sketch for QuickMatrixI128 (FastPath).
-impl Default for Count<QuickMatrixI128, FastPath> {
+impl Default for CountSketch<QuickMatrixI128, FastPath> {
     fn default() -> Self {
-        Count::from_storage(QuickMatrixI128::default())
+        CountSketch::from_storage(QuickMatrixI128::default())
     }
 }
 
 // Count constructors for Vector2D-backed storage.
-impl<T, M, H: SketchHasher> Count<Vector2D<T>, M, H>
+impl<T, M, H: SketchHasher> CountSketch<Vector2D<T>, M, H>
 where
     T: CountSketchCounter,
 {
     /// Creates a sketch with the requested number of rows and columns.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
-        let mut sk = Count {
-            counts: Vector2D::init(rows, cols),
-            row: rows,
-            col: cols,
+        let mut sk = CountSketch {
+            counts: Vector2D::unfilled(rows, cols),
+            rows,
+            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),
@@ -227,19 +227,19 @@ where
 }
 
 // Core Count API for any storage/counter.
-impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
+impl<S, C, Mode, H: SketchHasher> CountSketch<S, Mode, H>
 where
     S: MatrixStorage<Counter = C>,
     C: CountSketchCounter,
 {
     /// Wraps an existing matrix storage as a Count Sketch.
     pub fn from_storage(counts: S) -> Self {
-        let row = counts.rows();
-        let col = counts.cols();
+        let rows = counts.rows();
+        let cols = counts.cols();
         Self {
             counts,
-            row,
-            col,
+            rows,
+            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),
@@ -307,13 +307,13 @@ where
 }
 
 // Regular-path Count operations.
-impl<S, C, H: SketchHasher> Count<S, RegularPath, H>
+impl<S, C, H: SketchHasher> CountSketch<S, RegularPath, H>
 where
     S: MatrixStorage<Counter = C>,
     C: CountSketchCounter,
 {
     /// Inserts an observation with standard Count Sketch updating algorithm.
-    pub fn insert(&mut self, value: &DataInput) {
+    pub fn update(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -332,7 +332,7 @@ where
     }
 
     /// Inserts an observation with the given count (weight).
-    pub fn insert_many(&mut self, value: &DataInput, many: C) {
+    pub fn update_weighted(&mut self, value: &DataInput, weight: C) {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -340,7 +340,7 @@ where
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             let bit = ((hashed >> 63) & 1) as i32;
             let sign_bit = if bit == 1 { 1 } else { -1 };
-            let delta = if sign_bit > 0 { many } else { -many };
+            let delta = if sign_bit > 0 { weight } else { -weight };
             self.counts
                 .update_one_counter(r, col, |a, b| *a += b, delta);
         }
@@ -377,14 +377,14 @@ where
 }
 
 // Fast-path Count operations using precomputed hashes.
-impl<S, H: SketchHasher> Count<S, FastPath, H>
+impl<S, H: SketchHasher> CountSketch<S, FastPath, H>
 where
     S: MatrixStorage + crate::FastPathHasher<H>,
     S::Counter: CountSketchCounter,
 {
     /// Inserts an observation using the combined hash optimization.
     #[inline(always)]
-    pub fn insert(&mut self, value: &DataInput) {
+    pub fn update(&mut self, value: &DataInput) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts.fast_insert(
             |counter, value, row| {
@@ -399,7 +399,7 @@ where
 
     /// Inserts an observation with the given count using the combined hash optimization.
     #[inline(always)]
-    pub fn insert_many(&mut self, value: &DataInput, many: S::Counter) {
+    pub fn update_weighted(&mut self, value: &DataInput, weight: S::Counter) {
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         self.counts.fast_insert(
             |counter, value, row| {
@@ -407,7 +407,7 @@ where
                 let delta = if sign > 0 { *value } else { -*value };
                 *counter += delta;
             },
-            many,
+            weight,
             &hashed_val,
         );
     }
@@ -430,7 +430,7 @@ where
     /// Inserts an observation using a pre-computed hash value.
     /// Hash value can be reused with other sketches.
     #[inline(always)]
-    pub fn fast_insert_with_hash_value(&mut self, hashed_val: &H::HashType) {
+    pub fn update_with_hash(&mut self, hashed_val: &H::HashType) {
         self.counts.fast_insert(
             |counter, value, row| {
                 let sign = hashed_val.sign_for_row(row);
@@ -444,21 +444,21 @@ where
 
     /// Inserts an observation with the given count using a pre-computed hash value.
     #[inline(always)]
-    pub fn fast_insert_many_with_hash_value(&mut self, hashed_val: &H::HashType, many: S::Counter) {
+    pub fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, weight: S::Counter) {
         self.counts.fast_insert(
             |counter, value, row| {
                 let sign = hashed_val.sign_for_row(row);
                 let delta = if sign > 0 { *value } else { -*value };
                 *counter += delta;
             },
-            many,
+            weight,
             hashed_val,
         );
     }
 
     /// Returns the frequency estimate using a pre-computed hash value.
     #[inline(always)]
-    pub fn fast_estimate_with_hash(&self, hashed_val: &H::HashType) -> f64 {
+    pub fn estimate_with_hash(&self, hashed_val: &H::HashType) -> f64 {
         self.counts.fast_query_median(hashed_val, |val, row, hash| {
             let sign = hash.sign_for_row(row);
             if sign > 0 {
@@ -471,7 +471,7 @@ where
 }
 
 // Debug helpers for i32 Vector2D Count.
-impl<M, H: SketchHasher> Count<Vector2D<i32>, M, H> {
+impl<M, H: SketchHasher> CountSketch<Vector2D<i32>, M, H> {
     /// Human-friendly helper used by the serializer demo binaries.
     pub fn debug(&self) {
         for row in 0..self.counts.rows() {
@@ -481,7 +481,7 @@ impl<M, H: SketchHasher> Count<Vector2D<i32>, M, H> {
 }
 
 // Nitro sampling helpers for fast-path Count.
-impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
+impl<H: SketchHasher> CountSketch<Vector2D<i32>, FastPath, H> {
     /// Enables Nitro sampling with the provided rate.
     pub fn enable_nitro(&mut self, sampling_rate: f64) {
         self.counts.enable_nitro(sampling_rate);
@@ -489,7 +489,7 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
 
     /// Enables Nitro sampling with a reproducible, seed-selected schedule.
     ///
-    /// See [`crate::Nitro::init_nitro_seeded`]: the unseeded path starts every
+    /// See [`crate::Nitro::with_seed`]: the unseeded path starts every
     /// sketch at the same point in the skip table, so two sketches at the same
     /// rate admit the same subset and are not independent trials.
     pub fn enable_nitro_with_seed(&mut self, sampling_rate: f64, seed: u64) {
@@ -498,13 +498,13 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
 
     /// Inserts an observation through Nitro's per-row sampling schedule.
     ///
-    /// Cells and signs are derived exactly as a plain `insert` derives them —
+    /// Cells and signs are derived exactly as a plain `update` derives them —
     /// `FastPathHasher::hash_for_matrix`, then `col_for_row` and
     /// `sign_for_row` — so `estimate` reads back what this wrote. The hash is
     /// computed once per observation, and the admitted rows are collected into
     /// an inline buffer, so the hot path does not allocate.
     #[inline(always)]
-    pub fn fast_insert_nitro(&mut self, value: &DataInput) {
+    pub fn nitro_update(&mut self, value: &DataInput) {
         let rows = self.counts.rows();
         let mut admitted = AdmittedRows::new();
         self.counts.nitro_mut().admit_rows(rows, &mut admitted);
@@ -527,7 +527,7 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
 }
 
 // NitroTarget integration for fast-path Count.
-impl<H: SketchHasher> NitroTarget for Count<Vector2D<i32>, FastPath, H> {
+impl<H: SketchHasher> NitroTarget for CountSketch<Vector2D<i32>, FastPath, H> {
     #[inline(always)]
     fn rows(&self) -> usize {
         self.counts.rows()
@@ -565,27 +565,34 @@ impl<H: SketchHasher> NitroTarget for Count<Vector2D<i32>, FastPath, H> {
 }
 
 use crate::input_to_owned;
-use crate::octo_delta::{COUNT_PROMASK, CountDelta, KeyedCountDelta, MAX_PROMASK};
+use crate::octo_delta::{
+    CountSketchCellDelta, KeyedCountSketchCellDelta, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
+    OCTO_MAX_PROMOTION_THRESHOLD,
+};
 
-impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> {
+impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountSketch<S, RegularPath, H> {
     /// Inserts a value, emitting a delta at every promotion of the default
-    /// threshold `COUNT_PROMASK`.
+    /// threshold `OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD`.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
-        self.insert_emit_delta_with_threshold(value, COUNT_PROMASK, emit);
+    pub fn update_emit_delta(
+        &mut self,
+        value: &DataInput,
+        emit: &mut impl FnMut(CountSketchCellDelta),
+    ) {
+        self.update_emit_delta_with_threshold(value, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, emit);
     }
 
     /// Inserts a value, emitting a delta and clearing the counter each time
     /// `|counter|` reaches `threshold`. Count sketch counters are signed, so
     /// the magnitude is what the threshold is applied to (§4.4).
     #[inline(always)]
-    pub fn insert_emit_delta_with_threshold(
+    pub fn update_emit_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(CountDelta),
+        emit: &mut impl FnMut(CountSketchCellDelta),
     ) {
-        let threshold = threshold.clamp(1, MAX_PROMASK);
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD);
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         for r in 0..rows {
@@ -595,26 +602,26 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> 
             self.counts.increment_by_row(r, col, sign);
             let current = self.counts.query_one_counter(r, col);
             if current.unsigned_abs() >= threshold {
-                emit(CountDelta {
+                emit(CountSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
-                    value: current,
+                    count: current,
                 });
                 self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
             }
         }
     }
 
-    /// As `insert_emit_delta_with_threshold`, but every delta carries the flow
+    /// As `update_emit_delta_with_threshold`, but every delta carries the flow
     /// key so an aggregator can maintain a heavy-hitter heap.
-    pub fn insert_emit_keyed_delta_with_threshold(
+    pub fn update_emit_keyed_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(KeyedCountDelta),
+        emit: &mut impl FnMut(KeyedCountSketchCellDelta),
     ) {
-        self.insert_emit_delta_with_threshold(value, threshold, &mut |delta| {
-            emit(KeyedCountDelta {
+        self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
+            emit(KeyedCountSketchCellDelta {
                 key: input_to_owned(value),
                 delta,
             })
@@ -622,26 +629,30 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> 
     }
 }
 
-impl<S, H: SketchHasher> Count<S, FastPath, H>
+impl<S, H: SketchHasher> CountSketch<S, FastPath, H>
 where
     S: MatrixStorage<Counter = i32> + FastPathHasher<H>,
 {
     /// Inserts a value using the fast path, emitting a delta at every
-    /// promotion of the default threshold `COUNT_PROMASK`.
+    /// promotion of the default threshold `OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD`.
     #[inline(always)]
-    pub fn insert_emit_delta(&mut self, value: &DataInput, emit: &mut impl FnMut(CountDelta)) {
-        self.insert_emit_delta_with_threshold(value, COUNT_PROMASK, emit);
+    pub fn update_emit_delta(
+        &mut self,
+        value: &DataInput,
+        emit: &mut impl FnMut(CountSketchCellDelta),
+    ) {
+        self.update_emit_delta_with_threshold(value, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, emit);
     }
 
     /// Fast-path counterpart of the regular-path threshold API.
     #[inline(always)]
-    pub fn insert_emit_delta_with_threshold(
+    pub fn update_emit_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(CountDelta),
+        emit: &mut impl FnMut(CountSketchCellDelta),
     ) {
-        let threshold = threshold.clamp(1, MAX_PROMASK);
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD);
         let hashed_val = <S as FastPathHasher<H>>::hash_for_matrix(&self.counts, value);
         let rows = self.counts.rows();
         let cols = self.counts.cols();
@@ -651,25 +662,25 @@ where
             self.counts.increment_by_row(r, col, sign);
             let current = self.counts.query_one_counter(r, col);
             if current.unsigned_abs() >= threshold {
-                emit(CountDelta {
+                emit(CountSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
-                    value: current,
+                    count: current,
                 });
                 self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
             }
         }
     }
 
-    /// Fast-path counterpart of `insert_emit_keyed_delta_with_threshold`.
-    pub fn insert_emit_keyed_delta_with_threshold(
+    /// Fast-path counterpart of `update_emit_keyed_delta_with_threshold`.
+    pub fn update_emit_keyed_delta_with_threshold(
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(KeyedCountDelta),
+        emit: &mut impl FnMut(KeyedCountSketchCellDelta),
     ) {
-        self.insert_emit_delta_with_threshold(value, threshold, &mut |delta| {
-            emit(KeyedCountDelta {
+        self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
+            emit(KeyedCountSketchCellDelta {
                 key: input_to_owned(value),
                 delta,
             })
@@ -677,16 +688,16 @@ where
     }
 }
 
-impl<S: MatrixStorage, Mode, H: SketchHasher> Count<S, Mode, H>
+impl<S: MatrixStorage, Mode, H: SketchHasher> CountSketch<S, Mode, H>
 where
     S::Counter: Copy + std::ops::AddAssign + From<i32>,
 {
     /// Applies a previously emitted delta to this sketch.
-    pub fn apply_delta(&mut self, delta: CountDelta) {
+    pub fn apply_delta(&mut self, delta: CountSketchCellDelta) {
         self.counts.increment_by_row(
             delta.row as usize,
             delta.col as usize,
-            S::Counter::from(delta.value),
+            S::Counter::from(delta.count),
         );
     }
 }
@@ -700,12 +711,12 @@ mod tests {
 
     #[test]
     fn count_child_insert_emits_at_threshold() {
-        let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let mut child = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::U64(99);
-        let mut deltas: Vec<CountDelta> = Vec::new();
+        let mut deltas: Vec<CountSketchCellDelta> = Vec::new();
 
         for _ in 0..200 {
-            child.insert_emit_delta(&key, &mut |d| deltas.push(d));
+            child.update_emit_delta(&key, &mut |d| deltas.push(d));
         }
         assert!(
             deltas.len() >= 3,
@@ -725,13 +736,13 @@ mod tests {
         exponent: f64,
         samples: usize,
         seed: u64,
-    ) -> (Count, HashMap<u64, i32>) {
+    ) -> (CountSketch, HashMap<u64, i32>) {
         let mut truth = HashMap::<u64, i32>::new();
-        let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+        let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
 
         for value in sample_zipf_u64(domain, exponent, samples, seed) {
             let key = DataInput::U64(value);
-            sketch.insert(&key);
+            sketch.update(&key);
             *truth.entry(value).or_insert(0) += 1;
         }
 
@@ -740,7 +751,7 @@ mod tests {
 
     #[test]
     fn default_initializes_expected_dimensions() {
-        let cs = Count::<Vector2D<i32>, RegularPath>::default();
+        let cs = CountSketch::<Vector2D<i32>, RegularPath>::default();
         assert_eq!(cs.rows(), 3);
         assert_eq!(cs.cols(), 4096);
         all_counter_zero_i32(cs.as_storage());
@@ -748,7 +759,7 @@ mod tests {
 
     #[test]
     fn with_dimensions_uses_custom_sizes() {
-        let cs = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 17);
+        let cs = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 17);
         assert_eq!(cs.rows(), 3);
         assert_eq!(cs.cols(), 17);
 
@@ -765,10 +776,10 @@ mod tests {
 
     #[test]
     fn insert_updates_signed_counters_per_row() {
-        let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::Str("alpha");
 
-        sketch.insert(&key);
+        sketch.update(&key);
 
         for row in 0..sketch.rows() {
             let idx = counter_index(row, &key, sketch.cols());
@@ -783,7 +794,7 @@ mod tests {
 
     #[test]
     fn fast_insert_produces_consistent_estimates() {
-        let mut fast = Count::<Vector2D<i32>, FastPath>::with_dimensions(4, 128);
+        let mut fast = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(4, 128);
 
         let keys = vec![
             DataInput::Str("alpha"),
@@ -794,7 +805,7 @@ mod tests {
         ];
 
         for key in &keys {
-            fast.insert(key);
+            fast.update(key);
         }
 
         for key in &keys {
@@ -808,7 +819,7 @@ mod tests {
 
     #[test]
     fn insert_produces_consistent_estimates() {
-        let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
 
         let keys = vec![
             DataInput::Str("alpha"),
@@ -819,7 +830,7 @@ mod tests {
         ];
 
         for key in &keys {
-            sketch.insert(key);
+            sketch.update(key);
         }
 
         for key in &keys {
@@ -833,12 +844,12 @@ mod tests {
 
     #[test]
     fn estimate_recovers_frequency_for_repeated_key() {
-        let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::Str("theta");
 
         let repeats = 37;
         for _ in 0..repeats {
-            sketch.insert(&key);
+            sketch.update(&key);
         }
 
         let estimate = sketch.estimate(&key);
@@ -850,7 +861,7 @@ mod tests {
 
     #[test]
     fn fast_path_recovers_repeated_insertions() {
-        let mut sketch = Count::<Vector2D<i32>, FastPath>::with_dimensions(4, 256);
+        let mut sketch = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(4, 256);
         let keys = vec![
             DataInput::Str("alpha"),
             DataInput::Str("beta"),
@@ -861,7 +872,7 @@ mod tests {
 
         for _ in 0..5 {
             for key in &keys {
-                sketch.insert(key);
+                sketch.update(key);
             }
         }
 
@@ -876,13 +887,13 @@ mod tests {
 
     #[test]
     fn merge_adds_counters_element_wise() {
-        let mut left = Count::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
-        let mut right = Count::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
+        let mut left = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
+        let mut right = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
         let key = DataInput::Str("delta");
 
-        left.insert(&key);
-        right.insert(&key);
-        right.insert(&key);
+        left.update(&key);
+        right.update(&key);
+        right.update(&key);
 
         let left_indices: Vec<_> = (0..left.rows())
             .map(|row| counter_index(row, &key, left.cols()))
@@ -899,22 +910,23 @@ mod tests {
     #[test]
     fn f64_estimate_is_the_unrounded_median_and_takes_nan() {
         let key = DataInput::Str("alpha");
-        let mut sketch = Count::<Vector2D<f64>, RegularPath>::with_dimensions(3, 64);
-        sketch.insert_many(&key, 1.5);
+        let mut sketch = CountSketch::<Vector2D<f64>, RegularPath>::with_dimensions(3, 64);
+        sketch.update_weighted(&key, 1.5);
         assert_eq!(sketch.estimate(&key), 1.5);
 
-        let nan =
-            Count::<Vector2D<f64>, RegularPath>::from_storage(Vector2D::from_fn(3, 4, |_, _| {
-                f64::NAN
-            }));
+        let nan = CountSketch::<Vector2D<f64>, RegularPath>::from_storage(Vector2D::from_fn(
+            3,
+            4,
+            |_, _| f64::NAN,
+        ));
         assert!(nan.estimate(&key).is_nan());
     }
 
     #[test]
     #[should_panic(expected = "dimension mismatch while merging CountMin sketches")]
     fn merge_requires_matching_dimensions() {
-        let mut left = Count::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
-        let right = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 32);
+        let mut left = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
+        let right = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 32);
         left.merge(&right);
     }
 
@@ -943,10 +955,10 @@ mod tests {
 
     #[test]
     fn cs_regular_path_correctness() {
-        let mut sk = Count::<Vector2D<i32>, RegularPath>::default();
+        let mut sk = CountSketch::<Vector2D<i32>, RegularPath>::default();
         // Insert values 0..9 once using the regular path.
         for i in 0..10 {
-            sk.insert(&DataInput::I32(i));
+            sk.update(&DataInput::I32(i));
         }
 
         // Build the expected counter array by mirroring the regular-path hashing logic.
@@ -970,7 +982,7 @@ mod tests {
 
         // Insert the same values again; counters should double.
         for i in 0..10 {
-            sk.insert(&DataInput::I32(i));
+            sk.update(&DataInput::I32(i));
         }
         let expected_twice: Vec<i32> = expected_once.iter().map(|v| v * 2).collect();
         assert_eq!(sk.as_storage().as_slice(), expected_twice.as_slice());
@@ -987,17 +999,17 @@ mod tests {
 
     #[test]
     fn cs_fast_path_correctness() {
-        let mut sk = Count::<Vector2D<i32>, FastPath>::default();
+        let mut sk = CountSketch::<Vector2D<i32>, FastPath>::default();
         // Insert values 0..9 once using the fast path.
         for i in 0..10 {
-            sk.insert(&DataInput::I32(i));
+            sk.update(&DataInput::I32(i));
         }
 
         // Build the expected counter array by mirroring the fast-path hashing logic.
         let storage = sk.as_storage();
         let rows = storage.rows();
         let cols = storage.cols();
-        let mask_bits = storage.get_mask_bits();
+        let mask_bits = storage.mask_bits();
         let mask = (1u128 << mask_bits) - 1;
         let mut expected_once = vec![0_i32; rows * cols];
 
@@ -1027,9 +1039,9 @@ mod tests {
         const DECILES: usize = 10;
 
         let mut truth = HashMap::<u64, i64>::new();
-        let mut cs = Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
+        let mut cs = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
         for value in sample_zipf_u64(DOMAIN, 1.1, SAMPLES, STREAM_SEED) {
-            cs.insert(&DataInput::U64(value));
+            cs.update(&DataInput::U64(value));
             *truth.entry(value).or_insert(0) += 1;
         }
 

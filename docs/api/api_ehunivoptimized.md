@@ -1,4 +1,4 @@
-# API: EHUnivOptimized
+# API: ExponentialHistogramUnivMon
 
 Status: `Unstable`
 
@@ -8,10 +8,10 @@ Hybrid ExponentialHistogram + UnivMon path with map/sketch tiers and pooling.
 
 ## Type/Struct
 
-- `EHMapBucket`
-- `EHUnivMonBucket`
-- `EHUnivOptimized`
-- `EHUnivQueryResult`
+- `EhUnivMonExactBucket`
+- `EhUnivMonSketchBucket`
+- `ExponentialHistogramUnivMon`
+- `EhUnivMonQueryResult`
 
 ## Constructors
 
@@ -20,18 +20,18 @@ fn new(
     k: usize,
     window: u64,
     heap_size: usize,
-    sketch_row: usize,
-    sketch_col: usize,
-    layer_size: usize,
+    rows: usize,
+    cols: usize,
+    layers: usize,
 ) -> Self
-fn with_pool_cap(
+fn with_pool_initial_size(
     k: usize,
     window: u64,
     heap_size: usize,
-    sketch_row: usize,
-    sketch_col: usize,
-    layer_size: usize,
-    pool_cap: usize,
+    rows: usize,
+    cols: usize,
+    layers: usize,
+    pool_initial_size: usize,
 ) -> Self
 fn with_defaults(k: usize, window: u64) -> Self
 ```
@@ -39,26 +39,26 @@ fn with_defaults(k: usize, window: u64) -> Self
 ## Insert/Update
 
 ```rust
-fn update(&mut self, time: u64, key: &DataInput, value: i64)
+fn update_weighted(&mut self, time: u64, key: &DataInput, weight: i64)
 fn update_window(&mut self, window: u64)
 ```
 
 ## Query
 
 ```rust
-fn query_interval(&self, t1: u64, t2: u64) -> Option<EHUnivQueryResult>
+fn query_interval(&self, t1: u64, t2: u64) -> Option<EhUnivMonQueryResult>
 fn cover(&self, mint: u64, maxt: u64) -> bool
-fn get_min_time(&self) -> Option<u64>
-fn get_max_time(&self) -> Option<u64>
+fn min_time(&self) -> Option<u64>
+fn max_time(&self) -> Option<u64>
 fn bucket_count(&self) -> usize
-fn pool(&self) -> &UnivSketchPool
-fn get_memory_info(&self) -> (usize, usize, Vec<usize>, Vec<usize>)
+fn pool(&self) -> &UnivMonPool
+fn memory_info(&self) -> (usize, usize, Vec<usize>, Vec<usize>)
 
 // Result helpers
-fn calc_l1(&self) -> f64
-fn calc_l2(&self) -> f64
-fn calc_entropy(&self) -> f64
-fn calc_card(&self) -> f64
+fn estimate_l1(&self) -> f64
+fn estimate_l2(&self) -> f64
+fn estimate_entropy(&self) -> f64
+fn estimate_cardinality(&self) -> f64
 ```
 
 ## Merge
@@ -72,10 +72,10 @@ No dedicated serialization API.
 ## Examples
 
 ```rust
-use asap_sketchlib::{EHUnivOptimized, DataInput};
+use asap_sketchlib::{ExponentialHistogramUnivMon, DataInput};
 
-let mut eh = EHUnivOptimized::with_defaults(2, 120);
-eh.update(1, &DataInput::U64(10), 1);
+let mut eh = ExponentialHistogramUnivMon::with_defaults(2, 120);
+eh.update_weighted(1, &DataInput::U64(10), 1);
 let _ = eh.query_interval(0, 120);
 ```
 

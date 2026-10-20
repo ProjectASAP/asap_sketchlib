@@ -2,23 +2,23 @@
 //!
 //! Child submodule of [`crate::sketches::coco`]: it holds ALL of Coco's
 //! serialization (the metadata/payload DTOs, the kind_id constant, and the
-//! `serialize_to_bytes` / `deserialize_from_bytes` impls) while the algorithm
+//! `to_asapv1` / `from_asapv1` impls) while the algorithm
 //! lives in the parent module file. Being a descendant module, it rebuilds the
 //! struct directly, private `rng` and `_hasher` fields included, without
 //! widening any field visibility. See the Coco section of
 //! `docs/asapv1_wire_format.md`.
 //!
 //! Coco is one algorithm — a single kind_id `0x0c 0x00`. Its structural
-//! parameters are the table geometry: `rows` (the sketch's `d`, the arrays an
-//! insert scans) and `cols` (the sketch's `w`, the buckets per array). Both are
+//! parameters are the table geometry: `rows` (the arrays an insert scans) and
+//! `cols` (the buckets per array). Both are
 //! construction config and live in the metadata, so the payload is the bucket
 //! state alone: `[keys, values]`, two parallel row-major arrays of `rows*cols`
 //! entries.
 //!
 //! ## An unoccupied bucket is msgpack `nil`
 //!
-//! A bucket's key is `Option<String>` and `insert` accepts any `&str`,
-//! including `""`. So `Some("")` is an occupied bucket that `estimate_key("")`
+//! A bucket's key is `Option<String>` and `update_weighted` accepts any `&str`,
+//! including `""`. So `Some("")` is an occupied bucket that `estimate("")`
 //! answers for, and it must not share an encoding with an unoccupied one.
 //! `keys[i]` is therefore msgpack `nil` (`0xc0`) when the bucket is free and a
 //! msgpack `str` otherwise.
@@ -41,17 +41,16 @@ use std::collections::HashSet;
 
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::COCO;
 use crate::{DataInput, HashProfile, SketchHasher, Vector2D};
 
-use super::{Coco, CocoBucket, CocoRng};
-
-/// Coco kind_id: family `0x0c`, single algorithm variant `0x00`.
-const COCO_KIND: &[u8] = &[0x0c, 0x00];
+use super::{CocoBucket, CocoRng, CocoSketch};
 
 /// Coco descriptor metadata (ASAPv1 §2), a msgpack **map** (`to_vec_named`)
 /// with keys in this declaration order — the canonical order the wire spec
 /// fixes (Go must mirror it). Hash-spec fields first, then the structural
-/// params `rows` / `cols`, which are the sketch's `d` and `w`.
+/// params `rows` / `cols`.
 ///
 /// There is **no seed-index key**: Coco hashes array `i` with
 /// `hash64_seeded(i, ..)`, a fixed part of the algorithm rather than a profile
@@ -71,8 +70,7 @@ struct CocoMetadata {
 
 /// Builds the Coco descriptor metadata from the hasher's [`HashProfile`], so
 /// the wire bytes truthfully describe how the sketch was hashed (rather than
-/// hardcoding the standard profile). `rows` is the sketch's `d`, `cols` its
-/// `w`.
+/// hardcoding the standard profile).
 fn coco_metadata<H: HashProfile>(rows: u32, cols: u32) -> CocoMetadata {
     CocoMetadata {
         metadata_version: 1,
@@ -109,7 +107,7 @@ fn check_geometry(rows: usize, cols: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Rejects a bucket layout no insert could produce. `insert` scans all `d`
+/// Rejects a bucket layout no insert could produce. `update_weighted` scans all `d`
 /// mapped buckets before electing one, so a stored key sits in row `r` only at
 /// column `hash64_seeded(r, key) % cols`, and holds at most one bucket in the
 /// whole table. `keys` must already be `rows*cols` long and `cols` non-zero.
@@ -135,7 +133,7 @@ fn check_placement<H: SketchHasher>(keys: &[Option<String>], cols: usize) -> Res
 
 // Wire serialization for Coco. `wire` is a descendant of the sketch module, so
 // this impl reads the private hasher marker and rebuilds the struct directly.
-impl<H: SketchHasher + HashProfile> Coco<H> {
+impl<H: SketchHasher + HashProfile> CocoSketch<H> {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope. The metadata
     /// is derived from the hasher's [`HashProfile`], so it truthfully describes
     /// how the sketch was hashed.
@@ -145,8 +143,8 @@ impl<H: SketchHasher + HashProfile> Coco<H> {
     /// produce (a key outside the column its row hashes it to, or a key held by
     /// two buckets) are all errors rather than bytes that would be refused on
     /// decode.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
-        let (rows, cols) = (self.d, self.w);
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
+        let (rows, cols) = (self.rows, self.cols);
         check_geometry(rows, cols).map_err(RmpEncodeError::Syntax)?;
         let buckets = self.table.as_slice();
         if self.table.rows() != rows
@@ -177,18 +175,18 @@ impl<H: SketchHasher + HashProfile> Coco<H> {
             keys,
             values: buckets.iter().map(|b| b.val).collect(),
         })?;
-        Ok(envelope::encode(COCO_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::COCO, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The table
     /// geometry is read from the (validated) metadata; the payload carries only
     /// the bucket keys and their masses.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != COCO_KIND {
+        if kind_id != kind::COCO {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "Coco kind_id mismatch: stored {kind_id:?}, expected {COCO_KIND:?}"
+                "Coco kind_id mismatch: stored {kind_id:?}, expected {COCO:?}"
             )));
         }
         let meta: CocoMetadata = envelope::decode_block(metadata)?;
@@ -213,7 +211,7 @@ impl<H: SketchHasher + HashProfile> Coco<H> {
                 p.values.len()
             )));
         }
-        // An unoccupied bucket holds no mass: `insert` always elects a key into
+        // An unoccupied bucket holds no mass: `update_weighted` always elects a key into
         // the bucket it credits. Rejecting mass under a `nil` key keeps the
         // decoded table canonical.
         if let Some(i) = (0..expected).find(|&i| p.keys[i].is_none() && p.values[i] != 0) {
@@ -232,9 +230,9 @@ impl<H: SketchHasher + HashProfile> Coco<H> {
                 val: p.values[i],
             }
         });
-        Ok(Coco {
-            w: cols,
-            d: rows,
+        Ok(CocoSketch {
+            cols,
+            rows,
             table,
             rng: CocoRng::default(),
             _hasher: std::marker::PhantomData,
@@ -245,7 +243,9 @@ impl<H: SketchHasher + HashProfile> Coco<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS, Vector2D};
+    use crate::{
+        DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS, Vector2D,
+    };
 
     /// More rows than the seed list has seeds is outside the wire-eligible
     /// subset, on both sides: row `i` hashes at seed index `i`.
@@ -253,8 +253,8 @@ mod tests {
     fn coco_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
-            Coco::<DefaultXxHasher>::init_with_size(8, rows)
-                .serialize_to_bytes()
+            CocoSketch::<DefaultXxHasher>::init_with_size(8, rows)
+                .to_asapv1()
                 .is_err(),
             "a table past MATRIX_MAX_ROWS must not serialize"
         );
@@ -266,22 +266,22 @@ mod tests {
             values: vec![0; rows * 8],
         })
         .unwrap();
-        let bytes = envelope::encode(COCO_KIND, &metadata, &payload);
-        let problem = Coco::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
+        let bytes = envelope::encode(kind::COCO, &metadata, &payload);
+        let problem = CocoSketch::<DefaultXxHasher>::from_asapv1(&bytes)
             .expect_err("rows past MATRIX_MAX_ROWS must be rejected")
             .to_string();
         assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
 
         // The boundary itself is eligible.
         assert!(
-            Coco::<DefaultXxHasher>::init_with_size(8, MATRIX_MAX_ROWS)
-                .serialize_to_bytes()
+            CocoSketch::<DefaultXxHasher>::init_with_size(8, MATRIX_MAX_ROWS)
+                .to_asapv1()
                 .is_ok()
         );
     }
 
     /// The whole table as `(key, value)` pairs in row-major order.
-    fn cells<H: SketchHasher>(sketch: &Coco<H>) -> Vec<(Option<String>, u64)> {
+    fn cells<H: SketchHasher>(sketch: &CocoSketch<H>) -> Vec<(Option<String>, u64)> {
         sketch
             .table
             .as_slice()
@@ -292,29 +292,29 @@ mod tests {
 
     #[test]
     fn coco_round_trip_serialization() {
-        let mut sketch: Coco = Coco::init_with_size(8, 4);
-        sketch.insert("19.98.10.26|80", 521);
-        sketch.insert("34.52.73.17|118", 856);
+        let mut sketch: CocoSketch = CocoSketch::init_with_size(8, 4);
+        sketch.update_weighted("19.98.10.26|80", 521);
+        sketch.update_weighted("34.52.73.17|118", 856);
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize Coco");
+        let encoded = sketch.to_asapv1().expect("serialize Coco");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x0c, 0x00]); // kind_id_len=2, kind_id=[0x0c,0x00]
 
-        let decoded: Coco = Coco::deserialize_from_bytes(&encoded).expect("deserialize Coco");
-        assert_eq!(decoded.w, 8);
-        assert_eq!(decoded.d, 4);
+        let decoded: CocoSketch = CocoSketch::from_asapv1(&encoded).expect("deserialize Coco");
+        assert_eq!(decoded.cols, 8);
+        assert_eq!(decoded.rows, 4);
         assert_eq!(cells(&sketch), cells(&decoded));
-        assert_eq!(decoded.estimate_key("19.98.10.26|80"), 521);
+        assert_eq!(decoded.estimate("19.98.10.26|80"), 521);
     }
 
     /// Coco and Count-Min both carry `rows`/`cols` metadata; a CMS envelope
     /// must not decode as a Coco.
     #[test]
     fn coco_rejects_foreign_kind_id() {
-        let cms = crate::CountMin::<Vector2D<i64>, crate::RegularPath>::with_dimensions(4, 8);
-        let cms_bytes = cms.serialize_to_bytes().expect("serialize CMS");
+        let cms = crate::CountMinSketch::<Vector2D<i64>, crate::RegularPath>::with_dimensions(4, 8);
+        let cms_bytes = cms.to_asapv1().expect("serialize CMS");
         assert!(
-            Coco::<DefaultXxHasher>::deserialize_from_bytes(&cms_bytes).is_err(),
+            CocoSketch::<DefaultXxHasher>::from_asapv1(&cms_bytes).is_err(),
             "CMS bytes must not decode as a Coco"
         );
     }
@@ -389,9 +389,9 @@ mod tests {
             values: Vec::new(),
         })
         .unwrap();
-        let bytes = envelope::encode(COCO_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COCO, &metadata, &payload);
         assert!(
-            Coco::<DefaultXxHasher>::deserialize_from_bytes(&bytes).is_err(),
+            CocoSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "zero-dimension metadata must be rejected, not panic"
         );
     }
@@ -410,9 +410,9 @@ mod tests {
             values: vec![0, 0, 0],
         })
         .unwrap();
-        let bytes = envelope::encode(COCO_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COCO, &metadata, &payload);
         assert!(
-            Coco::<DefaultXxHasher>::deserialize_from_bytes(&bytes).is_err(),
+            CocoSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "payload lengths must match rows*cols"
         );
     }
@@ -427,9 +427,9 @@ mod tests {
             values: vec![0, 9],
         })
         .unwrap();
-        let bytes = envelope::encode(COCO_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COCO, &metadata, &payload);
         assert!(
-            Coco::<DefaultXxHasher>::deserialize_from_bytes(&bytes).is_err(),
+            CocoSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "a nil key with a non-zero value must be rejected"
         );
     }
@@ -449,12 +449,12 @@ mod tests {
             values: cells.iter().map(|(_, v)| *v).collect(),
         })
         .unwrap();
-        envelope::encode(COCO_KIND, &metadata, &payload)
+        envelope::encode(kind::COCO, &metadata, &payload)
     }
 
     /// A key only ever lands in the bucket its own row hashes it to, so a
     /// payload parking it anywhere else is rejected: `recorded_flows` would
-    /// otherwise report a flow `estimate_key` answers 0 for.
+    /// otherwise report a flow `estimate` answers 0 for.
     #[test]
     fn coco_rejects_a_key_in_a_bucket_it_does_not_hash_to() {
         let (rows, cols) = (1, 2);
@@ -463,7 +463,7 @@ mod tests {
         let mut cells = vec![(None, 0), (None, 0)];
         cells[wrong] = (Some(key.to_string()), 11);
 
-        let problem = Coco::<DefaultXxHasher>::deserialize_from_bytes(&craft(rows, cols, cells))
+        let problem = CocoSketch::<DefaultXxHasher>::from_asapv1(&craft(rows, cols, cells))
             .expect_err("a misplaced key must be rejected")
             .to_string();
         assert!(problem.contains("maps to column"), "got {problem}");
@@ -471,7 +471,7 @@ mod tests {
 
     /// An insert scans every mapped bucket before electing one, so a key holds
     /// at most one bucket table-wide. Two correctly placed copies are still
-    /// rejected: they would double-count in `estimate_key`.
+    /// rejected: they would double-count in `estimate`.
     #[test]
     fn coco_rejects_a_key_stored_in_two_buckets() {
         let (rows, cols) = (2, 2);
@@ -486,7 +486,7 @@ mod tests {
             "the two rows must place the key in distinct buckets"
         );
 
-        let problem = Coco::<DefaultXxHasher>::deserialize_from_bytes(&craft(rows, cols, cells))
+        let problem = CocoSketch::<DefaultXxHasher>::from_asapv1(&craft(rows, cols, cells))
             .expect_err("a duplicated key must be rejected")
             .to_string();
         assert!(problem.contains("repeats a key"), "got {problem}");
@@ -496,40 +496,40 @@ mod tests {
     /// bytes the decoder would refuse.
     #[test]
     fn coco_rejects_serializing_a_geometry_mismatch() {
-        let mut sketch: Coco = Coco::init_with_size(8, 4);
-        sketch.w = 16;
+        let mut sketch: CocoSketch = CocoSketch::init_with_size(8, 4);
+        sketch.cols = 16;
         assert!(
-            sketch.serialize_to_bytes().is_err(),
+            sketch.to_asapv1().is_err(),
             "a table whose bucket count disagrees with its geometry must not serialize"
         );
 
-        let empty: Coco = Coco::init_with_size(8, 0);
+        let empty: CocoSketch = CocoSketch::init_with_size(8, 0);
         assert!(
-            empty.serialize_to_bytes().is_err(),
+            empty.to_asapv1().is_err(),
             "a zero-dimension geometry must not serialize"
         );
     }
 
-    /// `Coco`'s table is public, so a caller can park a key in a bucket its row
+    /// `CocoSketch`'s table is public, so a caller can park a key in a bucket its row
     /// does not hash it to, or hold one key in two buckets. Both must fail the
     /// encode rather than emit bytes the decoder refuses.
     #[test]
     fn coco_rejects_serializing_a_hand_built_table() {
         let key = "flow::misplaced";
-        let mut misplaced: Coco = Coco::init_with_size(2, 1);
+        let mut misplaced: CocoSketch = CocoSketch::init_with_size(2, 1);
         let wrong = 1 - mapped_col(0, key, 2);
         misplaced.table.as_mut_slice()[wrong] = CocoBucket {
             full_key: Some(key.to_string()),
             val: 11,
         };
         let problem = misplaced
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a misplaced key must not serialize")
             .to_string();
         assert!(problem.contains("maps to column"), "got {problem}");
 
         let (rows, cols) = (2, 2);
-        let mut twice: Coco = Coco::init_with_size(cols, rows);
+        let mut twice: CocoSketch = CocoSketch::init_with_size(cols, rows);
         for row in 0..rows {
             twice.table.as_mut_slice()[row * cols + mapped_col(row, key, cols)] = CocoBucket {
                 full_key: Some(key.to_string()),
@@ -537,7 +537,7 @@ mod tests {
             };
         }
         let problem = twice
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a key in two buckets must not serialize")
             .to_string();
         assert!(problem.contains("repeats a key"), "got {problem}");
@@ -547,8 +547,8 @@ mod tests {
     /// key stays distinguishable from the buckets that hold nothing.
     #[test]
     fn coco_empty_buckets_are_nil_and_never_collide_with_an_empty_key() {
-        let all_empty: Coco = Coco::init_with_size(4, 2);
-        let encoded = all_empty.serialize_to_bytes().expect("serialize");
+        let all_empty: CocoSketch = CocoSketch::init_with_size(4, 2);
+        let encoded = all_empty.to_asapv1().expect("serialize");
         let (_, _, payload) = envelope::split(&encoded).expect("split");
         assert_eq!(
             payload.iter().filter(|&&b| b == 0xc0).count(),
@@ -556,37 +556,37 @@ mod tests {
             "nil per bucket"
         );
         assert!(!payload.contains(&0xa0), "no empty-string key is emitted");
-        let decoded: Coco = Coco::deserialize_from_bytes(&encoded).expect("deserialize");
+        let decoded: CocoSketch = CocoSketch::from_asapv1(&encoded).expect("deserialize");
         assert_eq!(cells(&all_empty), cells(&decoded));
         assert!(decoded.recorded_flows().next().is_none());
 
-        let mut with_empty_key: Coco = Coco::init_with_size(4, 2);
-        with_empty_key.insert("", 5);
-        let encoded = with_empty_key.serialize_to_bytes().expect("serialize");
+        let mut with_empty_key: CocoSketch = CocoSketch::init_with_size(4, 2);
+        with_empty_key.update_weighted("", 5);
+        let encoded = with_empty_key.to_asapv1().expect("serialize");
         let (_, _, payload) = envelope::split(&encoded).expect("split");
         assert!(payload.contains(&0xa0), "the inserted empty key is a str");
-        let decoded: Coco = Coco::deserialize_from_bytes(&encoded).expect("deserialize");
+        let decoded: CocoSketch = CocoSketch::from_asapv1(&encoded).expect("deserialize");
         assert_eq!(cells(&with_empty_key), cells(&decoded));
         assert_eq!(decoded.recorded_flows().count(), 1);
-        assert_eq!(decoded.estimate_key(""), 5);
+        assert_eq!(decoded.estimate(""), 5);
     }
 
     /// A table mixing occupied and free buckets round-trips bucket for bucket.
     #[test]
     fn coco_mixed_occupancy_round_trips() {
-        let mut sketch: Coco = Coco::init_with_size(16, 3);
+        let mut sketch: CocoSketch = CocoSketch::init_with_size(16, 3);
         for i in 0..10u64 {
-            sketch.insert(&format!("flow::{i}"), i + 1);
+            sketch.update_weighted(&format!("flow::{i}"), i + 1);
         }
         let occupied = sketch.recorded_flows().count();
         assert!(occupied > 0 && occupied < 16 * 3, "mix both bucket states");
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
-        let decoded: Coco = Coco::deserialize_from_bytes(&encoded).expect("deserialize");
+        let encoded = sketch.to_asapv1().expect("serialize");
+        let decoded: CocoSketch = CocoSketch::from_asapv1(&encoded).expect("deserialize");
         assert_eq!(cells(&sketch), cells(&decoded));
         for i in 0..10u64 {
             let key = format!("flow::{i}");
-            assert_eq!(sketch.estimate_key(&key), decoded.estimate_key(&key));
+            assert_eq!(sketch.estimate(&key), decoded.estimate(&key));
         }
     }
 
@@ -594,13 +594,13 @@ mod tests {
     /// re-serializes to the bytes it came from.
     #[test]
     fn coco_decoded_sketch_reserializes_byte_identically() {
-        let mut sketch: Coco = Coco::init_with_size(16, 3);
+        let mut sketch: CocoSketch = CocoSketch::init_with_size(16, 3);
         for i in 0..12u64 {
-            sketch.insert(&format!("fam{}|item{i}", i % 4), i % 5 + 1);
+            sketch.update_weighted(&format!("fam{}|item{i}", i % 4), i % 5 + 1);
         }
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
-        let decoded: Coco = Coco::deserialize_from_bytes(&encoded).expect("deserialize");
-        assert_eq!(encoded, decoded.serialize_to_bytes().expect("re-serialize"));
+        let encoded = sketch.to_asapv1().expect("serialize");
+        let decoded: CocoSketch = CocoSketch::from_asapv1(&encoded).expect("deserialize");
+        assert_eq!(encoded, decoded.to_asapv1().expect("re-serialize"));
     }
 
     // A test-only custom hasher: hashes exactly like `DefaultXxHasher` but
@@ -612,25 +612,25 @@ mod tests {
     impl SketchHasher for AltHasher {
         type HashType = <DefaultXxHasher as SketchHasher>::HashType;
 
-        fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
-            DefaultXxHasher::hash64_seeded(d, key)
+        fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(seed_index, key)
         }
-        fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
-            DefaultXxHasher::hash128_seeded(d, key)
+        fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(seed_index, key)
         }
-        fn hash_item64_seeded(d: usize, key: &crate::HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(seed_index: usize, key: &crate::OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(seed_index, key)
         }
-        fn hash_item128_seeded(d: usize, key: &crate::HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(seed_index: usize, key: &crate::OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(seed_index, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -642,32 +642,32 @@ mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
     #[test]
     fn coco_custom_hasher_profile_round_trips_and_is_self_describing() {
         // (a) A Coco built with a custom-profile hasher round-trips.
-        let mut alt: Coco<AltHasher> = Coco::init_with_size(8, 4);
-        let mut std: Coco = Coco::init_with_size(8, 4);
-        alt.insert("flow::42", 7);
-        alt.insert("flow::7", 3);
-        std.insert("flow::42", 7);
-        std.insert("flow::7", 3);
+        let mut alt: CocoSketch<AltHasher> = CocoSketch::init_with_size(8, 4);
+        let mut std: CocoSketch = CocoSketch::init_with_size(8, 4);
+        alt.update_weighted("flow::42", 7);
+        alt.update_weighted("flow::7", 3);
+        std.update_weighted("flow::42", 7);
+        std.update_weighted("flow::7", 3);
 
-        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
-        let decoded = Coco::<AltHasher>::deserialize_from_bytes(&alt_bytes).expect("alt decode");
+        let alt_bytes = alt.to_asapv1().expect("alt serialize");
+        let decoded = CocoSketch::<AltHasher>::from_asapv1(&alt_bytes).expect("alt decode");
         assert_eq!(cells(&alt), cells(&decoded));
 
         // (b) Bytes differ from the standard-profile sketch (metadata derived
         // from the different profile).
-        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        let std_bytes = std.to_asapv1().expect("std serialize");
         assert_ne!(alt_bytes, std_bytes);
 
         // (c) Standard-profile decode fails closed on custom-profile bytes.
         assert!(
-            Coco::<DefaultXxHasher>::deserialize_from_bytes(&alt_bytes).is_err(),
+            CocoSketch::<DefaultXxHasher>::from_asapv1(&alt_bytes).is_err(),
             "standard-profile decode must reject custom-profile bytes"
         );
     }

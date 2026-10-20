@@ -2,7 +2,7 @@
 //!
 //! Child submodule of [`crate::sketches::kmv`]: it holds ALL of KMV's
 //! serialization (the metadata/payload DTOs, the kind_id constant, and the
-//! `serialize_to_bytes` / `deserialize_from_bytes` impls) while the algorithm
+//! `to_asapv1` / `from_asapv1` impls) while the algorithm
 //! lives in the parent module file. Being a descendant module, it reads the
 //! sketch's private `_hasher` field and constructs the struct directly, without
 //! widening any field visibility. See `docs/asapv1_wire_format.md`.
@@ -29,12 +29,11 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use crate::message_pack_format::envelope;
-use crate::{CommonHeap, HashProfile, KeepLargest, SketchHasher};
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::KMV;
+use crate::{CommonHeap, HashProfile, RetainSmallest, SketchHasher};
 
-use super::KMV;
-
-/// KMV kind_id: family `0x0e`, single algorithm variant `0x00`.
-const KMV_KIND: &[u8] = &[0x0e, 0x00];
+use super::Kmv;
 
 /// KMV descriptor metadata (ASAPv1 §2), a msgpack **map** (`to_vec_named`) with
 /// keys in this declaration order — the canonical order the wire spec fixes (Go
@@ -84,7 +83,7 @@ struct KmvPayload {
 struct HeapSeed {
     data: Vec<u64>,
     size: usize,
-    order: KeepLargest,
+    order: RetainSmallest,
 }
 
 /// Rebuilds the retained heap through [`CommonHeap`]'s serde form, so the
@@ -94,17 +93,17 @@ struct HeapSeed {
 fn rebuild_heap(
     k: usize,
     ascending: Vec<u64>,
-) -> Result<CommonHeap<u64, KeepLargest>, RmpDecodeError> {
+) -> Result<CommonHeap<u64, RetainSmallest>, RmpDecodeError> {
     let len = ascending.len();
     let mut data = ascending;
     data.reverse();
     let seed = rmp_serde::to_vec_named(&HeapSeed {
         data,
         size: k,
-        order: KeepLargest,
+        order: RetainSmallest,
     })
     .map_err(|err| RmpDecodeError::Uncategorized(err.to_string()))?;
-    let heap: CommonHeap<u64, KeepLargest> = from_slice(&seed)?;
+    let heap: CommonHeap<u64, RetainSmallest> = from_slice(&seed)?;
     if heap.len() != len || heap.capacity() != k {
         return Err(RmpDecodeError::Uncategorized(format!(
             "KMV heap rebuild: {} of {len} hashes under a bound of {} against k {k}",
@@ -117,7 +116,7 @@ fn rebuild_heap(
 
 // Wire serialization for KMV. `wire` is a descendant of the sketch module, so
 // this impl constructs the struct with its private field directly.
-impl<H: SketchHasher + HashProfile> KMV<H> {
+impl<H: SketchHasher + HashProfile> Kmv<H> {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
     /// (kind_id `0x0e 0x00`). The metadata is derived from the hasher's
     /// [`HashProfile`], so it truthfully describes how the sketch was hashed.
@@ -127,7 +126,7 @@ impl<H: SketchHasher + HashProfile> KMV<H> {
     /// and the heap's own bound are both public, so a `k` that disagrees with
     /// the bound it is meant to name fails too: emitting it would rebuild the
     /// sketch around a different eviction bound.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let k = u32::try_from(self.k).map_err(|_| {
             RmpEncodeError::Syntax(format!("KMV k {} exceeds the u32 metadata field", self.k))
         })?;
@@ -149,16 +148,16 @@ impl<H: SketchHasher + HashProfile> KMV<H> {
                 "KMV holds the same hash twice".to_string(),
             ));
         }
-        if self.k_vals.capacity() != self.k {
+        if self.retained_hashes.capacity() != self.k {
             return Err(RmpEncodeError::Syntax(format!(
                 "KMV k {} disagrees with the retained bound {}",
                 self.k,
-                self.k_vals.capacity()
+                self.retained_hashes.capacity()
             )));
         }
         let metadata = rmp_serde::to_vec_named(&kmv_metadata::<H>(k))?;
         let payload = rmp_serde::to_vec(&KmvPayload { hashes })?;
-        Ok(envelope::encode(KMV_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::KMV, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. `k` is
@@ -169,12 +168,12 @@ impl<H: SketchHasher + HashProfile> KMV<H> {
     /// Every state the algorithm could not have produced is rejected with an
     /// error rather than a panic, and the declared `k` never sizes an
     /// allocation.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != KMV_KIND {
+        if kind_id != kind::KMV {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "KMV kind_id mismatch: stored {kind_id:?}, expected {KMV_KIND:?}"
+                "KMV kind_id mismatch: stored {kind_id:?}, expected {KMV:?}"
             )));
         }
         let meta: KmvMetadata = envelope::decode_block(metadata)?;
@@ -201,9 +200,9 @@ impl<H: SketchHasher + HashProfile> KMV<H> {
                 "KMV hashes are not strictly ascending".to_string(),
             ));
         }
-        Ok(KMV {
+        Ok(Kmv {
             k,
-            k_vals: rebuild_heap(k, decoded.hashes)?,
+            retained_hashes: rebuild_heap(k, decoded.hashes)?,
             _hasher: PhantomData,
         })
     }
@@ -211,7 +210,7 @@ impl<H: SketchHasher + HashProfile> KMV<H> {
     /// The retained hashes in emitted order, ascending. Independent of the
     /// heap's array order, so the bytes are stable across a round trip.
     fn wire_hashes(&self) -> Vec<u64> {
-        let mut hashes: Vec<u64> = self.k_vals.iter().copied().collect();
+        let mut hashes: Vec<u64> = self.retained_hashes.iter().copied().collect();
         hashes.sort_unstable();
         hashes
     }
@@ -220,12 +219,12 @@ impl<H: SketchHasher + HashProfile> KMV<H> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, HeapItem};
+    use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, OwnedDataInput};
 
-    fn populated(k: usize, keys: u64) -> KMV {
-        let mut sketch: KMV = KMV::new(k);
+    fn populated(k: usize, keys: u64) -> Kmv {
+        let mut sketch: Kmv = Kmv::new(k);
         for value in 0..keys {
-            sketch.insert(&DataInput::U64(value));
+            sketch.update(&DataInput::U64(value));
         }
         sketch
     }
@@ -243,16 +242,23 @@ mod tests {
     #[test]
     fn kmv_round_trip_serialization() {
         let mut sketch = populated(64, 5_000);
-        assert_eq!(sketch.k_vals.len(), 64, "the bound was never reached");
+        assert_eq!(
+            sketch.retained_hashes.len(),
+            64,
+            "the bound was never reached"
+        );
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize KMV");
+        let encoded = sketch.to_asapv1().expect("serialize KMV");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x0e, 0x00]); // kind_id_len=2, kind_id=[0x0e,0x00]
 
         let meta = metadata_of(&encoded);
         assert_eq!(meta.metadata_version, 1);
         assert_eq!(meta.k, 64);
-        assert_eq!(meta.canonical_seed_index, CANONICAL_HASH_SEED as u32);
+        assert_eq!(
+            meta.canonical_seed_index,
+            DEFAULT_CANONICAL_SEED_INDEX as u32
+        );
 
         let emitted = payload_of(&encoded);
         assert_eq!(emitted.hashes.len(), 64);
@@ -260,18 +266,21 @@ mod tests {
             assert!(pair[0] < pair[1], "the emitted hashes are not ascending");
         }
 
-        let mut decoded = KMV::<DefaultXxHasher>::deserialize_from_bytes(&encoded).expect("decode");
+        let mut decoded = Kmv::<DefaultXxHasher>::from_asapv1(&encoded).expect("decode");
         assert_eq!(decoded.k, sketch.k);
-        assert_eq!(decoded.k_vals.capacity(), sketch.k_vals.capacity());
+        assert_eq!(
+            decoded.retained_hashes.capacity(),
+            sketch.retained_hashes.capacity()
+        );
         assert_eq!(decoded.wire_hashes(), sketch.wire_hashes());
         assert_eq!(
-            decoded.k_vals.peek(),
+            decoded.retained_hashes.peek(),
             emitted.hashes.last(),
             "the rebuilt heap does not hold the largest hash at its root"
         );
         assert_eq!(decoded.estimate(), sketch.estimate());
         assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
+            decoded.to_asapv1().expect("re-serialize"),
             encoded,
             "KMV bytes differed after a round trip"
         );
@@ -282,65 +291,65 @@ mod tests {
     #[test]
     fn kmv_emitted_order_is_independent_of_insertion_order() {
         let keys: Vec<u64> = (0..2_000).collect();
-        let mut forward: KMV = KMV::new(32);
-        let mut backward: KMV = KMV::new(32);
+        let mut forward: Kmv = Kmv::new(32);
+        let mut backward: Kmv = Kmv::new(32);
         for value in &keys {
-            forward.insert(&DataInput::U64(*value));
+            forward.update(&DataInput::U64(*value));
         }
         for value in keys.iter().rev() {
-            backward.insert(&DataInput::U64(*value));
+            backward.update(&DataInput::U64(*value));
         }
-        assert_eq!(forward.k_vals.len(), 32);
+        assert_eq!(forward.retained_hashes.len(), 32);
         assert_ne!(
-            forward.k_vals.as_slice(),
-            backward.k_vals.as_slice(),
+            forward.retained_hashes.as_slice(),
+            backward.retained_hashes.as_slice(),
             "the fixture cannot tell the emitted order from the heap order"
         );
 
-        let bytes = forward.serialize_to_bytes().expect("serialize");
+        let bytes = forward.to_asapv1().expect("serialize");
         assert_eq!(
             bytes,
-            backward.serialize_to_bytes().expect("serialize"),
+            backward.to_asapv1().expect("serialize"),
             "the emitted order followed the insertion order"
         );
 
-        let decoded = KMV::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        let decoded = Kmv::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     /// A sketch that retains nothing has exactly one encoding: an empty
     /// `hashes` array beside its bound.
     #[test]
     fn kmv_empty_round_trip() {
-        let sketch: KMV = KMV::new(16);
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        let sketch: Kmv = Kmv::new(16);
+        let bytes = sketch.to_asapv1().expect("serialize");
         assert_eq!(metadata_of(&bytes).k, 16);
         assert!(payload_of(&bytes).hashes.is_empty());
 
-        let mut decoded = KMV::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let mut decoded = Kmv::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.k, 16);
-        assert_eq!(decoded.k_vals.len(), 0);
-        assert_eq!(decoded.k_vals.capacity(), 16);
+        assert_eq!(decoded.retained_hashes.len(), 0);
+        assert_eq!(decoded.retained_hashes.capacity(), 16);
         assert_eq!(decoded.estimate(), 0.0);
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     /// The retained values are 64-bit digests and are carried at that width.
     #[test]
     fn kmv_carries_hashes_at_full_u64_width() {
-        let mut sketch: KMV = KMV::new(4);
+        let mut sketch: Kmv = Kmv::new(4);
         for value in [0u64, 1, u64::MAX / 2, u64::MAX] {
-            sketch.insert_by_hash(value);
+            sketch.update_with_hash(value);
         }
-        let bytes = sketch.serialize_to_bytes().expect("serialize");
+        let bytes = sketch.to_asapv1().expect("serialize");
         assert_eq!(
             payload_of(&bytes).hashes,
             vec![0, 1, u64::MAX / 2, u64::MAX]
         );
 
-        let decoded = KMV::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let decoded = Kmv::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.wire_hashes(), vec![0, 1, u64::MAX / 2, u64::MAX]);
-        assert_eq!(decoded.serialize_to_bytes().expect("re-serialize"), bytes);
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
     /// KMV and HLL are both single-hash cardinality sketches; a foreign
@@ -348,9 +357,11 @@ mod tests {
     #[test]
     fn kmv_rejects_foreign_kind_id() {
         let cms =
-            crate::CountMin::<crate::Vector2D<i64>, crate::RegularPath>::with_dimensions(3, 8);
-        let cms_bytes = cms.serialize_to_bytes().expect("serialize CMS");
-        let problem = KMV::<DefaultXxHasher>::deserialize_from_bytes(&cms_bytes)
+            crate::CountMinSketch::<crate::Vector2D<i64>, crate::RegularPath>::with_dimensions(
+                3, 8,
+            );
+        let cms_bytes = cms.to_asapv1().expect("serialize CMS");
+        let problem = Kmv::<DefaultXxHasher>::from_asapv1(&cms_bytes)
             .expect_err("CMS bytes must not decode as a KMV")
             .to_string();
         assert!(problem.contains("kind_id mismatch"), "got {problem}");
@@ -425,7 +436,7 @@ mod tests {
     fn crafted(k: u32, hashes: Vec<u64>) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(&kmv_metadata::<DefaultXxHasher>(k)).expect("meta");
         let payload = rmp_serde::to_vec(&KmvPayload { hashes }).expect("payload");
-        envelope::encode(KMV_KIND, &metadata, &payload)
+        envelope::encode(kind::KMV, &metadata, &payload)
     }
 
     #[test]
@@ -437,7 +448,7 @@ mod tests {
             (crafted(4, vec![1, 1, 2]), "not strictly ascending"),
         ];
         for (bytes, expected) in cases {
-            let problem = KMV::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
+            let problem = Kmv::<DefaultXxHasher>::from_asapv1(&bytes)
                 .expect_err("a crafted envelope must be rejected, not decoded")
                 .to_string();
             assert!(
@@ -454,9 +465,9 @@ mod tests {
         let metadata = rmp_serde::to_vec_named(&kmv_metadata::<DefaultXxHasher>(4)).expect("meta");
         // fixarray(1), array32 declaring 2^30 elements, then two of them.
         let payload = vec![0x91, 0xdd, 0x40, 0x00, 0x00, 0x00, 0x01, 0x02];
-        let bytes = envelope::encode(KMV_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::KMV, &metadata, &payload);
         assert!(
-            KMV::<DefaultXxHasher>::deserialize_from_bytes(&bytes).is_err(),
+            Kmv::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "an over-declared hash count must be rejected, not allocated"
         );
     }
@@ -467,13 +478,17 @@ mod tests {
     #[test]
     fn kmv_does_not_allocate_a_declared_k() {
         let bytes = crafted(u32::MAX, vec![7, 9]);
-        let mut decoded = KMV::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let mut decoded = Kmv::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.k, u32::MAX as usize);
-        assert_eq!(decoded.k_vals.len(), 2);
+        assert_eq!(decoded.retained_hashes.len(), 2);
         assert_eq!(decoded.estimate(), 2.0);
 
-        decoded.insert_by_hash(11);
-        assert_eq!(decoded.k_vals.len(), 3, "the bound evicted instead");
+        decoded.update_with_hash(11);
+        assert_eq!(
+            decoded.retained_hashes.len(),
+            3,
+            "the bound evicted instead"
+        );
         assert_eq!(decoded.wire_hashes(), vec![7, 9, 11]);
     }
 
@@ -481,13 +496,13 @@ mod tests {
     /// would emit a `k` no decode accepts.
     #[test]
     fn kmv_refuses_a_k_the_metadata_cannot_carry() {
-        let sketch: KMV = KMV {
+        let sketch: Kmv = Kmv {
             k: 1 << 40,
-            k_vals: CommonHeap::new_max(1),
+            retained_hashes: CommonHeap::new_max(1),
             _hasher: PhantomData,
         };
         let problem = sketch
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("an oversized k must not serialize")
             .to_string();
         assert!(
@@ -500,21 +515,18 @@ mod tests {
     /// emits bytes it would read back as invalid.
     #[test]
     fn kmv_refuses_to_serialize_a_state_decode_would_reject() {
-        let empty: KMV = KMV::new(0);
-        assert!(
-            empty.serialize_to_bytes().is_err(),
-            "a k of zero must not serialize"
-        );
+        let empty: Kmv = Kmv::new(0);
+        assert!(empty.to_asapv1().is_err(), "a k of zero must not serialize");
 
-        let mut over: KMV = KMV {
+        let mut over: Kmv = Kmv {
             k: 1,
-            k_vals: CommonHeap::new_max(4),
+            retained_hashes: CommonHeap::new_max(4),
             _hasher: PhantomData,
         };
-        over.insert_by_hash(3);
-        over.insert_by_hash(5);
+        over.update_with_hash(3);
+        over.update_with_hash(5);
         let problem = over
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a retained set past k must not serialize")
             .to_string();
         assert!(problem.contains("2 hashes over a k of 1"), "got {problem}");
@@ -526,11 +538,11 @@ mod tests {
     /// direction, so the encode refuses both.
     #[test]
     fn kmv_refuses_a_k_that_disagrees_with_the_retained_bound() {
-        let mut wider: KMV = KMV::new(4);
-        wider.insert_by_hash(7);
+        let mut wider: Kmv = Kmv::new(4);
+        wider.update_with_hash(7);
         wider.k = 100;
         let problem = wider
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a k over the retained bound must not serialize")
             .to_string();
         assert!(
@@ -538,13 +550,13 @@ mod tests {
             "got {problem}"
         );
 
-        let narrower: KMV = KMV {
+        let narrower: Kmv = Kmv {
             k: 1,
-            k_vals: CommonHeap::new_max(4),
+            retained_hashes: CommonHeap::new_max(4),
             _hasher: PhantomData,
         };
         let problem = narrower
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a k under the retained bound must not serialize")
             .to_string();
         assert!(
@@ -564,25 +576,25 @@ mod tests {
     impl SketchHasher for AltHasher {
         type HashType = <DefaultXxHasher as SketchHasher>::HashType;
 
-        fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
-            DefaultXxHasher::hash64_seeded(d, key)
+        fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(seed_index, key)
         }
-        fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
-            DefaultXxHasher::hash128_seeded(d, key)
+        fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(seed_index, key)
         }
-        fn hash_item64_seeded(d: usize, key: &HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(seed_index, key)
         }
-        fn hash_item128_seeded(d: usize, key: &HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(seed_index, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -594,37 +606,34 @@ mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
     #[test]
     fn kmv_custom_hasher_profile_round_trips_and_is_self_describing() {
-        let mut alt: KMV<AltHasher> = KMV::new(16);
-        let mut std: KMV = KMV::new(16);
+        let mut alt: Kmv<AltHasher> = Kmv::new(16);
+        let mut std: Kmv = Kmv::new(16);
         for value in 0..500u64 {
-            alt.insert(&DataInput::U64(value));
-            std.insert(&DataInput::U64(value));
+            alt.update(&DataInput::U64(value));
+            std.update(&DataInput::U64(value));
         }
 
         // (a) A sketch built with a custom-profile hasher round-trips.
-        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
-        let decoded = KMV::<AltHasher>::deserialize_from_bytes(&alt_bytes).expect("alt decode");
+        let alt_bytes = alt.to_asapv1().expect("alt serialize");
+        let decoded = Kmv::<AltHasher>::from_asapv1(&alt_bytes).expect("alt decode");
         assert_eq!(decoded.wire_hashes(), alt.wire_hashes());
-        assert_eq!(
-            decoded.serialize_to_bytes().expect("re-serialize"),
-            alt_bytes
-        );
+        assert_eq!(decoded.to_asapv1().expect("re-serialize"), alt_bytes);
 
         // (b) Bytes differ from the standard-profile sketch (the two hash
         // identically, so only the metadata separates them).
-        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        let std_bytes = std.to_asapv1().expect("std serialize");
         assert_eq!(std.wire_hashes(), alt.wire_hashes());
         assert_ne!(alt_bytes, std_bytes);
 
         // (c) Standard-profile decode fails closed on custom-profile bytes.
         assert!(
-            KMV::<DefaultXxHasher>::deserialize_from_bytes(&alt_bytes).is_err(),
+            Kmv::<DefaultXxHasher>::from_asapv1(&alt_bytes).is_err(),
             "standard-profile decode must reject custom-profile bytes"
         );
     }

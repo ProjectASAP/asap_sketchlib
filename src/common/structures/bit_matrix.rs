@@ -517,8 +517,8 @@ mod tests {
     fn a_packed_64_grid_decodes_a_distinct_window_per_row() {
         let (rows, cols) = (5, 1024);
         assert_eq!(
-            crate::hash_mode_for_matrix(rows, cols),
-            crate::MatrixHashMode::Packed64
+            crate::hash_layout_for_matrix(rows, cols),
+            crate::MatrixHashLayout::Packed64
         );
         let mut m = BitMatrix::new(rows, cols);
         for key in 0..300u64 {

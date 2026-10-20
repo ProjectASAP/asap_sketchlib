@@ -1,5 +1,5 @@
 //! E2E suites for feature-gated (`experimental`) sketches: KMV cardinality,
-//! UniformSampling's retention rate, both tiers of EHUnivOptimized, and
+//! UniformSampling's retention rate, both tiers of ExponentialHistogramUnivMon, and
 //! CountMinHll's per-key distinct counts.
 //!
 //! CocoSketch and the Elastic sketch are a family of their own;
@@ -13,8 +13,8 @@ use common::specs::{CardinalityConfidenceSpec, PrioritySampleSpec, Tally};
 use common::{FreqTruth, assert_between, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
-    CountMinHll, DataInput, DefaultXxHasher, EHUnivOptimized, EHUnivQueryResult, HeapItem, KMV,
-    MatrixFastHash, SketchHasher, UniformSampling,
+    CountMinHll, DataInput, DefaultXxHasher, EhUnivMonQueryResult, ExponentialHistogramUnivMon,
+    Kmv, MatrixFastHash, OwnedDataInput, SketchHasher, UniformSampling,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -31,7 +31,7 @@ const KMV_Z: f64 = 4.0;
 
 /// Seed-list indices used as independent hash functions.
 ///
-/// `KMV::insert_by_hash` is public and `DefaultXxHasher::hash64_seeded(d, ..)`
+/// `Kmv::update_with_hash` is public and `DefaultXxHasher::hash64_seeded(d, ..)`
 /// selects seed `d` from the library's 20-entry table, so a trial can be run
 /// under a genuinely different hash rather than under a relabelled key set. The
 /// randomness KMV's error model quantifies over *is* the hash, so this is the
@@ -73,15 +73,15 @@ const KMV_REGIMES: [KmvRegime; 6] = [
 ///
 /// The namespace makes two trials that share a hash seed still see disjoint
 /// identities, so no two trials in the battery share any randomness at all.
-fn kmv_trial(k: usize, n: usize, seed_idx: usize, namespace: u64) -> KMV {
-    let mut sketch: KMV = KMV::new(k);
+fn kmv_trial(k: usize, n: usize, seed_index: usize, namespace: u64) -> Kmv {
+    let mut sketch: Kmv = Kmv::new(k);
     for i in 0..n as u64 {
         let hashed =
             <asap_sketchlib::DefaultXxHasher as asap_sketchlib::SketchHasher>::hash64_seeded(
-                seed_idx,
+                seed_index,
                 &DataInput::U64(namespace.wrapping_add(i)),
             );
-        sketch.insert_by_hash(hashed);
+        sketch.update_with_hash(hashed);
     }
     sketch
 }
@@ -91,7 +91,7 @@ fn kmv_trial(k: usize, n: usize, seed_idx: usize, namespace: u64) -> KMV {
 ///
 /// # The estimator, and the two numbers that follow from it
 ///
-/// `KMV::estimate` returns `(k - 1) / U_(k)`, where `U_(k)` is the largest of
+/// `Kmv::estimate` returns `(k - 1) / U_(k)`, where `U_(k)` is the largest of
 /// the `k` smallest normalized hashes. With `n` distinct uniform hashes
 /// `U_(k) ~ Beta(k, n-k+1)`, so
 ///
@@ -118,16 +118,16 @@ fn kmv_estimates_stay_inside_their_relative_standard_error_band_over_independent
     let mut namespace = 0u64;
     for &k in &KS {
         let spec = CardinalityConfidenceSpec::kmv(k, KMV_Z);
-        for (s, &seed_idx) in KMV_HASH_SEEDS.iter().enumerate() {
+        for (s, &seed_index) in KMV_HASH_SEEDS.iter().enumerate() {
             for regime in KMV_REGIMES {
                 let n = regime.n(k);
                 namespace = namespace.wrapping_add(NAMESPACE_STRIDE);
-                let mut sketch = kmv_trial(k, n, seed_idx, namespace);
+                let mut sketch = kmv_trial(k, n, seed_index, namespace);
                 let estimate = sketch.estimate();
                 let outcome = spec.check(estimate, n);
                 tally.record(outcome.is_ok(), || {
                     format!(
-                        "k={k} seed_idx={seed_idx} (trial {s}) {regime:?} n={n} \
+                        "k={k} seed_idx={seed_index} (trial {s}) {regime:?} n={n} \
                          namespace={namespace:#x}: {}",
                         outcome.unwrap_err()
                     )
@@ -152,8 +152,8 @@ const NAMESPACE_STRIDE: u64 = 1 << 40;
 
 /// The exact/estimated boundary is at `n < k`, **not** `n <= k`.
 ///
-/// `KMV::estimate` returns the retained count verbatim only while
-/// `k_vals.len() < k`. At `n == k` the buffer is full and the estimator runs,
+/// `Kmv::estimate` returns the retained count verbatim only while
+/// `retained_hashes.len() < k`. At `n == k` the buffer is full and the estimator runs,
 /// so the answer is `(k-1)/U_(k)` over the maximum of `k` uniforms — unbiased,
 /// but with a standard deviation of `sqrt(k / (k-2))`, about one element. A
 /// spec that treated `n == k` as exact would be demanding exactness of a
@@ -175,7 +175,7 @@ fn kmv_is_exact_below_k_and_estimates_at_k() {
     );
 
     for n in [1usize, 2, K / 2, K - 2, K - 1] {
-        let mut sketch: KMV = kmv_trial(K, n, 0, NAMESPACE_STRIDE * 900 + n as u64 * 4096);
+        let mut sketch: Kmv = kmv_trial(K, n, 0, NAMESPACE_STRIDE * 900 + n as u64 * 4096);
         assert_eq!(
             sketch.estimate(),
             n as f64,
@@ -187,12 +187,12 @@ fn kmv_is_exact_below_k_and_estimates_at_k() {
     // unbiased; the point of this assertion is that the answer is *not* pinned
     // to k, so the exact-regime branch must not claim it.
     let mut estimates = Vec::new();
-    for (i, &seed_idx) in KMV_HASH_SEEDS.iter().enumerate() {
-        let mut sketch = kmv_trial(K, K, seed_idx, NAMESPACE_STRIDE * (1_000 + i as u64));
+    for (i, &seed_index) in KMV_HASH_SEEDS.iter().enumerate() {
+        let mut sketch = kmv_trial(K, K, seed_index, NAMESPACE_STRIDE * (1_000 + i as u64));
         let est = sketch.estimate();
         assert!(
             spec.check(est, K).is_ok(),
-            "n = k = {K} under seed {seed_idx}: {}",
+            "n = k = {K} under seed {seed_index}: {}",
             spec.check(est, K).unwrap_err()
         );
         estimates.push(est);
@@ -221,15 +221,15 @@ fn kmv_duplicates_are_inert_and_a_shard_merge_reproduces_the_single_pass_exactly
     let stream = uniform_u64(60_000, 500_000, STREAM_SEED);
     let truth: std::collections::HashSet<u64> = stream.iter().copied().collect();
 
-    let mut full: KMV = KMV::new(K);
-    let mut a: KMV = KMV::new(K);
-    let mut b: KMV = KMV::new(K);
+    let mut full: Kmv = Kmv::new(K);
+    let mut a: Kmv = Kmv::new(K);
+    let mut b: Kmv = Kmv::new(K);
     for (i, k) in stream.iter().enumerate() {
-        full.insert(&DataInput::U64(*k));
+        full.update(&DataInput::U64(*k));
         if i % 2 == 0 {
-            a.insert(&DataInput::U64(*k));
+            a.update(&DataInput::U64(*k));
         } else {
-            b.insert(&DataInput::U64(*k));
+            b.update(&DataInput::U64(*k));
         }
     }
 
@@ -244,7 +244,7 @@ fn kmv_duplicates_are_inert_and_a_shard_merge_reproduces_the_single_pass_exactly
     // already retained is skipped, and one that was not retained cannot
     // displace anything smaller.
     for k in &stream {
-        full.insert(&DataInput::U64(*k));
+        full.update(&DataInput::U64(*k));
     }
     assert_eq!(
         full.estimate(),
@@ -516,38 +516,38 @@ fn uniform_sampling_is_reproducible_from_its_seed() {
     );
 }
 
-// --------------------------------------------------------- EHUnivOptimized
+// --------------------------------------------------------- ExponentialHistogramUnivMon
 
-/// A configuration whose promotion threshold (`layer_size * rows * cols`) is
+/// A configuration whose promotion threshold (`layers * rows * cols`) is
 /// small enough that the sketch tier is actually populated by a test-sized
 /// stream, while `cols` stays wide enough for the UnivMon layers to be
 /// meaningful.
-fn promoting_eh(k: usize, window: u64) -> EHUnivOptimized {
-    EHUnivOptimized::new(k, window, 32, EH_ROWS, EH_COLS, EH_LAYERS)
+fn promoting_eh(k: usize, window: u64) -> ExponentialHistogramUnivMon {
+    ExponentialHistogramUnivMon::new(k, window, 32, EH_ROWS, EH_COLS, EH_LAYERS)
 }
 
 const EH_ROWS: usize = 3;
 const EH_COLS: usize = 512;
 const EH_LAYERS: usize = 2;
 /// Smaller `k` merges buckets more aggressively, so the oldest map bucket
-/// reaches the promotion threshold (`layer_size * rows * cols / 2` distinct
+/// reaches the promotion threshold (`layers * rows * cols / 2` distinct
 /// keys) within a test-sized stream.
 const EH_K: usize = 2;
 
 #[test]
 fn eh_univ_optimized_map_tier_exact_windows() {
     let window = 100u64;
-    let mut eh = EHUnivOptimized::with_defaults(2, window);
+    let mut eh = ExponentialHistogramUnivMon::with_defaults(2, window);
 
     for t in 0..150u64 {
-        eh.update(t, &DataInput::U32((t % 10) as u32), (t as i64 % 3) + 1);
+        eh.update_weighted(t, &DataInput::U32((t % 10) as u32), (t as i64 % 3) + 1);
     }
 
     // Interval fully inside the retained range: map tier answers EXACTLY.
     match eh.query_interval(120, 149) {
-        Some(EHUnivQueryResult::Map {
-            freq_map,
-            total_count,
+        Some(EhUnivMonQueryResult::Exact {
+            counts,
+            total_weight: total_count,
         }) => {
             let expect_total: usize = (120..=149u64).map(|t| (t as i64 % 3 + 1) as usize).sum();
             assert_eq!(total_count, expect_total, "interval total");
@@ -555,14 +555,10 @@ fn eh_univ_optimized_map_tier_exact_windows() {
             for t in 120..=149 {
                 *expect_freq.entry((t % 10) as u32).or_insert(0) += (t as i64 % 3) + 1;
             }
-            assert_eq!(
-                expect_freq.len(),
-                freq_map.len(),
-                "distinct keys in interval"
-            );
+            assert_eq!(expect_freq.len(), counts.len(), "distinct keys in interval");
             for (k, v) in expect_freq {
                 assert_eq!(
-                    freq_map.get(&HeapItem::U32(k)),
+                    counts.get(&OwnedDataInput::U32(k)),
                     Some(&v),
                     "interval count for key {k}"
                 );
@@ -576,15 +572,15 @@ fn eh_univ_optimized_map_tier_exact_windows() {
 /// answers interval queries — with the error model of a UnivMon sketch, not
 /// the map tier's exactness.
 ///
-/// `UnivMon::calc_l1` returns the maintained `bucket_size`, an exactly
+/// `UnivMon::estimate_l1` returns the maintained `total_weight`, an exactly
 /// accumulated weight, so L1 is asserted by equality on both tiers. L2 comes
-/// out of UnivMon's recursive g-sum recurrence across `layer_size` sampled
+/// out of UnivMon's recursive g-sum recurrence across `layers` sampled
 /// substreams, for which the crate publishes no closed-form constant, so it is
 /// a documented empirical band and is named as such.
 ///
 /// The stream is deliberately **skewed**. UnivMon recovers a g-sum from the
 /// heavy hitters it can isolate at each layer, and promotion guarantees the
-/// promoted sketch holds at least `layer_size * rows * cols / 2` distinct keys
+/// promoted sketch holds at least `layers * rows * cols / 2` distinct keys
 /// — so a flat stream leaves the counters uniformly loaded with nothing
 /// recoverable. Measured on this configuration, L2 lands within 3% of exact on
 /// a Zipf(1.1) stream and 57% *below* exact on a uniform one. That is a
@@ -603,26 +599,26 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
     let keys = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut eh = promoting_eh(EH_K, 100_000_000);
     for (t, k) in keys.iter().enumerate() {
-        eh.update(t as u64, &DataInput::U64(*k), 1);
+        eh.update_weighted(t as u64, &DataInput::U64(*k), 1);
     }
 
     assert!(
-        eh.um_buckets.len() >= 2,
+        eh.sketch_buckets.len() >= 2,
         "test premise: the map tier must have promoted at least two sketch \
          buckets (max_map_size={}, got {} sketch and {} map buckets)",
-        eh.max_map_size,
-        eh.um_buckets.len(),
-        eh.map_buckets.len()
+        eh.exact_bucket_budget,
+        eh.sketch_buckets.len(),
+        eh.exact_buckets.len()
     );
 
     // Query exactly the span the sketch tier covers. Both endpoints are public
     // bucket boundaries, so the reference window is known exactly.
-    let lo = eh.um_buckets[0].min_time;
-    let hi = eh.um_buckets[eh.um_buckets.len() - 1].max_time;
+    let lo = eh.sketch_buckets[0].min_time;
+    let hi = eh.sketch_buckets[eh.sketch_buckets.len() - 1].max_time;
     let result = eh.query_interval(lo, hi).expect("sketch-tier interval");
     match &result {
-        EHUnivQueryResult::Sketch(_) => {}
-        EHUnivQueryResult::Map { .. } => panic!(
+        EhUnivMonQueryResult::Sketch(_) => {}
+        EhUnivMonQueryResult::Exact { .. } => panic!(
             "expected a Sketch-tier result for the promoted span [{lo}, {hi}]; \
              got the exact map tier, so promotion did not take effect"
         ),
@@ -643,14 +639,14 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
 
     // L1 is maintained, not estimated.
     assert_eq!(
-        result.calc_l1(),
+        result.estimate_l1(),
         truth.total() as f64,
         "sketch-tier L1 must be exact. {context}"
     );
 
     let l2_truth = truth.l2_norm();
     assert_between(
-        result.calc_l2(),
+        result.estimate_l2(),
         l2_truth * 0.90,
         l2_truth * 1.10,
         &format!("EHUnivOptimized sketch-tier L2 (empirical band). {context}"),
@@ -658,7 +654,7 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
 
     let entropy_bits = truth.entropy(true);
     assert_between(
-        result.calc_entropy(),
+        result.estimate_entropy(),
         entropy_bits * 0.90,
         entropy_bits * 1.40,
         &format!("EHUnivOptimized sketch-tier entropy in bits (empirical band). {context}"),
@@ -671,11 +667,11 @@ fn eh_univ_optimized_promotes_into_the_sketch_tier_and_answers_from_it() {
 /// UnivMon recovers `F0` from the deepest sampled layer, which needs roughly
 /// `log2(distinct)` layers before the surviving substream is small enough for
 /// the per-layer heap to hold it. But promotion only fires once the oldest map
-/// bucket holds `layer_size * rows * cols / 2` distinct keys, so the promoted
-/// sketch always carries at least `192 * layer_size` distinct keys (at the
+/// bucket holds `layers * rows * cols / 2` distinct keys, so the promoted
+/// sketch always carries at least `192 * layers` distinct keys (at the
 /// smallest sensible `rows = 3`, `cols = 128`), needing about
-/// `7.6 + log2(layer_size)` layers — more than `layer_size` for every
-/// configuration below about 13 layers, and raising `layer_size` raises the
+/// `7.6 + log2(layers)` layers — more than `layers` for every
+/// configuration below about 13 layers, and raising `layers` raises the
 /// promotion threshold in lockstep. The two requirements cannot both be met by
 /// tuning.
 ///
@@ -694,10 +690,10 @@ fn eh_univ_optimized_sketch_tier_cardinality_is_documented_as_unrecoverable() {
     let keys = zipf_u64(N, DOMAIN, 1.1, 4242);
     let mut eh = promoting_eh(EH_K, 100_000_000);
     for (t, k) in keys.iter().enumerate() {
-        eh.update(t as u64, &DataInput::U64(*k), 1);
+        eh.update_weighted(t as u64, &DataInput::U64(*k), 1);
     }
-    let lo = eh.um_buckets[0].min_time;
-    let hi = eh.um_buckets[eh.um_buckets.len() - 1].max_time;
+    let lo = eh.sketch_buckets[0].min_time;
+    let hi = eh.sketch_buckets[eh.sketch_buckets.len() - 1].max_time;
     let result = eh.query_interval(lo, hi).expect("sketch-tier interval");
 
     let mut truth = FreqTruth::default();
@@ -705,7 +701,7 @@ fn eh_univ_optimized_sketch_tier_cardinality_is_documented_as_unrecoverable() {
         truth.observe(keys[t as usize] as i64);
     }
     let distinct = truth.distinct() as f64;
-    let reported = result.calc_card();
+    let reported = result.estimate_cardinality();
 
     // The promotion threshold really does outrun the layer count.
     let needed_layers = distinct.log2().ceil();
@@ -733,17 +729,17 @@ fn eh_univ_optimized_answers_a_mixed_map_and_sketch_interval() {
 
     let mut eh = promoting_eh(EH_K, 1_000_000);
     for t in 0..N {
-        eh.update(t, &DataInput::U64(t % DOMAIN), 1);
+        eh.update_weighted(t, &DataInput::U64(t % DOMAIN), 1);
     }
-    assert!(!eh.um_buckets.is_empty() && !eh.map_buckets.is_empty());
+    assert!(!eh.sketch_buckets.is_empty() && !eh.exact_buckets.is_empty());
 
     // From inside the sketch tier to the newest map bucket.
-    let lo = eh.um_buckets[0].min_time;
-    let hi = eh.map_buckets[eh.map_buckets.len() - 1].max_time;
+    let lo = eh.sketch_buckets[0].min_time;
+    let hi = eh.exact_buckets[eh.exact_buckets.len() - 1].max_time;
     let result = eh.query_interval(lo, hi).expect("mixed interval");
     match &result {
-        EHUnivQueryResult::Sketch(_) => {}
-        EHUnivQueryResult::Map { .. } => {
+        EhUnivMonQueryResult::Sketch(_) => {}
+        EhUnivMonQueryResult::Exact { .. } => {
             panic!("a span starting in the sketch tier must be answered as a Sketch")
         }
     }
@@ -753,7 +749,7 @@ fn eh_univ_optimized_answers_a_mixed_map_and_sketch_interval() {
         truth.observe((t % DOMAIN) as i64);
     }
     assert_eq!(
-        result.calc_l1(),
+        result.estimate_l1(),
         truth.total() as f64,
         "mixed-tier L1 must still be the exact window weight over [{lo}, {hi}]"
     );
@@ -767,11 +763,11 @@ fn eh_univ_optimized_expires_buckets_past_the_window() {
     const WINDOW: u64 = 5_000;
     let mut eh = promoting_eh(8, WINDOW);
     for t in 0..40_000u64 {
-        eh.update(t, &DataInput::U64(t % 8_000), 1);
+        eh.update_weighted(t, &DataInput::U64(t % 8_000), 1);
     }
 
-    let min_time = eh.get_min_time().expect("buckets present");
-    let max_time = eh.get_max_time().expect("buckets present");
+    let min_time = eh.min_time().expect("buckets present");
+    let max_time = eh.max_time().expect("buckets present");
     assert_eq!(max_time, 39_999, "newest retained time");
 
     // The expiry rule drops a bucket once its *max_time* falls below the
@@ -783,7 +779,7 @@ fn eh_univ_optimized_expires_buckets_past_the_window() {
         min_time <= max_time,
         "retained span [{min_time}, {max_time}] must be ordered"
     );
-    for b in &eh.um_buckets {
+    for b in &eh.sketch_buckets {
         assert!(
             b.max_time >= cutoff,
             "sketch bucket [{}, {}] is entirely older than the cutoff {cutoff}",
@@ -791,7 +787,7 @@ fn eh_univ_optimized_expires_buckets_past_the_window() {
             b.max_time
         );
     }
-    for b in &eh.map_buckets {
+    for b in &eh.exact_buckets {
         assert!(
             b.max_time >= cutoff,
             "map bucket [{}, {}] is entirely older than the cutoff {cutoff}",
@@ -811,7 +807,7 @@ fn eh_univ_optimized_expires_buckets_past_the_window() {
     // Continuing past the window must not grow the structure without bound.
     let buckets_before = eh.bucket_count();
     for t in 40_000..70_000u64 {
-        eh.update(t, &DataInput::U64(t % 8_000), 1);
+        eh.update_weighted(t, &DataInput::U64(t % 8_000), 1);
     }
     assert!(
         eh.bucket_count() <= buckets_before * 2,
@@ -829,11 +825,11 @@ fn eh_univ_optimized_reuses_pooled_sketches_without_leaking_state() {
     // and expired repeatedly and the pool is exercised.
     let mut eh = promoting_eh(8, 20_000);
     for t in 0..80_000u64 {
-        eh.update(t, &DataInput::U64(t % DOMAIN), 1);
+        eh.update_weighted(t, &DataInput::U64(t % DOMAIN), 1);
     }
 
-    let lo = eh.get_min_time().expect("buckets");
-    let hi = eh.get_max_time().expect("buckets");
+    let lo = eh.min_time().expect("buckets");
+    let hi = eh.max_time().expect("buckets");
     let result = eh.query_interval(lo, hi).expect("interval");
     let mut truth = FreqTruth::default();
     for t in lo..=hi {
@@ -842,7 +838,7 @@ fn eh_univ_optimized_reuses_pooled_sketches_without_leaking_state() {
     // A pooled sketch that kept counters from a previous window would inflate
     // L1 above the retained window's exact weight.
     assert_eq!(
-        result.calc_l1(),
+        result.estimate_l1(),
         truth.total() as f64,
         "L1 over the retained span [{lo}, {hi}] must equal the exact window weight; \
          a larger value means a recycled sketch carried state across windows"
@@ -856,24 +852,24 @@ fn eh_univ_optimized_reuses_pooled_sketches_without_leaking_state() {
 #[test]
 fn eh_univ_optimized_map_tier_matches_exact_per_key_counts_on_a_skewed_stream() {
     const N: u64 = 4_000;
-    let mut eh = EHUnivOptimized::with_defaults(4, 1_000_000);
+    let mut eh = ExponentialHistogramUnivMon::with_defaults(4, 1_000_000);
     let keys = zipf_u64(N as usize, 64, 1.2, 9_001);
     let mut truth = FreqTruth::default();
     for (t, k) in keys.iter().enumerate() {
         let w = 1 + (t % 3) as i64;
-        eh.update(t as u64, &DataInput::U64(*k), w);
+        eh.update_weighted(t as u64, &DataInput::U64(*k), w);
         truth.observe_weighted(*k as i64, w);
     }
 
     match eh.query_interval(0, N - 1) {
-        Some(EHUnivQueryResult::Map {
-            freq_map,
-            total_count,
+        Some(EhUnivMonQueryResult::Exact {
+            counts,
+            total_weight: total_count,
         }) => {
             assert_eq!(total_count as i64, truth.total(), "map-tier total weight");
             for (k, c) in truth.pairs() {
                 assert_eq!(
-                    freq_map.get(&HeapItem::U64(k as u64)),
+                    counts.get(&OwnedDataInput::U64(k as u64)),
                     Some(&c),
                     "map-tier count for key {k}"
                 );
@@ -882,7 +878,7 @@ fn eh_univ_optimized_map_tier_matches_exact_per_key_counts_on_a_skewed_stream() 
         other => panic!(
             "expected the map tier to answer a {N}-update stream exactly; got {}",
             match other {
-                Some(EHUnivQueryResult::Sketch(_)) => "a Sketch result",
+                Some(EhUnivMonQueryResult::Sketch(_)) => "a Sketch result",
                 _ => "nothing",
             }
         ),
@@ -928,9 +924,9 @@ mod documented_matrix {
         for id in KEY_INPUT_IDS {
             let input = key_input(id);
             let distinct = input.keys.iter().copied().collect::<HashSet<i64>>().len();
-            let mut sketch: KMV = KMV::new(k);
+            let mut sketch: Kmv = Kmv::new(k);
             for key in &input.keys {
-                sketch.insert(&input.data(*key));
+                sketch.update(&input.data(*key));
             }
             let estimate = sketch.estimate();
             let context = input.context();
@@ -952,7 +948,7 @@ mod documented_matrix {
             // what it has seen, and it has seen all of these already.
             let before = sketch.estimate();
             for key in &input.keys {
-                sketch.insert(&input.data(*key));
+                sketch.update(&input.data(*key));
             }
             assert_eq!(
                 sketch.estimate(),
@@ -1082,7 +1078,7 @@ const CMHLL_Z: f64 = 4.0;
 /// The column `key` occupies in each row, computed the way the sketch
 /// computes it.
 ///
-/// `CountMinHll::insert` hashes the key once with `hash128_seeded(0, ..)` and
+/// `CountMinHll::update` hashes the key once with `hash128_seeded(0, ..)` and
 /// hands that value to `Vector3D`, which decodes one column per row through
 /// `MatrixFastHash`. Both calls are public, so a test can reproduce the
 /// routing exactly rather than guessing at it — which is what lets the
@@ -1133,7 +1129,7 @@ fn cmhll_load(sk: &mut CountMinHll, keys: &[u64]) -> HashMap<u64, usize> {
         let mut seen = HashSet::new();
         for i in 0..n {
             let value = key * 1_000_000 + i;
-            sk.insert(&DataInput::U64(key), &DataInput::U64(value));
+            sk.update(&DataInput::U64(key), &DataInput::U64(value));
             seen.insert(value);
         }
         truth.insert(key, seen.len());
@@ -1266,8 +1262,8 @@ fn count_min_hll_merge_reproduces_a_single_pass_over_both_halves() {
         for i in 0..500u64 {
             let value = key * 1_000_000 + i;
             let target = if i % 2 == 0 { &mut left } else { &mut right };
-            target.insert(&DataInput::U64(key), &DataInput::U64(value));
-            single.insert(&DataInput::U64(key), &DataInput::U64(value));
+            target.update(&DataInput::U64(key), &DataInput::U64(value));
+            single.update(&DataInput::U64(key), &DataInput::U64(value));
         }
     }
 

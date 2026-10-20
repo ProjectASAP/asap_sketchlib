@@ -14,8 +14,8 @@ multiple precision levels.
 ### Algorithm Variants
 
 - `HyperLogLog<Classic, H>` — classic HyperLogLog (Flajolet et al.).
-- `HyperLogLog<ErtlMLE, H>` — improved estimator (Ertl, arXiv:1702.01284).
-- `HyperLogLogHIP` — Historic Inverse Probability estimator (Lang, arXiv:1708.06839). Not mergeable.
+- `HyperLogLog<Ertl, H>` — improved estimator (Ertl, arXiv:1702.01284).
+- `HyperLogLogHip` — Historic Inverse Probability estimator (Lang, arXiv:1708.06839). Not mergeable.
 
 ### Precision Aliases
 
@@ -25,13 +25,13 @@ but improves accuracy.
 
 | Alias | Precision | Registers | Underlying Type |
 | --- | --- | --- | --- |
-| `HyperLogLogP12<Variant, H>` | p=12 | 4,096 | `HyperLogLogImpl<Variant, HllBucketListP12, H>` |
-| `HyperLogLogP14<Variant, H>` | p=14 | 16,384 | `HyperLogLogImpl<Variant, HllBucketListP14, H>` |
-| `HyperLogLogP16<Variant, H>` | p=16 | 65,536 | `HyperLogLogImpl<Variant, HllBucketListP16, H>` |
+| `HyperLogLogP12<Variant, H>` | p=12 | 4,096 | `HyperLogLogImpl<Variant, HllRegistersP12, H>` |
+| `HyperLogLogP14<Variant, H>` | p=14 | 16,384 | `HyperLogLogImpl<Variant, HllRegistersP14, H>` |
+| `HyperLogLogP16<Variant, H>` | p=16 | 65,536 | `HyperLogLogImpl<Variant, HllRegistersP16, H>` |
 | `HyperLogLog<Variant, H>` | p=14 (default) | 16,384 | = `HyperLogLogP14<Variant, H>` |
-| `HyperLogLogHIPP12` | p=12 | 4,096 | `HyperLogLogHIPImpl<HllBucketListP12>` |
-| `HyperLogLogHIPP14` | p=14 | 16,384 | `HyperLogLogHIPImpl<HllBucketListP14>` |
-| `HyperLogLogHIP` | p=14 (default) | 16,384 | = `HyperLogLogHIPP14` |
+| `HyperLogLogHipP12` | p=12 | 4,096 | `HyperLogLogHipImpl<HllRegistersP12>` |
+| `HyperLogLogHipP14` | p=14 | 16,384 | `HyperLogLogHipImpl<HllRegistersP14>` |
+| `HyperLogLogHip` | p=14 (default) | 16,384 | = `HyperLogLogHipP14` |
 
 `H` defaults to `DefaultXxHasher` and can be omitted in most usage.
 
@@ -45,10 +45,10 @@ fn default() -> Self
 ## Insert / Update
 
 ```rust
-fn insert(&mut self, obj: &DataInput)
-fn insert_many(&mut self, items: &[DataInput])
-fn insert_with_hash(&mut self, hashed: u64)
-fn insert_many_with_hashes(&mut self, hashes: &[u64])
+fn update(&mut self, obj: &DataInput)
+fn update_batch(&mut self, items: &[DataInput])
+fn update_with_hash(&mut self, hashed: u64)
+fn update_batch_with_hashes(&mut self, hashes: &[u64])
 ```
 
 ## Query
@@ -69,13 +69,13 @@ fn indicator(&self) -> f64
 fn merge(&mut self, other: &Self)
 ```
 
-Available on `Classic` and `ErtlMLE` variants. **Not available on HIP.**
+Available on `Classic` and `Ertl` variants. **Not available on HIP.**
 
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 These produce/consume the **ASAPv1** wire envelope — see the
@@ -86,7 +86,7 @@ These produce/consume the **ASAPv1** wire envelope — see the
 wire-covered**. Each variant maps to its own `kind_id` (Classic → `0x01 0x01`,
 Ertl-MLE → `0x01 0x02`, HIP → `0x01 0x03`); `precision` and the
 `HashProfile`-derived hash spec live in the envelope metadata, and the payload is
-the register bytes (plus three HIP scalars for the HIP variant). `HyperLogLogHIP`
+the register bytes (plus three HIP scalars for the HIP variant). `HyperLogLogHip`
 is a non-generic struct that hashes through the default functions, so it is
 wire-eligible under the **standard** hash profile only.
 
@@ -96,8 +96,8 @@ wire-eligible under the **standard** hash profile only.
 HyperLogLogDelta<Variant, Registers, H = DefaultXxHasher>
 
 fn new(indices: Vec<u64>, registers: Vec<u8>) -> Result<Self, String>
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 
 // on HyperLogLogImpl<Variant, Registers, H>
 fn merge_delta(&mut self, delta: &HyperLogLogDelta<Variant, Registers, H>) -> Result<(), String>
@@ -127,18 +127,18 @@ estimate counts admitted keys alone; a consumer divides it by `p`. A key's
 updates are admitted all or none. The ASAPv1 metadata carries `p` as its last
 key, `admission_rate`, when `p < 1`; a `p` outside `(0, 1]` fails to serialize.
 `merge` panics, and `merge_delta` fails, when the two rates differ. A sketch
-nested in another kind (`EHSketchList`, `Hydra`, CMSHeap, CSHeap, Elastic) must
+nested in another kind (`EhBucketSketch`, `Hydra`, CountMinSketchWithHeap, CountSketchWithHeap, Elastic) must
 hold `p = 1` to serialize. Both methods are on `HyperLogLogImpl` and
-`HyperLogLogHIPImpl`.
+`HyperLogLogHipImpl`.
 
 ## Examples
 
 ```rust
-use asap_sketchlib::{ErtlMLE, HyperLogLog, DataInput};
+use asap_sketchlib::{Ertl, HyperLogLog, DataInput};
 
-let mut hll = HyperLogLog::<ErtlMLE>::default();
+let mut hll = HyperLogLog::<Ertl>::default();
 for i in 0..1000u64 {
-    hll.insert(&DataInput::U64(i));
+    hll.update(&DataInput::U64(i));
 }
 let card = hll.estimate();
 assert!(card > 900);
@@ -146,7 +146,7 @@ assert!(card > 900);
 
 ## Caveats
 
-- `HyperLogLogHIP` is not mergeable.
+- `HyperLogLogHip` is not mergeable.
 - P12 variants trade accuracy for lower memory; expect slightly higher
   error than the default P14.
 

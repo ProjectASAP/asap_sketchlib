@@ -21,9 +21,9 @@ use asap_sketchlib::{Classic, CountMinHll, DataInput, DefaultXxHasher, SketchHas
 use proptest::prelude::*;
 use std::collections::HashSet;
 
-asap_sketchlib::impl_hll_bucket_list!(BucketsP4, 4, 1_usize << 4);
-asap_sketchlib::impl_hll_bucket_list!(BucketsP6, 6, 1_usize << 6);
-asap_sketchlib::impl_hll_bucket_list!(BucketsP8, 8, 1_usize << 8);
+asap_sketchlib::impl_hll_registers!(BucketsP4, 4, 1_usize << 4);
+asap_sketchlib::impl_hll_registers!(BucketsP6, 6, 1_usize << 6);
+asap_sketchlib::impl_hll_registers!(BucketsP8, 8, 1_usize << 8);
 
 type Sketch = CountMinHll<DefaultXxHasher>;
 
@@ -88,7 +88,7 @@ macro_rules! shape_laws {
                 let mut sketch = empty();
                 for (key, values) in groups {
                     for value in values {
-                        sketch.insert(&DataInput::U64(*key), &DataInput::U64(*value));
+                        sketch.update(&DataInput::U64(*key), &DataInput::U64(*value));
                     }
                 }
                 sketch
@@ -97,7 +97,7 @@ macro_rules! shape_laws {
             fn sketch_of_pairs(pairs: &[(u64, u64)]) -> Sketch {
                 let mut sketch = empty();
                 for (key, value) in pairs {
-                    sketch.insert(&DataInput::U64(*key), &DataInput::U64(*value));
+                    sketch.update(&DataInput::U64(*key), &DataInput::U64(*value));
                 }
                 sketch
             }
@@ -105,7 +105,7 @@ macro_rules! shape_laws {
             fn reference_of(values: &[u64]) -> Reference {
                 let mut reference = Reference::new();
                 for value in values {
-                    reference.insert_with_hash(value_hash(*value));
+                    reference.update_with_hash(value_hash(*value));
                 }
                 reference
             }
@@ -116,7 +116,7 @@ macro_rules! shape_laws {
             /// that row's column.
             fn route(key: u64) -> Vec<usize> {
                 let mut probe = empty();
-                probe.insert(&DataInput::U64(key), &DataInput::U64(0));
+                probe.update(&DataInput::U64(key), &DataInput::U64(0));
                 (0..ROWS)
                     .map(|row| {
                         let touched: Vec<usize> = (0..COLS)
@@ -305,7 +305,7 @@ macro_rules! shape_laws {
                     let probed: Vec<u64> = groups.iter().map(|(key, _)| *key).collect();
 
                     round_trip!(
-                        Sketch,
+                        @raw_serde Sketch,
                         sketch,
                         |s: &Sketch| s.as_storage().as_slice().to_vec(),
                         |s: &Sketch| (s.rows(), s.cols(), s.precision()),
@@ -342,7 +342,7 @@ proptest! {
 
         let mut sketch = Sketch::with_dimensions(target.0, target.1, target.2);
         for (key, value) in &stream {
-            sketch.insert(&DataInput::U64(*key), &DataInput::U64(*value));
+            sketch.update(&DataInput::U64(*key), &DataInput::U64(*value));
         }
         let before = sketch.as_storage().as_slice().to_vec();
 

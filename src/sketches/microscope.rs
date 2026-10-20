@@ -17,7 +17,7 @@
 //! pixel per zoom, compounding as a cell zooms further.
 //!
 //! The `cell` module holds the record layout and the per-cell algorithm, on
-//! `&[u8]` and nothing else. [`MicroCM`] puts a Count-Min-shaped grid of
+//! `&[u8]` and nothing else. [`MicroCm`] puts a Count-Min-shaped grid of
 //! those cells behind a hash: `rows` independent rows, one cell per row per
 //! key, and a minimum across rows taken **per sub-window** and summed over
 //! the window — `sum(min) <= min(sum)`, so letting a different row supply
@@ -270,7 +270,7 @@ impl SubWindowClock {
 /// status of this implementation.
 #[derive(Clone, Debug, Serialize)]
 #[serde(bound = "")]
-pub struct MicroCM<H: SketchHasher = DefaultXxHasher> {
+pub struct MicroCm<H: SketchHasher = DefaultXxHasher> {
     cells: Vector3D<u8>,
     params: MicroParams,
     clock: SubWindowClock,
@@ -285,29 +285,29 @@ pub struct MicroCM<H: SketchHasher = DefaultXxHasher> {
 // re-derived from `params` and then checked against the stored geometry, so
 // a payload cannot describe a record shape the cells do not have.
 #[derive(Deserialize)]
-struct MicroCMSeed {
+struct MicroCmSeed {
     cells: Vector3D<u8>,
     params: MicroParams,
     clock: SubWindowClock,
     rounding: Rounding,
 }
 
-impl<'de, H: SketchHasher> Deserialize<'de> for MicroCM<H> {
+impl<'de, H: SketchHasher> Deserialize<'de> for MicroCm<H> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let MicroCMSeed {
+        let MicroCmSeed {
             cells,
             params,
             clock,
             rounding,
-        } = MicroCMSeed::deserialize(deserializer)?;
+        } = MicroCmSeed::deserialize(deserializer)?;
         // Validate before deriving the layout: `MicroLayout::new` computes
         // `t + 2`, which a crafted `t` could overflow.
         MicroParams::checked(params.t, params.c).map_err(serde::de::Error::custom)?;
         let layout = MicroLayout::new(params);
-        if cells.depth() != layout.depth() {
+        if cells.bucket_len() != layout.depth() {
             return Err(serde::de::Error::custom(format!(
                 "cell depth {} does not match the {} bytes the layout for t={}, c={} needs",
-                cells.depth(),
+                cells.bucket_len(),
                 layout.depth(),
                 params.t,
                 params.c
@@ -320,7 +320,7 @@ impl<'de, H: SketchHasher> Deserialize<'de> for MicroCM<H> {
             )));
         }
         let rows = cells.rows();
-        let col_bits = cells.get_mask_bits() as usize;
+        let col_bits = cells.mask_bits() as usize;
         let required_bits = rows.saturating_mul(col_bits);
         if required_bits > 128 {
             return Err(serde::de::Error::custom(format!(
@@ -346,7 +346,7 @@ impl<'de, H: SketchHasher> Deserialize<'de> for MicroCM<H> {
     }
 }
 
-impl Default for MicroCM<DefaultXxHasher> {
+impl Default for MicroCm<DefaultXxHasher> {
     /// A 4 x 1024 grid at `T = 12`, `c = 2`, over count-based sub-windows of
     /// 4096 items — a sliding window of roughly 49k items.
     fn default() -> Self {
@@ -360,7 +360,7 @@ impl Default for MicroCM<DefaultXxHasher> {
     }
 }
 
-impl<H: SketchHasher> MicroCM<H> {
+impl<H: SketchHasher> MicroCm<H> {
     /// Builds a `rows x cols` grid of cells shaped by `params`, driven by
     /// `clock`.
     ///
@@ -391,9 +391,9 @@ impl<H: SketchHasher> MicroCM<H> {
             MicroParams::checked(params.t, params.c).unwrap_or_else(|detail| panic!("{detail}"));
         clock.checked().unwrap_or_else(|detail| panic!("{detail}"));
         let layout = MicroLayout::new(params);
-        let mut cells = Vector3D::init(rows, cols, layout.depth());
+        let mut cells = Vector3D::unfilled(rows, cols, layout.depth());
         cells.fill(0);
-        let col_bits = cells.get_mask_bits() as usize;
+        let col_bits = cells.mask_bits() as usize;
         assert!(
             rows.saturating_mul(col_bits) <= 128,
             "rows ({rows}) x column bits ({col_bits}) = {} exceeds the 128-bit packed \
@@ -507,8 +507,8 @@ impl<H: SketchHasher> MicroCM<H> {
     /// count-based clock out of phase with a time-based one fed the matching
     /// timestamps.
     ///
-    /// Panics if this sketch's clock is time-based; use [`Self::insert_at`].
-    pub fn insert(&mut self, key: &DataInput) {
+    /// Panics if this sketch's clock is time-based; use [`Self::update_at`].
+    pub fn update(&mut self, key: &DataInput) {
         self.record(key);
         if self.clock.tick() {
             self.enter_sub_window(1);
@@ -518,8 +518,8 @@ impl<H: SketchHasher> MicroCM<H> {
     /// Records one occurrence of `key` at `timestamp`, against a time-based
     /// clock.
     ///
-    /// Panics if this sketch's clock is count-based; use [`Self::insert`].
-    pub fn insert_at(&mut self, key: &DataInput, timestamp: u64) {
+    /// Panics if this sketch's clock is count-based; use [`Self::update`].
+    pub fn update_at(&mut self, key: &DataInput, timestamp: u64) {
         self.advance_to(timestamp);
         self.record(key);
     }
@@ -679,8 +679,8 @@ mod tests {
         DataInput::U64(n)
     }
 
-    fn sketch(rows: usize, cols: usize, t: usize, per_sub_window: u64) -> MicroCM {
-        MicroCM::with_dimensions(
+    fn sketch(rows: usize, cols: usize, t: usize, per_sub_window: u64) -> MicroCm {
+        MicroCm::with_dimensions(
             rows,
             cols,
             MicroParams::new(t, 2),
@@ -701,7 +701,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "zoom base c must be in 2..=256")]
     fn with_dimensions_rejects_a_params_literal_the_layout_cannot_represent() {
-        let _: MicroCM = MicroCM::with_dimensions(
+        let _: MicroCm = MicroCm::with_dimensions(
             2,
             16,
             MicroParams { t: 4, c: 0 },
@@ -713,7 +713,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "t (sub-windows per window) must be in 1..=4096")]
     fn with_dimensions_rejects_a_sub_window_count_that_overflows_the_layout() {
-        let _: MicroCM = MicroCM::with_dimensions(
+        let _: MicroCm = MicroCm::with_dimensions(
             2,
             16,
             MicroParams {
@@ -728,7 +728,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "items_per_sub_window must be non-zero")]
     fn with_dimensions_rejects_a_clock_literal_that_divides_by_zero() {
-        let _: MicroCM = MicroCM::with_dimensions(
+        let _: MicroCm = MicroCm::with_dimensions(
             2,
             16,
             MicroParams::default(),
@@ -748,11 +748,11 @@ mod tests {
     fn merge_rejects_clocks_of_different_sub_window_length() {
         let mut a = sketch(2, 16, 4, 1000);
         for _ in 0..999 {
-            a.insert(&key(1));
+            a.update(&key(1));
         }
         let mut b = sketch(2, 16, 4, 10);
         for _ in 0..9 {
-            b.insert(&key(1));
+            b.update(&key(1));
         }
         assert_eq!((a.sub_window(), b.sub_window()), (0, 0));
         let err = a.merge(&b).expect_err("different sub-window lengths");
@@ -762,7 +762,7 @@ mod tests {
     #[test]
     fn merge_rejects_clocks_of_different_kinds() {
         let mut a = sketch(2, 16, 4, 10);
-        let b = MicroCM::with_dimensions(
+        let b = MicroCm::with_dimensions(
             2,
             16,
             MicroParams::new(4, 2),
@@ -792,7 +792,7 @@ mod tests {
     fn a_linear_weight_outside_the_unit_interval_is_refused() {
         let mut sk = sketch(2, 16, 4, 10);
         for _ in 0..100 {
-            sk.insert(&key(1));
+            sk.update(&key(1));
         }
         let _ = sk.estimate_with(&key(1), DeltaStrategy::Linear(3.0));
     }
@@ -810,10 +810,10 @@ mod tests {
         let mut sk = sketch(2, 16, 4, 10);
         assert_eq!(sk.sub_window(), 0);
         for _ in 0..9 {
-            sk.insert(&key(1));
+            sk.update(&key(1));
         }
         assert_eq!(sk.sub_window(), 0, "nine of ten items is still window 0");
-        sk.insert(&key(1));
+        sk.update(&key(1));
         assert_eq!(sk.sub_window(), 1, "the tenth item fills sub-window 0");
         // Sub-window 0 holds exactly L items, not L-1.
         assert_eq!(sk.estimate_with(&key(1), DeltaStrategy::Under), 10.0);
@@ -844,7 +844,7 @@ mod tests {
     fn a_single_key_in_one_row_is_counted_exactly() {
         let mut sk = sketch(1, 16, 4, 50);
         for _ in 0..200 {
-            sk.insert(&key(7));
+            sk.update(&key(7));
         }
         let est = sk.estimate_with(&key(7), DeltaStrategy::Over);
         assert_eq!(est, 200.0);
@@ -858,7 +858,7 @@ mod tests {
         let mut truth = [0u64; 40];
         for round in 0..2_000u64 {
             let k = round % 40;
-            sk.insert(&key(k));
+            sk.update(&key(k));
             truth[k as usize] += 1;
         }
         // Everything inserted is still inside a window of 4 x 500 = 2000.
@@ -876,12 +876,12 @@ mod tests {
     fn a_key_that_stops_appearing_decays_to_nothing() {
         let mut sk = sketch(3, 64, 4, 100);
         for _ in 0..400 {
-            sk.insert(&key(1));
+            sk.update(&key(1));
         }
         assert!(sk.estimate_with(&key(1), DeltaStrategy::Under) > 0.0);
         // Push the window past the burst with a different key.
         for _ in 0..600 {
-            sk.insert(&key(2));
+            sk.update(&key(2));
         }
         let est = sk.estimate_with(&key(1), DeltaStrategy::Over);
         assert!(
@@ -894,7 +894,7 @@ mod tests {
     /// it skipped over.
     #[test]
     fn a_time_jump_expires_the_sub_windows_it_skipped() {
-        let mut sk: MicroCM = MicroCM::with_dimensions(
+        let mut sk: MicroCm = MicroCm::with_dimensions(
             2,
             32,
             MicroParams::new(3, 2),
@@ -902,32 +902,32 @@ mod tests {
             1,
         );
         for i in 0..50u64 {
-            sk.insert_at(&key(9), i);
+            sk.update_at(&key(9), i);
         }
         assert!(sk.estimate_with(&key(9), DeltaStrategy::Over) > 0.0);
         // Jump well past T + 1 sub-windows without inserting key 9 again.
-        sk.insert_at(&key(10), 100_000);
+        sk.update_at(&key(10), 100_000);
         assert_eq!(sk.estimate_with(&key(9), DeltaStrategy::Over), 0.0);
     }
 
     #[test]
     #[should_panic(expected = "use insert_at()")]
     fn insert_refuses_a_time_based_clock() {
-        let mut sk: MicroCM = MicroCM::with_dimensions(
+        let mut sk: MicroCm = MicroCm::with_dimensions(
             1,
             16,
             MicroParams::default(),
             SubWindowClock::time_based(10, 0),
             1,
         );
-        sk.insert(&key(1));
+        sk.update(&key(1));
     }
 
     #[test]
     #[should_panic(expected = "use insert()")]
     fn insert_at_refuses_a_count_based_clock() {
         let mut sk = sketch(1, 16, 4, 10);
-        sk.insert_at(&key(1), 5);
+        sk.update_at(&key(1), 5);
     }
 
     /// A merge of two halves recovers exactly what a single pass over both
@@ -945,8 +945,8 @@ mod tests {
         // Key 3 takes every other item on both sides: 100 per sub-window
         // each, so the merged pixel is 200 and still fits a byte.
         for i in 0..4 * PER_SUB_WINDOW {
-            left.insert(&key(if i % 2 == 0 { 3 } else { 4 }));
-            right.insert(&key(if i % 2 == 0 { 3 } else { 5 }));
+            left.update(&key(if i % 2 == 0 { 3 } else { 4 }));
+            right.update(&key(if i % 2 == 0 { 3 } else { 5 }));
         }
         assert_eq!(left.sub_window(), right.sub_window());
         assert_eq!(left.max_zoom(), 0, "the load must stay below a zoom");
@@ -974,8 +974,8 @@ mod tests {
         // pixel divides exactly and never draws. Equal item counts keep the
         // two clocks in step.
         for i in 0..40_000u64 {
-            a.insert(&key(1));
-            b.insert(&key(if i % 4 == 0 { 9 } else { 1 }));
+            a.update(&key(1));
+            b.update(&key(if i % 4 == 0 { 9 } else { 1 }));
         }
         let before = a.rounding.state();
         a.merge(&b).expect("same shape and clock");
@@ -992,10 +992,10 @@ mod tests {
         let mut a = sketch(2, 32, 4, 10);
         let mut b = sketch(2, 32, 4, 10);
         for _ in 0..25 {
-            a.insert(&key(1));
+            a.update(&key(1));
         }
         for _ in 0..5 {
-            b.insert(&key(1));
+            b.update(&key(1));
         }
         assert_ne!(a.sub_window(), b.sub_window());
         let before = a.as_storage().as_slice().to_vec();
@@ -1008,10 +1008,10 @@ mod tests {
     fn serde_round_trip_preserves_the_answers() {
         let mut sk = sketch(3, 32, 4, 100);
         for i in 0..1_000u64 {
-            sk.insert(&key(i % 17));
+            sk.update(&key(i % 17));
         }
         let bytes = sk.serialize_to_bytes().expect("serialize");
-        let back = MicroCM::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let back = MicroCm::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
         assert_eq!(back.sub_window(), sk.sub_window());
         assert_eq!(back.cell_bytes(), sk.cell_bytes());
         assert_eq!(back.as_storage().as_slice(), sk.as_storage().as_slice());
@@ -1040,7 +1040,7 @@ mod tests {
         }
 
         fn cells_for(rows: usize, cols: usize, depth: usize) -> Vector3D<u8> {
-            let mut cells: Vector3D<u8> = Vector3D::init(rows, cols, depth);
+            let mut cells: Vector3D<u8> = Vector3D::unfilled(rows, cols, depth);
             cells.fill(0);
             cells
         }
@@ -1052,7 +1052,7 @@ mod tests {
                 rounding: 1,
             };
             let bytes = rmp_serde::to_vec_named(&forged).expect("encode");
-            MicroCM::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
+            MicroCm::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
                 .err()
                 .map(|e| e.to_string())
                 .unwrap_or_default()

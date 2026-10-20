@@ -5,7 +5,8 @@
 //!   <https://dl.acm.org/doi/10.1145/1247480.1247504>
 
 use crate::{
-    CANONICAL_HASH_SEED, CommonHeap, DataInput, DefaultXxHasher, KeepLargest, SketchHasher,
+    CommonHeap, DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, RetainSmallest,
+    SketchHasher,
 };
 
 use serde::{Deserialize, Serialize};
@@ -14,52 +15,56 @@ use std::marker::PhantomData;
 mod wire;
 
 // expect error bound to be less than 2%
-const KMV_DEFAULT_LENGTH: usize = 4096_usize;
+const KMV_DEFAULT_K: usize = 4096_usize;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct KMV<H: SketchHasher = DefaultXxHasher> {
+pub struct Kmv<H: SketchHasher = DefaultXxHasher> {
     pub k: usize,
-    pub k_vals: CommonHeap<u64, KeepLargest>,
+    pub retained_hashes: CommonHeap<u64, RetainSmallest>,
     #[serde(skip)]
     _hasher: PhantomData<H>,
 }
 
-impl Default for KMV {
+impl Default for Kmv {
     fn default() -> Self {
-        Self::new(KMV_DEFAULT_LENGTH)
+        Self::new(KMV_DEFAULT_K)
     }
 }
 
-impl<H: SketchHasher> KMV<H> {
+impl<H: SketchHasher> Kmv<H> {
     pub fn new(k: usize) -> Self {
         Self {
             k,
-            k_vals: CommonHeap::new_max(k),
+            retained_hashes: CommonHeap::new_max(k),
             _hasher: PhantomData,
         }
     }
 
-    pub fn insert(&mut self, item: &DataInput) {
-        let hashed = H::hash64_seeded(CANONICAL_HASH_SEED, item);
-        self.insert_by_hash(hashed);
+    pub fn update(&mut self, item: &DataInput) {
+        let hashed = H::hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, item);
+        self.update_with_hash(hashed);
     }
 
-    pub fn insert_by_hash(&mut self, hash_value: u64) {
-        if self.k_vals.iter().any(|value| *value == hash_value) {
+    pub fn update_with_hash(&mut self, hash_value: u64) {
+        if self
+            .retained_hashes
+            .iter()
+            .any(|value| *value == hash_value)
+        {
             return;
         }
-        self.k_vals.push(hash_value);
+        self.retained_hashes.push(hash_value);
     }
 
     /// `(k - 1) / U(k)`, where `U(k)` is the k-th smallest hash's position in
     /// the 64-bit range, mapped into (0, 1].
     pub fn estimate(&mut self) -> f64 {
-        if self.k_vals.len() < self.k {
-            return self.k_vals.len() as f64;
+        if self.retained_hashes.len() < self.k {
+            return self.retained_hashes.len() as f64;
         }
         let largest = *self
-            .k_vals
+            .retained_hashes
             .peek()
             .expect("k_vals should be non-empty when len >= k");
         const HASH_RANGE: f64 = 18_446_744_073_709_551_616.0;
@@ -67,13 +72,13 @@ impl<H: SketchHasher> KMV<H> {
         (self.k - 1) as f64 / mapped
     }
 
-    pub fn merge(&mut self, other: &mut KMV<H>) {
+    pub fn merge(&mut self, other: &mut Kmv<H>) {
         assert_eq!(
             self.k, other.k,
             "Two KMV sketch have different k size, not mergeable"
         );
-        for &value in other.k_vals.iter() {
-            self.insert_by_hash(value);
+        for &value in other.retained_hashes.iter() {
+            self.update_with_hash(value);
         }
     }
 }
@@ -89,25 +94,25 @@ mod tests {
 
     #[test]
     fn assert_serialization_round_trip() {
-        let mut sketch: KMV = KMV::default();
+        let mut sketch: Kmv = Kmv::default();
         for value in 0..SERDE_SAMPLE {
             let input = DataInput::U64(value as u64);
-            sketch.insert(&input);
+            sketch.update(&input);
         }
 
         let encoded = sketch
-            .serialize_to_bytes()
+            .to_asapv1()
             .unwrap_or_else(|err| panic!("KMV serialize_to_bytes failed: {err}"));
         assert!(
             !encoded.is_empty(),
             "KMV serialization output should not be empty"
         );
 
-        let mut decoded: KMV = KMV::deserialize_from_bytes(&encoded)
+        let mut decoded: Kmv = Kmv::from_asapv1(&encoded)
             .unwrap_or_else(|err| panic!("KMV deserialize_from_bytes failed: {err}"));
 
         let reencoded = decoded
-            .serialize_to_bytes()
+            .to_asapv1()
             .unwrap_or_else(|err| panic!("KMV re-serialize failed: {err}"));
 
         assert_eq!(

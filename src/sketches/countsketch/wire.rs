@@ -3,7 +3,7 @@
 //! Child submodule of [`crate::sketches::countsketch`]: it holds Count Sketch's
 //! state serialization (the metadata/payload DTOs, the kind_id constant, the
 //! [`CsWireCounter`] / [`CsWireMode`] marker traits, and the
-//! `serialize_to_bytes` / `deserialize_from_bytes` impls) while the algorithm
+//! `to_asapv1` / `from_asapv1` impls) while the algorithm
 //! lives in the parent module file and the delta kind in `delta.rs`. Being a
 //! descendant module, it reads the sketch's private `counts` field directly
 //! without widening any field visibility. See `docs/asapv1_wire_format.md` §3.6.
@@ -18,7 +18,7 @@
 //! is implemented for. `i128` is a [`CountSketchCounter`] but has no msgpack
 //! integer form. `i32` is carried at its own width rather than widened,
 //! because a nested Count Sketch — the `Vector2D<i32>` counters `HydraCounter`
-//! and `EHSketchList` hold — must decode back into the type it was stored as.
+//! and `EhBucketSketch` hold — must decode back into the type it was stored as.
 //!
 //! [`CountSketchCounter`]: crate::sketches::countsketch::CountSketchCounter
 
@@ -29,13 +29,12 @@ use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::DeltaCounter;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::COUNT_SKETCH;
 use crate::message_pack_format::wire_key::exact_vec;
 use crate::{FastPath, HashProfile, RegularPath, SketchHasher, Vector2D};
 
-use super::{Count, CountSketchCounter};
-
-/// Count Sketch kind_id: family `0x04`, single algorithm variant `0x00`.
-const CS_KIND: &[u8] = &[0x04, 0x00];
+use super::{CountSketch, CountSketchCounter};
 
 /// Names the wire counter type carried in the metadata (`counter_type`).
 /// Implemented only for the wire-eligible counter types.
@@ -201,9 +200,9 @@ struct CsPayload<T> {
 // Wire serialization for the canonical Count Sketch configs only. `wire` is a
 // descendant of the sketch module, so this impl reads the private `counts`
 // field directly.
-impl<T, Mode, H> Count<Vector2D<T>, Mode, H>
+impl<T, Mode, H> CountSketch<Vector2D<T>, Mode, H>
 where
-    // `CountSketchCounter` is required by `Count::from_storage`; `AddAssign` by
+    // `CountSketchCounter` is required by `CountSketch::from_storage`; `AddAssign` by
     // `Vector2D<T>: MatrixStorage`. Neither is used by the bodies below.
     T: CsWireCounter
         + CountSketchCounter
@@ -219,7 +218,7 @@ where
     ///
     /// A matrix whose cell count disagrees with its own dimensions is an error
     /// rather than bytes that would be refused on decode.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
         let counts = self.counts.as_slice();
@@ -234,18 +233,18 @@ where
         let payload = rmp_serde::to_vec(&CsPayload::<T> {
             counts: counts.to_vec(),
         })?;
-        Ok(envelope::encode(CS_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::COUNT_SKETCH, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The matrix
     /// dimensions are read from the (validated) metadata; the payload carries
     /// only the counts.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != CS_KIND {
+        if kind_id != kind::COUNT_SKETCH {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "Count Sketch kind_id mismatch: stored {kind_id:?}, expected {CS_KIND:?}"
+                "Count Sketch kind_id mismatch: stored {kind_id:?}, expected {COUNT_SKETCH:?}"
             )));
         }
         let (rows, cols, admission_rate) = decode_metadata::<T, Mode, H>(metadata)?;
@@ -261,26 +260,26 @@ where
             )));
         }
         let storage = Vector2D::from_fn(rows, cols, |r, c| p.counts[r * cols + c]);
-        Ok(Count::from_storage(storage).with_admission_rate(admission_rate))
+        Ok(CountSketch::from_storage(storage).with_admission_rate(admission_rate))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS};
+    use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS};
 
     #[test]
     fn count_sketch_round_trip_serialization() {
-        let mut sketch = Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
-        sketch.insert(&DataInput::U64(42));
-        sketch.insert(&DataInput::U64(7));
+        let mut sketch = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
+        sketch.update(&DataInput::U64(42));
+        sketch.update(&DataInput::U64(7));
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize Count");
+        let encoded = sketch.to_asapv1().expect("serialize Count");
         assert!(encoded.starts_with(b"ASAPv1"));
         assert_eq!(&encoded[7..10], &[2u8, 0x04, 0x00]); // kind_id_len=2, kind_id=[0x04,0x00]
 
-        let decoded = Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded)
+        let decoded = CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&encoded)
             .expect("deserialize Count");
 
         assert_eq!(sketch.rows(), decoded.rows());
@@ -295,14 +294,17 @@ mod tests {
     /// unchanged (the one shape difference from Count-Min's monotonic counters).
     #[test]
     fn count_sketch_negative_counters_round_trip() {
-        let sketch =
-            Count::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
+        let sketch = CountSketch::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(
+            2,
+            4,
+            |r, c| {
                 let v = (r * 4 + c) as i64;
                 if v % 2 == 0 { v } else { -v }
-            }));
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
+            },
+        ));
+        let encoded = sketch.to_asapv1().expect("serialize");
         let decoded =
-            Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded).expect("decode");
+            CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&encoded).expect("decode");
         assert_eq!(
             sketch.as_storage().as_slice(),
             decoded.as_storage().as_slice()
@@ -321,25 +323,25 @@ mod tests {
     impl SketchHasher for AltHasher {
         type HashType = <DefaultXxHasher as SketchHasher>::HashType;
 
-        fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
-            DefaultXxHasher::hash64_seeded(d, key)
+        fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(seed_index, key)
         }
-        fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
-            DefaultXxHasher::hash128_seeded(d, key)
+        fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(seed_index, key)
         }
-        fn hash_item64_seeded(d: usize, key: &crate::HeapItem) -> u64 {
-            DefaultXxHasher::hash_item64_seeded(d, key)
+        fn hash64_seeded_owned(seed_index: usize, key: &crate::OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(seed_index, key)
         }
-        fn hash_item128_seeded(d: usize, key: &crate::HeapItem) -> u128 {
-            DefaultXxHasher::hash_item128_seeded(d, key)
+        fn hash128_seeded_owned(seed_index: usize, key: &crate::OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(seed_index, key)
         }
         fn hash_for_matrix_seeded(
-            seed_idx: usize,
+            seed_index: usize,
             rows: usize,
             cols: usize,
             key: &DataInput,
         ) -> Self::HashType {
-            DefaultXxHasher::hash_for_matrix_seeded(seed_idx, rows, cols, key)
+            DefaultXxHasher::hash_for_matrix_seeded(seed_index, rows, cols, key)
         }
     }
 
@@ -351,47 +353,46 @@ mod tests {
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
         }
-        const CANONICAL_SEED_INDEX: u32 = CANONICAL_HASH_SEED as u32;
+        const CANONICAL_SEED_INDEX: u32 = DEFAULT_CANONICAL_SEED_INDEX as u32;
         const MATRIX_SEED_INDEX: u32 = 0;
     }
 
     #[test]
     fn count_sketch_custom_hasher_profile_round_trips_and_is_self_describing() {
         // (a) A Count Sketch built with a custom-profile hasher round-trips.
-        let mut alt = Count::<Vector2D<i64>, RegularPath, AltHasher>::with_dimensions(3, 8);
-        let mut std = Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
-        alt.insert(&DataInput::U64(42));
-        alt.insert(&DataInput::U64(7));
-        std.insert(&DataInput::U64(42));
-        std.insert(&DataInput::U64(7));
+        let mut alt = CountSketch::<Vector2D<i64>, RegularPath, AltHasher>::with_dimensions(3, 8);
+        let mut std = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
+        alt.update(&DataInput::U64(42));
+        alt.update(&DataInput::U64(7));
+        std.update(&DataInput::U64(42));
+        std.update(&DataInput::U64(7));
 
-        let alt_bytes = alt.serialize_to_bytes().expect("alt serialize");
-        let decoded =
-            Count::<Vector2D<i64>, RegularPath, AltHasher>::deserialize_from_bytes(&alt_bytes)
-                .expect("alt decode");
+        let alt_bytes = alt.to_asapv1().expect("alt serialize");
+        let decoded = CountSketch::<Vector2D<i64>, RegularPath, AltHasher>::from_asapv1(&alt_bytes)
+            .expect("alt decode");
         assert_eq!(alt.as_storage().as_slice(), decoded.as_storage().as_slice());
 
         // (b) Bytes differ from the standard-profile sketch (metadata derived
         // from the different profile).
-        let std_bytes = std.serialize_to_bytes().expect("std serialize");
+        let std_bytes = std.to_asapv1().expect("std serialize");
         assert_ne!(alt_bytes, std_bytes);
 
         // (c) Standard-profile decode fails closed on custom-profile bytes.
         assert!(
-            Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&alt_bytes).is_err(),
+            CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&alt_bytes).is_err(),
             "standard-profile decode must reject custom-profile bytes"
         );
     }
 
     #[test]
     fn count_sketch_mode_in_metadata_round_trips() {
-        let mut sketch = Count::<Vector2D<i64>, FastPath>::with_dimensions(4, 16);
-        sketch.insert_many(&DataInput::U64(1), 5);
-        sketch.insert_many(&DataInput::U64(2), 3);
+        let mut sketch = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(4, 16);
+        sketch.update_weighted(&DataInput::U64(1), 5);
+        sketch.update_weighted(&DataInput::U64(2), 3);
 
-        let encoded = sketch.serialize_to_bytes().expect("serialize");
-        let decoded = Count::<Vector2D<i64>, FastPath>::deserialize_from_bytes(&encoded)
-            .expect("deserialize");
+        let encoded = sketch.to_asapv1().expect("serialize");
+        let decoded =
+            CountSketch::<Vector2D<i64>, FastPath>::from_asapv1(&encoded).expect("deserialize");
         assert_eq!(
             sketch.as_storage().as_slice(),
             decoded.as_storage().as_slice()
@@ -399,17 +400,17 @@ mod tests {
 
         // Mode is pinned by the target: a fast payload must not decode into a
         // regular sketch (metadata mismatch).
-        assert!(Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&encoded).is_err());
+        assert!(CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&encoded).is_err());
     }
 
     /// Count Sketch and Count-Min share the payload shape but not the kind_id;
     /// a CMS envelope must not decode as a Count Sketch.
     #[test]
     fn count_sketch_rejects_foreign_kind_id() {
-        let cms = crate::CountMin::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
-        let cms_bytes = cms.serialize_to_bytes().expect("serialize CMS");
+        let cms = crate::CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
+        let cms_bytes = cms.to_asapv1().expect("serialize CMS");
         assert!(
-            Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&cms_bytes).is_err(),
+            CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&cms_bytes).is_err(),
             "CMS bytes must not decode as a Count Sketch"
         );
     }
@@ -425,9 +426,9 @@ mod tests {
         ))
         .unwrap();
         let payload = rmp_serde::to_vec(&CsPayload::<i64> { counts: Vec::new() }).unwrap();
-        let bytes = envelope::encode(CS_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COUNT_SKETCH, &metadata, &payload);
         assert!(
-            Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes).is_err(),
+            CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes).is_err(),
             "zero-dimension metadata must be rejected, not panic"
         );
     }
@@ -448,9 +449,9 @@ mod tests {
             counts: vec![1, 2, 3],
         })
         .unwrap();
-        let bytes = envelope::encode(CS_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COUNT_SKETCH, &metadata, &payload);
         assert!(
-            Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes).is_err(),
+            CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes).is_err(),
             "counts length must match rows*cols"
         );
     }
@@ -461,8 +462,8 @@ mod tests {
     fn count_sketch_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
-            Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, 8)
-                .serialize_to_bytes()
+            CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, 8)
+                .to_asapv1()
                 .is_err(),
             "a matrix past MATRIX_MAX_ROWS must not serialize"
         );
@@ -479,15 +480,15 @@ mod tests {
             counts: vec![0; rows * 8],
         })
         .unwrap();
-        let bytes = envelope::encode(CS_KIND, &metadata, &payload);
-        let err = Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&bytes)
+        let bytes = envelope::encode(kind::COUNT_SKETCH, &metadata, &payload);
+        let err = CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes)
             .expect_err("rows past MATRIX_MAX_ROWS must be rejected");
         assert!(err.to_string().contains("MATRIX_MAX_ROWS"), "got {err}");
 
         // The boundary itself is eligible.
         assert!(
-            Count::<Vector2D<i64>, RegularPath>::with_dimensions(MATRIX_MAX_ROWS, 8)
-                .serialize_to_bytes()
+            CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(MATRIX_MAX_ROWS, 8)
+                .to_asapv1()
                 .is_ok()
         );
     }
@@ -496,9 +497,11 @@ mod tests {
     /// Serializing it must fail rather than emit bytes the decoder refuses.
     #[test]
     fn count_sketch_rejects_serializing_an_unfilled_matrix() {
-        let sketch = Count::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::<i64>::init(2, 4));
+        let sketch = CountSketch::<Vector2D<i64>, RegularPath>::from_storage(
+            Vector2D::<i64>::unfilled(2, 4),
+        );
         assert!(
-            sketch.serialize_to_bytes().is_err(),
+            sketch.to_asapv1().is_err(),
             "a matrix whose cell count disagrees with its dimensions must not serialize"
         );
     }
@@ -508,11 +511,14 @@ mod tests {
     /// bytes the format would not read back.
     #[test]
     fn count_sketch_rejects_serializing_zero_rows() {
-        let sketch =
-            Count::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(0, 4, |_, _| 0i64));
+        let sketch = CountSketch::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(
+            0,
+            4,
+            |_, _| 0i64,
+        ));
         assert_eq!(sketch.rows(), 0);
         let problem = sketch
-            .serialize_to_bytes()
+            .to_asapv1()
             .expect_err("a zero-row matrix must not serialize")
             .to_string();
         assert!(problem.contains("non-zero"), "got {problem}");
@@ -597,13 +603,13 @@ mod tests {
         ))
         .unwrap();
         let payload = rmp_serde::to_vec(&CsPayload::<i64> { counts: vec![0; 8] }).unwrap();
-        let envelope_bytes = envelope::encode(CS_KIND, &bytes, &payload);
+        let envelope_bytes = envelope::encode(kind::COUNT_SKETCH, &bytes, &payload);
         assert!(
-            Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&envelope_bytes).is_err(),
+            CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&envelope_bytes).is_err(),
             "an i64 sketch must reject an f64-labelled envelope"
         );
         assert!(
-            Count::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&envelope_bytes).is_err(),
+            CountSketch::<Vector2D<i32>, RegularPath>::from_asapv1(&envelope_bytes).is_err(),
             "an i32 sketch must reject an f64-labelled envelope"
         );
     }
@@ -617,14 +623,15 @@ mod tests {
             if v % 2 == 0 { v } else { -v }
         };
         let narrow =
-            Count::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, cells));
-        let wide =
-            Count::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
-                cells(r, c) as i64
-            }));
+            CountSketch::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, cells));
+        let wide = CountSketch::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(
+            2,
+            4,
+            |r, c| cells(r, c) as i64,
+        ));
 
-        let narrow_bytes = narrow.serialize_to_bytes().expect("serialize i32");
-        let decoded = Count::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&narrow_bytes)
+        let narrow_bytes = narrow.to_asapv1().expect("serialize i32");
+        let decoded = CountSketch::<Vector2D<i32>, RegularPath>::from_asapv1(&narrow_bytes)
             .expect("decode i32");
         assert_eq!(
             narrow.as_storage().as_slice(),
@@ -633,14 +640,14 @@ mod tests {
 
         // The two sketches hold numerically equal cells, so only the metadata
         // `counter_type` separates their bytes.
-        let wide_bytes = wide.serialize_to_bytes().expect("serialize i64");
+        let wide_bytes = wide.to_asapv1().expect("serialize i64");
         assert_ne!(narrow_bytes, wide_bytes);
         assert!(
-            Count::<Vector2D<i64>, RegularPath>::deserialize_from_bytes(&narrow_bytes).is_err(),
+            CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&narrow_bytes).is_err(),
             "i32 bytes must not decode as an i64 sketch"
         );
         assert!(
-            Count::<Vector2D<i32>, RegularPath>::deserialize_from_bytes(&wide_bytes).is_err(),
+            CountSketch::<Vector2D<i32>, RegularPath>::from_asapv1(&wide_bytes).is_err(),
             "i64 bytes must not decode as an i32 sketch"
         );
     }

@@ -6,7 +6,7 @@
 //   cargo run --example frequency_cms
 use std::collections::HashMap;
 
-use asap_sketchlib::{CountMin, DataInput, FastPath, FixedMatrix};
+use asap_sketchlib::{CountMinSketch, DataInput, FastPath, FixedMatrix};
 
 fn main() {
     // 10_000 events from 100 distinct users (each appears 100 times),
@@ -22,12 +22,12 @@ fn main() {
     }
     let exact_count = counts[&target];
 
-    // Sketch: CountMin<FixedMatrix, FastPath> estimates frequencies in bounded memory.
+    // Sketch: CountMinSketch<FixedMatrix, FastPath> estimates frequencies in bounded memory.
     // FixedMatrix uses a statically-sized backing array.
     // FastPath selects the optimized hashing route for throughput-critical workloads.
-    let mut cms = CountMin::<FixedMatrix, FastPath>::default();
+    let mut cms = CountMinSketch::<FixedMatrix, FastPath>::default();
     for &id in &user_ids {
-        cms.insert(&DataInput::U64(id));
+        cms.update(&DataInput::U64(id));
     }
     let estimated_count = cms.estimate(&DataInput::U64(target));
 

@@ -17,27 +17,29 @@
 // ----------------------------------------------------------------
 // This file contains code derived from multiple Apache Software Foundation projects.
 //
-// 1. HyperLogLog<ErtlMLE> Implementation:
+// 1. HyperLogLog<Ertl> Implementation:
 //    - Originally derived from Apache DataFusion's HyperLogLog component
 //    - Source: https://github.com/apache/datafusion/blob/main/datafusion/functions-aggregate/src/hyperloglog.rs
 //    - Algorithm: Otmar Ertl's MLE estimator (arXiv:1702.01284)
 //
-// 2. HyperLogLogHIP Implementation:
+// 2. HyperLogLogHip Implementation:
 //    - Ported from: Apache DataSketches (Java)
 //    - Source: https://github.com/apache/datasketches-java
 //    - Algorithm: HIP (Kevin J. Lang, arXiv:1708.06839)
 //    - Note: This Rust implementation is a port based on the original Java logic.
 //
 // Modifications:
-// - Adapted both implementations to use a unified `HllBucketList` storage.
+// - Adapted both implementations to use a unified `HllRegisters` storage.
 // - Refactored into a generic `HyperLogLog<Variant>` structure.
 // ----------------------------------------------------------------
 
 use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
 use crate::structures::fixed_structure::{
-    HllBucketListP12, HllBucketListP14, HllBucketListP16, HllRegisterStorage,
+    HllRegisterStorage, HllRegistersP12, HllRegistersP14, HllRegistersP16,
 };
-use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, SketchHasher, hash64_seeded};
+use crate::{
+    DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, SketchHasher, hash64_seeded,
+};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -45,10 +47,7 @@ mod delta;
 mod wire;
 pub use delta::HyperLogLogDelta;
 pub use wire::HllWireVariant;
-pub(crate) use wire::{
-    HLL_KIND_CLASSIC, HLL_KIND_ERTL_MLE, HLL_KIND_HIP, HllMetadata, HllPayloadHip, HllPayloadPlain,
-    standard_hll_metadata,
-};
+pub(crate) use wire::{HllMetadata, HllPayloadHip, HllPayloadPlain, standard_hll_metadata};
 
 /// Generic HyperLogLog sketch parameterized by estimation variant, register storage, and hasher.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -99,12 +98,12 @@ pub(crate) fn classic_estimate(registers: &[u8]) -> f64 {
 pub struct Classic;
 /// Marker type selecting the Ertl MLE estimation algorithm (arXiv:1702.01284).
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
-pub struct ErtlMLE;
+pub struct Ertl;
 
 /// HyperLogLog variant using the Historic Inverse Probability (HIP) estimator for improved accuracy.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
-pub struct HyperLogLogHIPImpl<Registers: HllRegisterStorage> {
+pub struct HyperLogLogHipImpl<Registers: HllRegisterStorage> {
     registers: Registers,
     kxq0: f64,
     kxq1: f64,
@@ -115,24 +114,24 @@ pub struct HyperLogLogHIPImpl<Registers: HllRegisterStorage> {
 
 /// HyperLogLog with 12-bit precision.
 pub type HyperLogLogP12<Variant, H = DefaultXxHasher> =
-    HyperLogLogImpl<Variant, HllBucketListP12, H>;
+    HyperLogLogImpl<Variant, HllRegistersP12, H>;
 /// HyperLogLog with 14-bit precision.
 pub type HyperLogLogP14<Variant, H = DefaultXxHasher> =
-    HyperLogLogImpl<Variant, HllBucketListP14, H>;
+    HyperLogLogImpl<Variant, HllRegistersP14, H>;
 /// HyperLogLog with 16-bit precision.
 pub type HyperLogLogP16<Variant, H = DefaultXxHasher> =
-    HyperLogLogImpl<Variant, HllBucketListP16, H>;
+    HyperLogLogImpl<Variant, HllRegistersP16, H>;
 /// Default HyperLogLog alias using 14-bit precision.
 pub type HyperLogLog<Variant, H = DefaultXxHasher> = HyperLogLogP14<Variant, H>;
 
 /// HIP HyperLogLog with 12-bit precision.
-pub type HyperLogLogHIPP12 = HyperLogLogHIPImpl<HllBucketListP12>;
+pub type HyperLogLogHipP12 = HyperLogLogHipImpl<HllRegistersP12>;
 /// HIP HyperLogLog with 14-bit precision.
-pub type HyperLogLogHIPP14 = HyperLogLogHIPImpl<HllBucketListP14>;
+pub type HyperLogLogHipP14 = HyperLogLogHipImpl<HllRegistersP14>;
 /// HIP HyperLogLog with 16-bit precision.
-pub type HyperLogLogHIPP16 = HyperLogLogHIPImpl<HllBucketListP16>;
+pub type HyperLogLogHipP16 = HyperLogLogHipImpl<HllRegistersP16>;
 /// Default HIP HyperLogLog alias using 14-bit precision.
-pub type HyperLogLogHIP = HyperLogLogHIPP14;
+pub type HyperLogLogHip = HyperLogLogHipP14;
 
 impl<Variant, Registers: HllRegisterStorage, H: SketchHasher> Default
     for HyperLogLogImpl<Variant, Registers, H>
@@ -174,10 +173,12 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 
     /// Inserts a pre-hashed value into the sketch.
     #[inline(always)]
-    pub fn insert_with_hash(&mut self, hashed_val: u64) {
-        let bucket_num = ((hashed_val >> Registers::REGISTER_BITS) & Registers::P_MASK) as usize;
-        let leading_zero =
-            ((hashed_val << Registers::PRECISION) + Registers::P_MASK).leading_zeros() as u8 + 1;
+    pub fn update_with_hash(&mut self, hashed_val: u64) {
+        let bucket_num =
+            ((hashed_val >> Registers::RANK_HASH_BITS) & Registers::INDEX_MASK) as usize;
+        let leading_zero = ((hashed_val << Registers::PRECISION) + Registers::INDEX_MASK)
+            .leading_zeros() as u8
+            + 1;
         let registers = self.registers.as_mut_slice();
         if leading_zero > registers[bucket_num] {
             registers[bucket_num] = leading_zero;
@@ -186,9 +187,9 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 
     /// Inserts multiple pre-hashed values into the sketch.
     #[inline(always)]
-    pub fn insert_many_with_hashes(&mut self, hashes: &[u64]) {
+    pub fn update_batch_with_hashes(&mut self, hashes: &[u64]) {
         for &hashed in hashes {
-            self.insert_with_hash(hashed);
+            self.update_with_hash(hashed);
         }
     }
 
@@ -226,18 +227,18 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     /// result, leaving nothing borrowed to cross the boundary.
     #[inline(always)]
     pub fn canonical_hash(obj: &DataInput) -> u64 {
-        H::hash64_seeded(CANONICAL_HASH_SEED, obj)
+        H::hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, obj)
     }
 
     /// Hashes and inserts a single input value into the sketch.
-    pub fn insert(&mut self, obj: &DataInput) {
-        self.insert_with_hash(Self::canonical_hash(obj));
+    pub fn update(&mut self, obj: &DataInput) {
+        self.update_with_hash(Self::canonical_hash(obj));
     }
 
     /// Hashes and inserts multiple input values into the sketch.
-    pub fn insert_many(&mut self, items: &[DataInput]) {
+    pub fn update_batch(&mut self, items: &[DataInput]) {
         for item in items {
-            self.insert(item);
+            self.update(item);
         }
     }
 }
@@ -266,7 +267,7 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Classic, Re
     }
 }
 
-impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<ErtlMLE, Registers, H> {
+impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Ertl, Registers, H> {
     /// Creates a new HyperLogLog sketch with the Ertl MLE estimator.
     pub fn new() -> Self {
         Self::new_base()
@@ -317,12 +318,12 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<ErtlMLE, Re
     }
 }
 
-/// Upper bound on the Ertl histogram length. `REGISTER_BITS + 2` peaks at
+/// Upper bound on the Ertl histogram length. `RANK_HASH_BITS + 2` peaks at
 /// `64 + 2` for `precision = 0`, so one array covers every precision and the
-/// per-precision `[u32; REGISTER_BITS + 2]` sizing is not needed.
+/// per-precision `[u32; RANK_HASH_BITS + 2]` sizing is not needed.
 const ERTL_HISTOGRAM_CAP: usize = 66;
 
-impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<ErtlMLE, Registers, H> {
+impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Ertl, Registers, H> {
     /// "New cardinality estimation algorithms for HyperLogLog sketches"
     /// Otmar Ertl, arXiv:1702.01284
     #[inline]
@@ -338,8 +339,9 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<ErtlMLE, Re
     pub fn estimate(&self) -> usize {
         let histogram = self.get_histogram();
         let m: f64 = Registers::NUM_REGISTERS as f64;
-        let mut z = m * self.hll_ertl_tau((m - histogram[Registers::REGISTER_BITS + 1] as f64) / m);
-        for i in histogram[1..=Registers::REGISTER_BITS].iter().rev() {
+        let mut z =
+            m * self.hll_ertl_tau((m - histogram[Registers::RANK_HASH_BITS + 1] as f64) / m);
+        for i in histogram[1..=Registers::RANK_HASH_BITS].iter().rev() {
             z += *i as f64;
             z *= 0.5;
         }
@@ -348,14 +350,14 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<ErtlMLE, Re
     }
 }
 
-impl<Registers: HllRegisterStorage> Default for HyperLogLogHIPImpl<Registers> {
+impl<Registers: HllRegisterStorage> Default for HyperLogLogHipImpl<Registers> {
     fn default() -> Self {
         Self::new()
     }
 }
 
 // Core HIP logic (hash-based operations + serialization).
-impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
+impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
     /// Creates a new HyperLogLog HIP sketch.
     pub fn new() -> Self {
         Self {
@@ -381,11 +383,13 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
 
     /// Inserts a pre-hashed value, updating both the register and the HIP running estimate.
     #[inline(always)]
-    pub fn insert_with_hash(&mut self, hashed: u64) {
+    pub fn update_with_hash(&mut self, hashed: u64) {
         let hashed_val = hashed;
-        let bucket_num = ((hashed_val >> Registers::REGISTER_BITS) & Registers::P_MASK) as usize;
-        let leading_zero =
-            ((hashed_val << Registers::PRECISION) + Registers::P_MASK).leading_zeros() as u8 + 1;
+        let bucket_num =
+            ((hashed_val >> Registers::RANK_HASH_BITS) & Registers::INDEX_MASK) as usize;
+        let leading_zero = ((hashed_val << Registers::PRECISION) + Registers::INDEX_MASK)
+            .leading_zeros() as u8
+            + 1;
         let registers = self.registers.as_mut_slice();
         let old_value = registers[bucket_num];
         let new_value = leading_zero;
@@ -407,9 +411,9 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
 
     /// Inserts multiple pre-hashed values into the HIP sketch.
     #[inline(always)]
-    pub fn insert_many_with_hashes(&mut self, hashes: &[u64]) {
+    pub fn update_batch_with_hashes(&mut self, hashes: &[u64]) {
         for &hashed in hashes {
-            self.insert_with_hash(hashed);
+            self.update_with_hash(hashed);
         }
     }
 
@@ -420,25 +424,25 @@ impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
 }
 
 // DataInput adapters for HIP (hashing + batch helpers).
-// Note: HyperLogLogHIP is not parameterized by H since it is a separate,
+// Note: HyperLogLogHip is not parameterized by H since it is a separate,
 // self-contained struct. It uses the free-function wrapper (DefaultXxHasher).
-impl<Registers: HllRegisterStorage> HyperLogLogHIPImpl<Registers> {
+impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
     /// "Back to the Future: an Even More Nearly Optimal Cardinality Estimation Algorithm"
     /// Kevin J. Lang, <https://arxiv.org/pdf/1708.06839>
-    pub fn insert(&mut self, obj: &DataInput) {
-        let hashed_val = hash64_seeded(CANONICAL_HASH_SEED, obj);
-        self.insert_with_hash(hashed_val);
+    pub fn update(&mut self, obj: &DataInput) {
+        let hashed_val = hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, obj);
+        self.update_with_hash(hashed_val);
     }
 
     /// Hashes and inserts multiple input values into the HIP sketch.
-    pub fn insert_many(&mut self, items: &[DataInput]) {
+    pub fn update_batch(&mut self, items: &[DataInput]) {
         for item in items {
-            self.insert(item);
+            self.update(item);
         }
     }
 }
 
-use crate::octo_delta::{HLL_PROMASK, HllDelta};
+use crate::octo_delta::{HllRegisterDelta, OCTO_HLL_DEFAULT_THRESHOLD};
 use crate::sketch_framework::octo::max_hll_threshold;
 
 impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
@@ -446,13 +450,17 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 {
     #[inline(always)]
     /// Inserts a hashed value, promoting register improvements at the default
-    /// threshold `HLL_PROMASK`.
-    pub fn insert_emit_delta_with_hash(
+    /// threshold `OCTO_HLL_DEFAULT_THRESHOLD`.
+    pub fn update_emit_delta_with_hash(
         &mut self,
         hashed_val: u64,
-        emit: &mut impl FnMut(HllDelta),
+        emit: &mut impl FnMut(HllRegisterDelta),
     ) {
-        self.insert_emit_delta_with_hash_and_threshold(hashed_val, HLL_PROMASK, emit);
+        self.update_emit_delta_with_hash_and_threshold(
+            hashed_val,
+            OCTO_HLL_DEFAULT_THRESHOLD,
+            emit,
+        );
     }
 
     #[inline(always)]
@@ -464,20 +472,22 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     /// rule the paper gives for HyperLogLog (§4.4). A threshold of 0 promotes
     /// every improvement and makes the aggregator exactly equal to a
     /// single-threaded sketch.
-    pub fn insert_emit_delta_with_hash_and_threshold(
+    pub fn update_emit_delta_with_hash_and_threshold(
         &mut self,
         hashed_val: u64,
         threshold: u8,
-        emit: &mut impl FnMut(HllDelta),
+        emit: &mut impl FnMut(HllRegisterDelta),
     ) {
         // A register holds a leading-zero count of at most `64 - PRECISION + 1`,
         // so the gain `2^C' - 2^C` never reaches `2^(64 - PRECISION)`. Above
         // that a threshold is unsatisfiable and the parent would stay empty
         // rather than merely lag, so cap it at the largest one that can fire.
         let threshold = threshold.min(max_hll_threshold(Registers::PRECISION as u8));
-        let bucket_num = ((hashed_val >> Registers::REGISTER_BITS) & Registers::P_MASK) as usize;
-        let leading_zero =
-            ((hashed_val << Registers::PRECISION) + Registers::P_MASK).leading_zeros() as u8 + 1;
+        let bucket_num =
+            ((hashed_val >> Registers::RANK_HASH_BITS) & Registers::INDEX_MASK) as usize;
+        let leading_zero = ((hashed_val << Registers::PRECISION) + Registers::INDEX_MASK)
+            .leading_zeros() as u8
+            + 1;
         let regs = self.registers.as_mut_slice();
         let previous = regs[bucket_num];
         if leading_zero > previous {
@@ -485,9 +495,9 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
             if pow2_saturating(leading_zero) - pow2_saturating(previous)
                 >= pow2_saturating(threshold)
             {
-                emit(HllDelta {
-                    pos: bucket_num as u32,
-                    value: leading_zero,
+                emit(HllRegisterDelta {
+                    index: bucket_num as u32,
+                    register_value: leading_zero,
                 });
             }
         }
@@ -495,29 +505,29 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 
     #[inline(always)]
     /// Hashes an input, inserts it, and emits a delta at the default threshold.
-    pub fn insert_emit_delta(&mut self, obj: &DataInput, emit: &mut impl FnMut(HllDelta)) {
-        self.insert_emit_delta_with_threshold(obj, HLL_PROMASK, emit);
+    pub fn update_emit_delta(&mut self, obj: &DataInput, emit: &mut impl FnMut(HllRegisterDelta)) {
+        self.update_emit_delta_with_threshold(obj, OCTO_HLL_DEFAULT_THRESHOLD, emit);
     }
 
     #[inline(always)]
     /// Hashes an input, inserts it, and promotes the register when the
     /// improvement clears `threshold`.
-    pub fn insert_emit_delta_with_threshold(
+    pub fn update_emit_delta_with_threshold(
         &mut self,
         obj: &DataInput,
         threshold: u8,
-        emit: &mut impl FnMut(HllDelta),
+        emit: &mut impl FnMut(HllRegisterDelta),
     ) {
-        let hashed_val = H::hash64_seeded(CANONICAL_HASH_SEED, obj);
-        self.insert_emit_delta_with_hash_and_threshold(hashed_val, threshold, emit);
+        let hashed_val = H::hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, obj);
+        self.update_emit_delta_with_hash_and_threshold(hashed_val, threshold, emit);
     }
 
     /// Applies one externally emitted HLL delta.
-    pub fn apply_delta(&mut self, delta: HllDelta) {
-        let pos = delta.pos as usize;
+    pub fn apply_delta(&mut self, delta: HllRegisterDelta) {
+        let pos = delta.index as usize;
         let regs = self.registers.as_mut_slice();
-        if delta.value > regs[pos] {
-            regs[pos] = delta.value;
+        if delta.register_value > regs[pos] {
+            regs[pos] = delta.register_value;
         }
     }
 }
@@ -532,7 +542,7 @@ fn pow2_saturating(exp: u8) -> u128 {
 mod tests {
 
     use super::*;
-    use crate::{DataInput, HllBucketList};
+    use crate::{DataInput, HllRegisters};
 
     const TARGETS: [usize; 7] = [10, 100, 1_000, 10_000, 100_000, 1_000_000, 10_000_000];
     const P12_ERROR_TOLERANCE: f64 = 0.03;
@@ -540,19 +550,19 @@ mod tests {
     #[test]
     fn hll_child_insert_emits_on_improvement() {
         let mut child = HyperLogLog::<Classic>::default();
-        let mut deltas: Vec<HllDelta> = Vec::new();
+        let mut deltas: Vec<HllRegisterDelta> = Vec::new();
 
-        child.insert_emit_delta(&DataInput::U64(1), &mut |d| deltas.push(d));
+        child.update_emit_delta(&DataInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 1, "first insert should improve one register");
 
         let before = deltas.len();
-        child.insert_emit_delta(&DataInput::U64(1), &mut |d| deltas.push(d));
+        child.update_emit_delta(&DataInput::U64(1), &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), before, "duplicate should not emit");
     }
 
     trait HllEstimator: Default {
         fn push(&mut self, input: &DataInput);
-        fn insert_with_hash(&mut self, hashed: u64);
+        fn update_with_hash(&mut self, hashed: u64);
         fn estimate(&self) -> f64;
         fn index(&self, i: usize) -> u8;
     }
@@ -565,11 +575,11 @@ mod tests {
         for HyperLogLogImpl<Classic, Registers, H>
     {
         fn push(&mut self, input: &DataInput) {
-            self.insert(input);
+            self.update(input);
         }
 
-        fn insert_with_hash(&mut self, hashed: u64) {
-            HyperLogLogImpl::<Classic, Registers, H>::insert_with_hash(self, hashed);
+        fn update_with_hash(&mut self, hashed: u64) {
+            HyperLogLogImpl::<Classic, Registers, H>::update_with_hash(self, hashed);
         }
 
         fn estimate(&self) -> f64 {
@@ -590,18 +600,18 @@ mod tests {
     }
 
     impl<Registers: HllRegisterStorage, H: SketchHasher> HllEstimator
-        for HyperLogLogImpl<ErtlMLE, Registers, H>
+        for HyperLogLogImpl<Ertl, Registers, H>
     {
         fn push(&mut self, input: &DataInput) {
-            self.insert(input);
+            self.update(input);
         }
 
-        fn insert_with_hash(&mut self, hashed: u64) {
-            HyperLogLogImpl::<ErtlMLE, Registers, H>::insert_with_hash(self, hashed);
+        fn update_with_hash(&mut self, hashed: u64) {
+            HyperLogLogImpl::<Ertl, Registers, H>::update_with_hash(self, hashed);
         }
 
         fn estimate(&self) -> f64 {
-            HyperLogLogImpl::<ErtlMLE, Registers, H>::estimate(self) as f64
+            HyperLogLogImpl::<Ertl, Registers, H>::estimate(self) as f64
         }
 
         fn index(&self, i: usize) -> u8 {
@@ -610,24 +620,24 @@ mod tests {
     }
 
     impl<Registers: HllRegisterStorage, H: SketchHasher> HllMerge
-        for HyperLogLogImpl<ErtlMLE, Registers, H>
+        for HyperLogLogImpl<Ertl, Registers, H>
     {
         fn merge_into(&mut self, other: &Self) {
             self.merge(other);
         }
     }
 
-    impl<Registers: HllRegisterStorage> HllEstimator for HyperLogLogHIPImpl<Registers> {
+    impl<Registers: HllRegisterStorage> HllEstimator for HyperLogLogHipImpl<Registers> {
         fn push(&mut self, input: &DataInput) {
-            self.insert(input);
+            self.update(input);
         }
 
-        fn insert_with_hash(&mut self, hashed: u64) {
-            HyperLogLogHIPImpl::<Registers>::insert_with_hash(self, hashed);
+        fn update_with_hash(&mut self, hashed: u64) {
+            HyperLogLogHipImpl::<Registers>::update_with_hash(self, hashed);
         }
 
         fn estimate(&self) -> f64 {
-            HyperLogLogHIPImpl::<Registers>::estimate(self) as f64
+            HyperLogLogHipImpl::<Registers>::estimate(self) as f64
         }
         fn index(&self, i: usize) -> u8 {
             self.registers.as_slice()[i]
@@ -641,12 +651,12 @@ mod tests {
 
     #[test]
     fn hll_ertl_p12_accuracy_within_two_percent() {
-        assert_accuracy_within::<HyperLogLogP12<ErtlMLE>>("HllErtlP12", P12_ERROR_TOLERANCE);
+        assert_accuracy_within::<HyperLogLogP12<Ertl>>("HllErtlP12", P12_ERROR_TOLERANCE);
     }
 
     #[test]
     fn hllds_p12_accuracy_within_two_percent() {
-        assert_accuracy_within::<HyperLogLogHIPP12>("HllDsP12", P12_ERROR_TOLERANCE);
+        assert_accuracy_within::<HyperLogLogHipP12>("HllDsP12", P12_ERROR_TOLERANCE);
     }
 
     #[test]
@@ -659,7 +669,7 @@ mod tests {
 
     #[test]
     fn hll_ertl_p12_merge_within_two_percent() {
-        assert_merge_accuracy_within::<HyperLogLogP12<ErtlMLE>>("HllErtlP12", P12_ERROR_TOLERANCE);
+        assert_merge_accuracy_within::<HyperLogLogP12<Ertl>>("HllErtlP12", P12_ERROR_TOLERANCE);
     }
 
     /// Ranks are drawn from a 64-bit hash, so a register state whose estimate
@@ -667,17 +677,17 @@ mod tests {
     /// rather than saturate or collapse to zero.
     #[test]
     fn classic_estimate_holds_past_the_32_bit_range() {
-        const REGISTER_BITS: usize = HllBucketList::REGISTER_BITS;
-        let m = HllBucketList::NUM_REGISTERS as f64;
+        const RANK_HASH_BITS: usize = HllRegisters::RANK_HASH_BITS;
+        let m = HllRegisters::NUM_REGISTERS as f64;
         let alpha_m = 0.7213 / (1.0 + 1.079 / m);
 
         // A hash selecting `bucket` whose leading run gives every register the
         // same rank, so the estimate is `alpha_m * m * 2^rank` in closed form.
         for rank in [12u32, 16, 18, 20] {
             let mut hll = HyperLogLog::<Classic>::default();
-            for bucket in 0..HllBucketList::NUM_REGISTERS as u64 {
-                let hashed = (bucket << REGISTER_BITS) | (1 << (REGISTER_BITS - rank as usize));
-                HyperLogLog::<Classic>::insert_with_hash(&mut hll, hashed);
+            for bucket in 0..HllRegisters::NUM_REGISTERS as u64 {
+                let hashed = (bucket << RANK_HASH_BITS) | (1 << (RANK_HASH_BITS - rank as usize));
+                HyperLogLog::<Classic>::update_with_hash(&mut hll, hashed);
             }
             assert!(
                 hll.registers_as_slice().iter().all(|&r| r == rank as u8),
@@ -701,9 +711,9 @@ mod tests {
     fn hll_correctness_test() {
         let mut hll = HyperLogLog::<Classic>::default();
         hll_correctness_test_helper::<HyperLogLog<Classic>>(&mut hll);
-        let mut hll_ertl = HyperLogLog::<ErtlMLE>::default();
-        hll_correctness_test_helper::<HyperLogLog<ErtlMLE>>(&mut hll_ertl);
-        let mut hllds = HyperLogLogHIP::default();
+        let mut hll_ertl = HyperLogLog::<Ertl>::default();
+        hll_correctness_test_helper::<HyperLogLog<Ertl>>(&mut hll_ertl);
+        let mut hllds = HyperLogLogHip::default();
         hll_correctness_test_helper(&mut hllds);
     }
 
@@ -712,70 +722,70 @@ mod tests {
     where
         T: HllEstimator,
     {
-        hll.insert_with_hash(0x0002_0000_0000_0000);
+        hll.update_with_hash(0x0002_0000_0000_0000);
         assert_eq!(
             hll.index(0),
             1,
             "the first bucket should be 1, but get {}",
             hll.index(0)
         );
-        hll.insert_with_hash(0x0000_0000_0000_0000);
+        hll.update_with_hash(0x0000_0000_0000_0000);
         assert_eq!(
             hll.index(0),
             51,
             "the first bucket should be 51, but get {}",
             hll.index(0)
         );
-        hll.insert_with_hash(0xfffc_3000_0000_0000);
+        hll.update_with_hash(0xfffc_3000_0000_0000);
         assert_eq!(
-            hll.index(HllBucketList::P_MASK as usize),
+            hll.index(HllRegisters::INDEX_MASK as usize),
             5,
             "the last bucket should be 5, but get {}",
-            hll.index(HllBucketList::P_MASK as usize)
+            hll.index(HllRegisters::INDEX_MASK as usize)
         );
-        hll.insert_with_hash(0xcafe_0000_0000_0000);
+        hll.update_with_hash(0xcafe_0000_0000_0000);
         assert_eq!(
             hll.index(12991),
             1,
             "the 12991th bucket should be 1, but get {}",
             hll.index(12991)
         );
-        hll.insert_with_hash(0xcafc_00ce_cafe_face);
+        hll.update_with_hash(0xcafc_00ce_cafe_face);
         assert_eq!(
             hll.index(12991),
             11,
             "the 12991th bucket should be 11, but get {}",
             hll.index(12991)
         );
-        hll.insert_with_hash(0xface_cafe_face_cafe);
+        hll.update_with_hash(0xface_cafe_face_cafe);
         assert_eq!(
             hll.index(16051),
             1,
             "the 16051th bucket should be 1, but get {}",
             hll.index(16051)
         );
-        hll.insert_with_hash(0xfacc_ca00_0000_cafe);
+        hll.update_with_hash(0xfacc_ca00_0000_cafe);
         assert_eq!(
             hll.index(16051),
             3,
             "the 16051th bucket should be 3, but get {}",
             hll.index(16051)
         );
-        hll.insert_with_hash(0x0831_8310_0000_0000);
+        hll.update_with_hash(0x0831_8310_0000_0000);
         assert_eq!(
             hll.index(524),
             2,
             "the 524th bucket should be 2, but get {}",
             hll.index(524)
         );
-        hll.insert_with_hash(0x3014_1592_6535_8000);
+        hll.update_with_hash(0x3014_1592_6535_8000);
         assert_eq!(
             hll.index(3077),
             6,
             "the 3077th bucket should be 6, but get {}",
             hll.index(3077)
         );
-        hll.insert_with_hash(0xcafc_0ace_cafe_face);
+        hll.update_with_hash(0xcafc_0ace_cafe_face);
         assert_eq!(
             hll.index(12991),
             11,

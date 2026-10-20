@@ -3,7 +3,8 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use asap_sketchlib::{
-    BOTTOM_LAYER_FINDER, DataInput, HeapItem, UnivMon, UnivMonQ, UnivMonQConfig, hash64_seeded,
+    DataInput, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon, UnivMonQ, UnivMonQConfig,
+    hash64_seeded,
 };
 
 const N: usize = 250_000;
@@ -71,7 +72,7 @@ fn latency(duration: Duration) -> String {
 }
 
 fn bottom_layer(value: u64) -> usize {
-    let hash = hash64_seeded(BOTTOM_LAYER_FINDER, &DataInput::U64(value));
+    let hash = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &DataInput::U64(value));
     for level in 1..LEVELS {
         if ((hash >> level) & 1) == 0 {
             return level - 1;
@@ -86,12 +87,12 @@ fn univmon_frequency(sketch: &UnivMon, value: u64, terminal_only: bool) -> f64 {
     } else {
         0
     };
-    sketch.l2_sketch_layers[level].estimate(&DataInput::U64(value))
+    sketch.layer_sketches[level].estimate(&DataInput::U64(value))
 }
 
-fn heap_key_u64(key: &HeapItem) -> Option<u64> {
+fn heap_key_u64(key: &OwnedDataInput) -> Option<u64> {
     match key {
-        HeapItem::U64(value) => Some(*value),
+        OwnedDataInput::U64(value) => Some(*value),
         _ => None,
     }
 }
@@ -100,7 +101,7 @@ fn univmon_heavy_hitters(sketch: &UnivMon, terminal_only: bool, k: usize) -> Vec
     let mut keys = HashSet::new();
     let levels = if terminal_only { 0..LEVELS } else { 0..1 };
     for level in levels {
-        for item in sketch.hh_layers[level].heap() {
+        for item in sketch.layer_heaps[level].heap() {
             if let Some(key) = heap_key_u64(&item.key) {
                 keys.insert(key);
             }
@@ -161,21 +162,21 @@ fn main() {
     exact_top.truncate(TOP_K);
 
     let q_base = UnivMonQConfig {
-        levels: LEVELS,
-        width: WIDTH,
-        width_halving_period: 0,
-        depth: DEPTH,
+        layers: LEVELS,
+        top_layer_cols: WIDTH,
+        cols_halving_period: 0,
+        rows: DEPTH,
         counter_bits: 32,
-        candidates: CANDIDATES,
+        heap_size: CANDIDATES,
         ordered_samples: 0,
-        hash_seed: 5,
+        seed_index: 5,
     };
     let q_ordered = UnivMonQConfig {
         ordered_samples: ORDERED_SAMPLES,
         ..q_base
     };
     let q_memory_matched = UnivMonQConfig {
-        candidates: MEMORY_MATCHED_CANDIDATES,
+        heap_size: MEMORY_MATCHED_CANDIDATES,
         ordered_samples: ORDERED_SAMPLES,
         ..q_base
     };
@@ -187,21 +188,21 @@ fn main() {
     let mut q_memory_matched_times = Vec::new();
 
     for _ in 0..REPEATS {
-        let mut sketch = UnivMon::init_univmon(CANDIDATES, DEPTH, WIDTH, LEVELS);
+        let mut sketch = UnivMon::new(CANDIDATES, DEPTH, WIDTH, LEVELS);
         let start = Instant::now();
         for &value in &values {
-            sketch.insert(&DataInput::U64(black_box(value)), 1);
+            sketch.update_weighted(&DataInput::U64(black_box(value)), 1);
         }
         regular_times.push(start.elapsed());
-        black_box(sketch.bucket_size);
+        black_box(sketch.total_weight);
 
-        let mut sketch = UnivMon::init_univmon(CANDIDATES, DEPTH, WIDTH, LEVELS);
+        let mut sketch = UnivMon::new(CANDIDATES, DEPTH, WIDTH, LEVELS);
         let start = Instant::now();
         for &value in &values {
-            sketch.fast_insert(&DataInput::U64(black_box(value)), 1);
+            sketch.update_weighted_terminal(&DataInput::U64(black_box(value)), 1);
         }
         fast_times.push(start.elapsed());
-        black_box(sketch.bucket_size);
+        black_box(sketch.total_weight);
 
         let mut sketch = UnivMonQ::new(q_base).unwrap();
         let start = Instant::now();
@@ -235,40 +236,40 @@ fn main() {
     let q_memory_matched_time = median_duration(q_memory_matched_times);
 
     // Build once more for accuracy, query latency, serialized size, and merge.
-    let mut regular = UnivMon::init_univmon(CANDIDATES, DEPTH, WIDTH, LEVELS);
-    let mut fast = UnivMon::init_univmon(CANDIDATES, DEPTH, WIDTH, LEVELS);
+    let mut regular = UnivMon::new(CANDIDATES, DEPTH, WIDTH, LEVELS);
+    let mut fast = UnivMon::new(CANDIDATES, DEPTH, WIDTH, LEVELS);
     let mut q_base_sketch = UnivMonQ::new(q_base).unwrap();
     let mut q_ordered_sketch = UnivMonQ::new(q_ordered).unwrap();
     let mut q_memory_matched_sketch = UnivMonQ::new(q_memory_matched).unwrap();
     for &value in &values {
         let input = DataInput::U64(value);
-        regular.insert(&input, 1);
-        fast.fast_insert(&input, 1);
+        regular.update_weighted(&input, 1);
+        fast.update_weighted_terminal(&input, 1);
         q_base_sketch.add(&value);
         q_ordered_sketch.add(&value);
         q_memory_matched_sketch.add(&value);
     }
 
-    let regular_wire = regular.serialize_to_bytes().unwrap().len();
-    let fast_wire = fast.serialize_to_bytes().unwrap().len();
-    let q_base_wire = q_base_sketch.serialize_to_bytes().unwrap().len();
-    let q_ordered_wire = q_ordered_sketch.serialize_to_bytes().unwrap().len();
-    let q_memory_matched_wire = q_memory_matched_sketch.serialize_to_bytes().unwrap().len();
+    let regular_wire = regular.to_asapv1().unwrap().len();
+    let fast_wire = fast.to_asapv1().unwrap().len();
+    let q_base_wire = q_base_sketch.to_asapv1().unwrap().len();
+    let q_ordered_wire = q_ordered_sketch.to_asapv1().unwrap().len();
+    let q_memory_matched_wire = q_memory_matched_sketch.to_asapv1().unwrap().len();
 
-    let regular_l1 = regular.calc_l1();
-    let regular_card = regular.calc_card();
-    let regular_f2 = regular.calc_l2().powi(2);
-    let regular_entropy = regular.calc_entropy();
+    let regular_l1 = regular.estimate_l1();
+    let regular_card = regular.estimate_cardinality();
+    let regular_f2 = regular.estimate_l2().powi(2);
+    let regular_entropy = regular.estimate_entropy();
     let regular_frequency = univmon_frequency(&regular, 0, false);
     let regular_hh = univmon_heavy_hitters(&regular, false, TOP_K);
-    let fast_l1 = fast.calc_l1();
-    let fast_card = fast.calc_card();
-    let fast_f2 = fast.calc_l2().powi(2);
-    let fast_entropy = fast.calc_entropy();
+    let fast_l1 = fast.estimate_l1();
+    let fast_card = fast.estimate_cardinality();
+    let fast_f2 = fast.estimate_l2().powi(2);
+    let fast_entropy = fast.estimate_entropy();
     let fast_frequency = univmon_frequency(&fast, 0, true);
     let fast_hh = univmon_heavy_hitters(&fast, true, TOP_K);
     let q_l1 = q_ordered_sketch.count() as f64;
-    let q_card = q_base_sketch.estimate_distinct();
+    let q_card = q_base_sketch.estimate_cardinality();
     let q_f2 = q_base_sketch.estimate_f2();
     let q_entropy_bits = q_base_sketch.estimate_entropy() / std::f64::consts::LN_2;
     let q_frequency = q_ordered_sketch.estimate_frequency(0.0) as f64;
@@ -291,8 +292,8 @@ fn main() {
     let q_prepared = q_ordered_sketch.prepare_queries();
     let q_memory_prepared = q_memory_matched_sketch.prepare_queries();
 
-    let regular_l1_query = average_query(|| regular.calc_l1(), QUERY_REPEATS);
-    let fast_l1_query = average_query(|| fast.calc_l1(), QUERY_REPEATS);
+    let regular_l1_query = average_query(|| regular.estimate_l1(), QUERY_REPEATS);
+    let fast_l1_query = average_query(|| fast.estimate_l1(), QUERY_REPEATS);
     let q_l1_query = average_query(|| q_ordered_sketch.count(), QUERY_REPEATS);
     let q_memory_l1_query = average_query(|| q_memory_matched_sketch.count(), QUERY_REPEATS);
     let regular_frequency_query = average_query(
@@ -311,19 +312,19 @@ fn main() {
         || q_memory_matched_sketch.estimate_frequency(black_box(0.0)),
         QUERY_REPEATS,
     );
-    let regular_f0_query = average_query(|| regular.calc_card(), QUERY_REPEATS);
-    let fast_f0_query = average_query(|| fast.calc_card(), QUERY_REPEATS);
-    let q_f0_query = average_query(|| q_ordered_sketch.estimate_distinct(), QUERY_REPEATS);
+    let regular_f0_query = average_query(|| regular.estimate_cardinality(), QUERY_REPEATS);
+    let fast_f0_query = average_query(|| fast.estimate_cardinality(), QUERY_REPEATS);
+    let q_f0_query = average_query(|| q_ordered_sketch.estimate_cardinality(), QUERY_REPEATS);
     let q_memory_f0_query = average_query(
-        || q_memory_matched_sketch.estimate_distinct(),
+        || q_memory_matched_sketch.estimate_cardinality(),
         QUERY_REPEATS,
     );
-    let regular_f2_query = average_query(|| regular.calc_l2(), QUERY_REPEATS);
-    let fast_f2_query = average_query(|| fast.calc_l2(), QUERY_REPEATS);
+    let regular_f2_query = average_query(|| regular.estimate_l2(), QUERY_REPEATS);
+    let fast_f2_query = average_query(|| fast.estimate_l2(), QUERY_REPEATS);
     let q_f2_query = average_query(|| q_ordered_sketch.estimate_f2(), QUERY_REPEATS);
     let q_memory_f2_query = average_query(|| q_memory_matched_sketch.estimate_f2(), QUERY_REPEATS);
-    let regular_entropy_query = average_query(|| regular.calc_entropy(), QUERY_REPEATS);
-    let fast_entropy_query = average_query(|| fast.calc_entropy(), QUERY_REPEATS);
+    let regular_entropy_query = average_query(|| regular.estimate_entropy(), QUERY_REPEATS);
+    let fast_entropy_query = average_query(|| fast.estimate_entropy(), QUERY_REPEATS);
     let q_entropy_query = average_query(|| q_ordered_sketch.estimate_entropy(), QUERY_REPEATS);
     let q_memory_entropy_query =
         average_query(|| q_memory_matched_sketch.estimate_entropy(), QUERY_REPEATS);
@@ -364,9 +365,9 @@ fn main() {
     let q_cdf_query = average_query(|| q_ordered_sketch.cdf(), QUERY_REPEATS);
     let q_memory_cdf_query = average_query(|| q_memory_matched_sketch.cdf(), QUERY_REPEATS);
 
-    let q_prepared_f0_query = average_query(|| q_prepared.estimate_distinct(), QUERY_REPEATS);
+    let q_prepared_f0_query = average_query(|| q_prepared.estimate_cardinality(), QUERY_REPEATS);
     let q_memory_prepared_f0_query =
-        average_query(|| q_memory_prepared.estimate_distinct(), QUERY_REPEATS);
+        average_query(|| q_memory_prepared.estimate_cardinality(), QUERY_REPEATS);
     let q_prepared_f2_query = average_query(|| q_prepared.estimate_f2(), QUERY_REPEATS);
     let q_memory_prepared_f2_query =
         average_query(|| q_memory_prepared.estimate_f2(), QUERY_REPEATS);
@@ -603,7 +604,7 @@ fn main() {
         "  UnivMon-Q mem-match L1={:.4}, freq={:.4}, F0={:.4}, F2={:.4}, H={:.4}, HH-recall={:.2}",
         relative_error(q_memory_l1, exact_l1),
         relative_error(q_memory_frequency, exact[&0] as f64),
-        relative_error(q_memory_matched_sketch.estimate_distinct(), exact_f0),
+        relative_error(q_memory_matched_sketch.estimate_cardinality(), exact_f0),
         relative_error(q_memory_matched_sketch.estimate_f2(), exact_f2),
         relative_error(
             q_memory_matched_sketch.estimate_entropy() / std::f64::consts::LN_2,
@@ -646,13 +647,13 @@ fn main() {
     );
 
     let midpoint = N / 2;
-    let mut left = UnivMon::init_univmon(CANDIDATES, DEPTH, WIDTH, LEVELS);
-    let mut right = UnivMon::init_univmon(CANDIDATES, DEPTH, WIDTH, LEVELS);
+    let mut left = UnivMon::new(CANDIDATES, DEPTH, WIDTH, LEVELS);
+    let mut right = UnivMon::new(CANDIDATES, DEPTH, WIDTH, LEVELS);
     for &value in &values[..midpoint] {
-        left.fast_insert(&DataInput::U64(value), 1);
+        left.update_weighted_terminal(&DataInput::U64(value), 1);
     }
     for &value in &values[midpoint..] {
-        right.fast_insert(&DataInput::U64(value), 1);
+        right.update_weighted_terminal(&DataInput::U64(value), 1);
     }
     let mut univmon_merge_times = Vec::with_capacity(MERGE_REPEATS);
     for _ in 0..MERGE_REPEATS {
@@ -660,7 +661,7 @@ fn main() {
         let start = Instant::now();
         merged.merge(&right);
         univmon_merge_times.push(start.elapsed());
-        black_box(merged.bucket_size);
+        black_box(merged.total_weight);
     }
     let univmon_merge = median_duration(univmon_merge_times);
 

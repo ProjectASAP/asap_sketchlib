@@ -14,7 +14,8 @@
 #[cfg(feature = "octo-runtime")]
 fn main() {
     use asap_sketchlib::{
-        CM_PROMASK, CmTopKOctoAggregator, CmTopKOctoPlan, DataInput, OctoConfig, run_octo,
+        CountMinSketchWithHeapOctoAggregator, CountMinSketchWithHeapOctoPlan, DataInput,
+        OCTO_COUNT_MIN_DEFAULT_THRESHOLD, OctoConfig, run_octo,
     };
 
     fn config(num_workers: usize) -> OctoConfig {
@@ -27,7 +28,7 @@ fn main() {
         }
     }
 
-    let tau = CM_PROMASK;
+    let tau = OCTO_COUNT_MIN_DEFAULT_THRESHOLD;
 
     // Interleaved order, tight columns: can a key need MORE than tau?
     println!("== interleaved arrival, one worker ==");
@@ -39,9 +40,12 @@ fn main() {
                     inputs.push(DataInput::U64(key));
                 }
             }
-            let sk = run_octo(&inputs, &config(1), CmTopKOctoPlan::new(rows, cols), || {
-                CmTopKOctoAggregator::new(rows, cols, 1024)
-            })
+            let sk = run_octo(
+                &inputs,
+                &config(1),
+                CountMinSketchWithHeapOctoPlan::new(rows, cols),
+                || CountMinSketchWithHeapOctoAggregator::new(rows, cols, 1024),
+            )
             .parent
             .sketch;
             println!(
@@ -73,8 +77,8 @@ fn main() {
             run_octo(
                 &inputs,
                 &config(workers),
-                CmTopKOctoPlan::new(rows, cols),
-                || CmTopKOctoAggregator::new(rows, cols, 1024),
+                CountMinSketchWithHeapOctoPlan::new(rows, cols),
+                || CountMinSketchWithHeapOctoAggregator::new(rows, cols, 1024),
             )
             .parent
             .sketch

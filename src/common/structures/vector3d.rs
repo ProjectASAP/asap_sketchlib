@@ -7,9 +7,9 @@ use crate::MatrixFastHash;
 /// fixed-length record.
 ///
 /// `Vector3D` models a `rows * cols` grid where each `(row, col)` cell is a
-/// contiguous run of `depth` elements — a **bucket**. Storage is a single flat
+/// contiguous run of `bucket_len` elements — a **bucket**. Storage is a single flat
 /// `Vec<T>` in bucket-major order; the element at `(row, col, d)` lives at
-/// `(row * cols + col) * depth + d`.
+/// `(row * cols + col) * bucket_len + d`.
 ///
 /// Row and column addressing mirrors [`crate::Vector2D`]: the same
 /// [`MatrixFastHash`] machinery selects one column per row, and the third
@@ -26,7 +26,7 @@ use crate::MatrixFastHash;
 /// # Why not `Vector2D<[T; N]>`
 ///
 /// `Vector2D<[T; N]>` has exactly the same memory layout. The one thing
-/// `Vector3D` adds is a **`depth` chosen at run time**: it comes from a
+/// `Vector3D` adds is a **`bucket_len` chosen at run time**: it comes from a
 /// configuration value (a HyperLogLog precision, a sub-window count) that is
 /// also read back from deserialized bytes, which a const generic cannot
 /// express.
@@ -36,7 +36,7 @@ use crate::MatrixFastHash;
 /// The layout is array-of-structs: a bucket's elements are adjacent, and
 /// consecutive buckets are adjacent to each other. A per-item path touches
 /// one bucket, and a full-table sweep over
-/// `as_mut_slice().chunks_exact_mut(depth)` walks the storage in order.
+/// `as_mut_slice().chunks_exact_mut(bucket_len)` walks the storage in order.
 ///
 /// How much of a bucket a per-item path actually reads is the sketch's
 /// business, not this type's — one caller here rewrites the whole record on
@@ -49,7 +49,7 @@ pub struct Vector3D<T> {
     data: Vec<T>,
     rows: usize,
     cols: usize,
-    depth: usize,
+    bucket_len: usize,
     mask_bits: u32,
     mask: u128,
 }
@@ -65,7 +65,7 @@ struct Vector3DSer<'a, T> {
     data: &'a [T],
     rows: usize,
     cols: usize,
-    depth: usize,
+    bucket_len: usize,
 }
 
 #[derive(Deserialize)]
@@ -74,7 +74,7 @@ struct Vector3DDeserialize<T> {
     data: Vec<T>,
     rows: usize,
     cols: usize,
-    depth: usize,
+    bucket_len: usize,
 }
 
 impl<T: Serialize> Serialize for Vector3D<T> {
@@ -83,7 +83,7 @@ impl<T: Serialize> Serialize for Vector3D<T> {
             data: &self.data,
             rows: self.rows,
             cols: self.cols,
-            depth: self.depth,
+            bucket_len: self.bucket_len,
         }
         .serialize(serializer)
     }
@@ -98,7 +98,7 @@ where
         D: serde::Deserializer<'de>,
     {
         let input = Vector3DDeserialize::deserialize(deserializer)?;
-        if input.rows == 0 || input.cols == 0 || input.depth == 0 {
+        if input.rows == 0 || input.cols == 0 || input.bucket_len == 0 {
             return Err(serde::de::Error::custom(
                 "Vector3D: rows, cols and depth must all be non-zero",
             ));
@@ -106,7 +106,7 @@ where
         let expected = input
             .rows
             .checked_mul(input.cols)
-            .and_then(|n| n.checked_mul(input.depth))
+            .and_then(|n| n.checked_mul(input.bucket_len))
             .ok_or_else(|| serde::de::Error::custom("Vector3D: rows * cols * depth overflows"))?;
         if input.data.len() != expected {
             return Err(serde::de::Error::custom(format!(
@@ -119,7 +119,7 @@ where
             data: input.data,
             rows: input.rows,
             cols: input.cols,
-            depth: input.depth,
+            bucket_len: input.bucket_len,
             mask_bits,
             mask: (1u128 << mask_bits) - 1,
         })
@@ -127,26 +127,26 @@ where
 }
 
 impl<T> Vector3D<T> {
-    /// Creates a container sized for `rows * cols * depth` elements, with the
+    /// Creates a container sized for `rows * cols * bucket_len` elements, with the
     /// storage left empty.
     ///
     /// The bucket accessors are only valid once [`Self::fill`] has populated
     /// the storage; until then [`Self::len`] reports `0`.
     ///
-    /// Panics if any dimension is zero, or if `rows * cols * depth` overflows
+    /// Panics if any dimension is zero, or if `rows * cols * bucket_len` overflows
     /// `usize`.
-    pub fn init(rows: usize, cols: usize, depth: usize) -> Self {
+    pub fn unfilled(rows: usize, cols: usize, bucket_len: usize) -> Self {
         assert!(
-            rows > 0 && cols > 0 && depth > 0,
-            "Vector3D dimensions must be non-zero, got rows={rows}, cols={cols}, depth={depth}"
+            rows > 0 && cols > 0 && bucket_len > 0,
+            "Vector3D dimensions must be non-zero, got rows={rows}, cols={cols}, depth={bucket_len}"
         );
         let len = rows
             .checked_mul(cols)
-            .and_then(|n| n.checked_mul(depth))
+            .and_then(|n| n.checked_mul(bucket_len))
             .unwrap_or_else(|| {
                 panic!(
                     "Vector3D rows * cols * depth overflows usize, got \
-                     rows={rows}, cols={cols}, depth={depth}"
+                     rows={rows}, cols={cols}, depth={bucket_len}"
                 )
             });
         let mask_bits = cols_mask_bits(cols);
@@ -154,13 +154,13 @@ impl<T> Vector3D<T> {
             data: Vec::with_capacity(len),
             rows,
             cols,
-            depth,
+            bucket_len,
             mask_bits,
             mask: (1u128 << mask_bits) - 1,
         }
     }
 
-    /// Replaces the entire container with `rows * cols * depth` clones of
+    /// Replaces the entire container with `rows * cols * bucket_len` clones of
     /// `value`, reusing the existing allocation.
     pub fn fill(&mut self, value: T)
     where
@@ -168,7 +168,7 @@ impl<T> Vector3D<T> {
     {
         // The product is checked in `init`, which is the only way to set these
         // three fields.
-        let len = self.rows * self.cols * self.depth;
+        let len = self.rows * self.cols * self.bucket_len;
         self.data.clear();
         self.data.resize(len, value);
     }
@@ -183,7 +183,7 @@ impl<T> Vector3D<T> {
 
     #[inline(always)]
     fn bucket_start(&self, row: usize, col: usize) -> usize {
-        (row * self.cols + col) * self.depth
+        (row * self.cols + col) * self.bucket_len
     }
 
     /// Returns the number of rows.
@@ -198,10 +198,10 @@ impl<T> Vector3D<T> {
         self.cols
     }
 
-    /// Returns the per-bucket depth (length of each `(row, col)` cell).
+    /// Returns the per-bucket bucket_len (length of each `(row, col)` cell).
     #[inline(always)]
-    pub fn depth(&self) -> usize {
-        self.depth
+    pub fn bucket_len(&self) -> usize {
+        self.bucket_len
     }
 
     /// Returns the total number of elements.
@@ -218,7 +218,7 @@ impl<T> Vector3D<T> {
 
     /// Provides immutable access to the flattened storage.
     ///
-    /// Iterating `as_slice().chunks_exact(depth())` walks every bucket in
+    /// Iterating `as_slice().chunks_exact(bucket_len())` walks every bucket in
     /// `(row, col)` order.
     #[inline(always)]
     pub fn as_slice(&self) -> &[T] {
@@ -227,7 +227,7 @@ impl<T> Vector3D<T> {
 
     /// Provides mutable access to the flattened storage.
     ///
-    /// Iterating `as_mut_slice().chunks_exact_mut(depth())` walks every bucket
+    /// Iterating `as_mut_slice().chunks_exact_mut(bucket_len())` walks every bucket
     /// in `(row, col)` order — the shape a periodic full-table sweep wants.
     #[inline(always)]
     pub fn as_mut_slice(&mut self) -> &mut [T] {
@@ -248,16 +248,16 @@ impl<T> Vector3D<T> {
             self.cols
         );
         let start = self.bucket_start(row, col);
-        &self.data[start..start + self.depth]
+        &self.data[start..start + self.bucket_len]
     }
 
     /// Returns the bit width needed to represent one column index.
     ///
-    /// A packed fast-path hash carries `rows * get_mask_bits()` bits of column
+    /// A packed fast-path hash carries `rows * mask_bits()` bits of column
     /// selection; callers that pack all rows into one `u128` must check that
     /// product against 128 before hashing.
     #[inline(always)]
-    pub fn get_mask_bits(&self) -> u32 {
+    pub fn mask_bits(&self) -> u32 {
         self.mask_bits
     }
 
@@ -278,7 +278,7 @@ impl<T> Vector3D<T> {
         for row in 0..self.rows {
             let col = self.col_for_row(hashed_val, row);
             let start = self.bucket_start(row, col);
-            let end = start + self.depth;
+            let end = start + self.bucket_len;
             op(&mut self.data[start..end], &value, row);
         }
     }
@@ -310,34 +310,34 @@ impl<T> Vector3D<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MatrixHashType;
+    use crate::MatrixHash;
 
     #[test]
     fn fill_initializes_every_cell() {
-        let mut v: Vector3D<u8> = Vector3D::init(2, 4, 3);
+        let mut v: Vector3D<u8> = Vector3D::unfilled(2, 4, 3);
         assert_eq!(v.len(), 0, "init leaves storage empty until fill");
         assert!(v.is_empty());
         v.fill(0);
         assert_eq!(v.len(), 2 * 4 * 3);
         assert!(!v.is_empty());
         assert!(v.as_slice().iter().all(|&x| x == 0));
-        assert_eq!((v.rows(), v.cols(), v.depth()), (2, 4, 3));
+        assert_eq!((v.rows(), v.cols(), v.bucket_len()), (2, 4, 3));
     }
 
     #[test]
     #[should_panic(expected = "dimensions must be non-zero")]
     fn init_rejects_zero_depth() {
-        let _: Vector3D<u8> = Vector3D::init(2, 4, 0);
+        let _: Vector3D<u8> = Vector3D::unfilled(2, 4, 0);
     }
 
     #[test]
     fn buckets_tile_the_storage_without_gaps_or_overlap() {
-        let mut v: Vector3D<u16> = Vector3D::init(3, 5, 4);
+        let mut v: Vector3D<u16> = Vector3D::unfilled(3, 5, 4);
         v.fill(0);
         // Stamp each bucket with a unique marker through the bucket accessor,
         // then verify the flat storage is exactly the expected tiling.
-        let depth = v.depth();
-        for (index, bucket) in v.as_mut_slice().chunks_exact_mut(depth).enumerate() {
+        let bucket_len = v.bucket_len();
+        for (index, bucket) in v.as_mut_slice().chunks_exact_mut(bucket_len).enumerate() {
             for slot in bucket.iter_mut() {
                 *slot = index as u16 + 1;
             }
@@ -350,35 +350,35 @@ mod tests {
         assert_eq!(v.bucket_slice(0, 0), &[1, 1, 1, 1]);
         assert_eq!(v.bucket_slice(2, 4), &[15, 15, 15, 15]);
         // A sweep over chunks_exact sees every bucket exactly once.
-        assert_eq!(v.as_slice().chunks_exact(v.depth()).count(), 15);
+        assert_eq!(v.as_slice().chunks_exact(v.bucket_len()).count(), 15);
     }
 
     #[test]
     fn depth_one_degenerates_to_a_plain_matrix() {
-        let mut v: Vector3D<i32> = Vector3D::init(2, 3, 1);
+        let mut v: Vector3D<i32> = Vector3D::unfilled(2, 3, 1);
         v.fill(0);
         for (index, slot) in v.as_mut_slice().iter_mut().enumerate() {
             *slot = index as i32;
         }
-        // With depth 1 the flat storage is exactly the row-major matrix.
+        // With bucket_len 1 the flat storage is exactly the row-major matrix.
         assert_eq!(v.as_slice(), &[0, 1, 2, 3, 4, 5]);
         assert_eq!(v.len(), v.rows() * v.cols());
     }
 
     #[test]
     fn mask_bits_cover_the_column_index() {
-        assert_eq!(Vector3D::<u8>::init(1, 64, 1).get_mask_bits(), 6);
-        assert_eq!(Vector3D::<u8>::init(1, 1, 1).get_mask_bits(), 0);
+        assert_eq!(Vector3D::<u8>::unfilled(1, 64, 1).mask_bits(), 6);
+        assert_eq!(Vector3D::<u8>::unfilled(1, 1, 1).mask_bits(), 0);
         // Non-power-of-two widths round up to the next bit.
-        assert_eq!(Vector3D::<u8>::init(1, 17, 1).get_mask_bits(), 5);
-        assert_eq!(Vector3D::<u8>::init(1, 4096, 1).get_mask_bits(), 12);
+        assert_eq!(Vector3D::<u8>::unfilled(1, 17, 1).mask_bits(), 5);
+        assert_eq!(Vector3D::<u8>::unfilled(1, 4096, 1).mask_bits(), 12);
     }
 
     #[test]
     fn fast_insert_and_query_min_agree_on_the_same_columns() {
-        let mut v: Vector3D<u32> = Vector3D::init(3, 64, 2);
+        let mut v: Vector3D<u32> = Vector3D::unfilled(3, 64, 2);
         v.fill(0);
-        let hash = MatrixHashType::Packed64(0x0123_4567_89AB_CDEF);
+        let hash = MatrixHash::Packed64(0x0123_4567_89AB_CDEF);
         // Write a per-row marker into the selected bucket of every row.
         v.fast_insert(
             |bucket, &delta: &u32, row| {
@@ -400,16 +400,16 @@ mod tests {
 
     #[test]
     fn serde_round_trip_preserves_shape_and_contents() {
-        let mut v: Vector3D<u8> = Vector3D::init(2, 8, 3);
+        let mut v: Vector3D<u8> = Vector3D::unfilled(2, 8, 3);
         v.fill(0);
         let at = (8 + 5) * 3 + 2; // bucket (1, 5), slot 2
         v.as_mut_slice()[at] = 200;
         let bytes = rmp_serde::to_vec_named(&v).expect("serialize");
         let back: Vector3D<u8> = rmp_serde::from_slice(&bytes).expect("deserialize");
-        assert_eq!((back.rows(), back.cols(), back.depth()), (2, 8, 3));
+        assert_eq!((back.rows(), back.cols(), back.bucket_len()), (2, 8, 3));
         assert_eq!(back.as_slice(), v.as_slice());
         // Derived routing state is recomputed, not carried on the wire.
-        assert_eq!(back.get_mask_bits(), v.get_mask_bits());
+        assert_eq!(back.mask_bits(), v.mask_bits());
     }
 
     /// The compact encoding is positional, so `Serialize` and `Deserialize`
@@ -417,14 +417,14 @@ mod tests {
     /// mismatch by ignoring the extra keys; this one rejects its own output.
     #[test]
     fn serde_round_trip_also_holds_for_the_compact_encoding() {
-        let mut v: Vector3D<u8> = Vector3D::init(2, 8, 3);
+        let mut v: Vector3D<u8> = Vector3D::unfilled(2, 8, 3);
         v.fill(0);
         v.as_mut_slice()[(8 + 5) * 3 + 2] = 200;
         let bytes = rmp_serde::to_vec(&v).expect("serialize");
         let back: Vector3D<u8> = rmp_serde::from_slice(&bytes).expect("deserialize");
-        assert_eq!((back.rows(), back.cols(), back.depth()), (2, 8, 3));
+        assert_eq!((back.rows(), back.cols(), back.bucket_len()), (2, 8, 3));
         assert_eq!(back.as_slice(), v.as_slice());
-        assert_eq!(back.get_mask_bits(), v.get_mask_bits());
+        assert_eq!(back.mask_bits(), v.mask_bits());
     }
 
     #[test]
@@ -433,13 +433,13 @@ mod tests {
         // Each dimension is legal on its own; the product is not. Without the
         // check `Vec::with_capacity` receives the wrapped product and the
         // container reports a shape its storage cannot hold.
-        let _: Vector3D<u8> = Vector3D::init(3, usize::MAX / 2, 1);
+        let _: Vector3D<u8> = Vector3D::unfilled(3, usize::MAX / 2, 1);
     }
 
     #[test]
     #[should_panic(expected = "out of bounds")]
     fn bucket_slice_rejects_a_column_past_the_row() {
-        let mut v: Vector3D<u16> = Vector3D::init(2, 4, 3);
+        let mut v: Vector3D<u16> = Vector3D::unfilled(2, 4, 3);
         v.fill(0);
         // In bounds of `data`, so the slice index alone would return row 1's
         // bucket instead of panicking.
@@ -453,14 +453,14 @@ mod tests {
             data: Vec<u8>,
             rows: usize,
             cols: usize,
-            depth: usize,
+            bucket_len: usize,
         }
         // 2 * 8 * 3 = 48 elements are required; supply 47.
         let forged = Forged {
             data: vec![0u8; 47],
             rows: 2,
             cols: 8,
-            depth: 3,
+            bucket_len: 3,
         };
         let bytes = rmp_serde::to_vec_named(&forged).expect("serialize");
         let err = rmp_serde::from_slice::<Vector3D<u8>>(&bytes)
@@ -479,13 +479,13 @@ mod tests {
             data: Vec<u8>,
             rows: usize,
             cols: usize,
-            depth: usize,
+            bucket_len: usize,
         }
         let forged = Forged {
             data: Vec::new(),
             rows: 2,
             cols: 0,
-            depth: 3,
+            bucket_len: 3,
         };
         let bytes = rmp_serde::to_vec_named(&forged).expect("serialize");
         let err =

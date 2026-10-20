@@ -4,24 +4,24 @@
 use serde::{Deserialize, Serialize};
 
 /// Quick-start row count for fixed matrix aliases.
-pub const QUICKSTART_ROW_NUM: usize = 5;
+pub const QUICKSTART_ROWS: usize = 5;
 /// Quick-start column count for fixed matrix aliases.
-pub const QUICKSTART_COL_NUM: usize = 2048;
+pub const QUICKSTART_COLS: usize = 2048;
 /// Total cell count for quick-start fixed matrices.
-pub const QUICKSTART_SIZE: usize = QUICKSTART_ROW_NUM * QUICKSTART_COL_NUM;
+pub const QUICKSTART_SIZE: usize = QUICKSTART_ROWS * QUICKSTART_COLS;
 /// Default row count for fixed matrix aliases.
-pub const DEFAULT_ROW_NUM: usize = 3;
+pub const DEFAULT_ROWS: usize = 3;
 /// Default column count for fixed matrix aliases.
-pub const DEFAULT_COL_NUM: usize = 4096;
+pub const DEFAULT_COLS: usize = 4096;
 
 /// Register storage interface used by HyperLogLog implementations.
 ///
 /// Implementations must keep the constants consistent:
-/// `NUM_REGISTERS == 1 << PRECISION`, `REGISTER_BITS == 64 - PRECISION`, and
-/// `P_MASK == NUM_REGISTERS - 1`, with `PRECISION >= 1`. The estimators rely
-/// on these relations (a register rank never exceeds `REGISTER_BITS + 1`), so
+/// `NUM_REGISTERS == 1 << PRECISION`, `RANK_HASH_BITS == 64 - PRECISION`, and
+/// `INDEX_MASK == NUM_REGISTERS - 1`, with `PRECISION >= 1`. The estimators rely
+/// on these relations (a register rank never exceeds `RANK_HASH_BITS + 1`), so
 /// an inconsistent hand-written impl silently produces wrong estimates.
-/// [`impl_hll_bucket_list!`](crate::impl_hll_bucket_list) enforces them at
+/// [`impl_hll_registers!`](crate::impl_hll_registers) enforces them at
 /// compile time.
 pub trait HllRegisterStorage:
     Clone + std::fmt::Debug + Default + Serialize + for<'de> Deserialize<'de>
@@ -29,11 +29,11 @@ pub trait HllRegisterStorage:
     /// HLL precision parameter.
     const PRECISION: usize;
     /// Number of hash bits reserved for register-rank computation.
-    const REGISTER_BITS: usize;
+    const RANK_HASH_BITS: usize;
     /// Total number of registers.
     const NUM_REGISTERS: usize;
     /// Bitmask for register selection.
-    const P_MASK: u64;
+    const INDEX_MASK: u64;
 
     /// Returns the register slice.
     fn as_slice(&self) -> &[u8];
@@ -57,14 +57,14 @@ pub trait HllRegisterStorage:
 /// Generates a fixed-size HLL register storage type for a given precision.
 ///
 /// Use this to instantiate a precision the crate does not ship a type for
-/// (the built-ins are [`HllBucketListP12`], [`HllBucketListP14`], and
-/// [`HllBucketListP16`]). The generated type implements
+/// (the built-ins are [`HllRegistersP12`], [`HllRegistersP14`], and
+/// [`HllRegistersP16`]). The generated type implements
 /// [`HllRegisterStorage`], so it plugs straight into `HyperLogLogImpl` and
-/// `HyperLogLogHIPImpl` and keeps the same monomorphized fast path.
+/// `HyperLogLogHipImpl` and keeps the same monomorphized fast path.
 ///
 /// `num_registers` must be exactly `1 << precision`, and `precision` must be
 /// at least 1; both are checked at compile time. The register index is
-/// `(hash >> REGISTER_BITS) & P_MASK`, so a mismatched pair would address only
+/// `(hash >> RANK_HASH_BITS) & INDEX_MASK`, so a mismatched pair would address only
 /// `1 << precision` registers while dividing by `num_registers`, silently
 /// biasing every estimate.
 ///
@@ -72,13 +72,13 @@ pub trait HllRegisterStorage:
 /// use asap_sketchlib::sketches::hll::HyperLogLogImpl;
 /// use asap_sketchlib::{Classic, DataInput};
 ///
-/// asap_sketchlib::impl_hll_bucket_list!(HllBucketListP18, 18, 1_usize << 18);
+/// asap_sketchlib::impl_hll_registers!(HllBucketListP18, 18, 1_usize << 18);
 ///
 /// let mut hll = HyperLogLogImpl::<Classic, HllBucketListP18>::new();
-/// hll.insert(&DataInput::Str("hello"));
+/// hll.update(&DataInput::Str("hello"));
 /// assert_eq!(HllBucketListP18::NUM_REGISTERS, 1 << 18);
 /// ```
-macro_rules! impl_hll_bucket_list {
+macro_rules! impl_hll_registers {
     ($name:ident, $precision:literal, $num_registers:expr) => {
         const _: () = {
             ::std::assert!(
@@ -102,11 +102,11 @@ macro_rules! impl_hll_bucket_list {
             /// HLL precision parameter.
             pub const PRECISION: usize = $precision;
             /// Number of bits used to derive the rank value.
-            pub const REGISTER_BITS: usize = 64_usize - $precision;
+            pub const RANK_HASH_BITS: usize = 64_usize - $precision;
             /// Total number of registers.
             pub const NUM_REGISTERS: usize = $num_registers;
             /// Bitmask for selecting a register.
-            pub const P_MASK: u64 = ($num_registers as u64) - 1;
+            pub const INDEX_MASK: u64 = ($num_registers as u64) - 1;
         }
 
         impl $name {
@@ -243,9 +243,9 @@ macro_rules! impl_hll_bucket_list {
 
         impl $crate::HllRegisterStorage for $name {
             const PRECISION: usize = Self::PRECISION;
-            const REGISTER_BITS: usize = Self::REGISTER_BITS;
+            const RANK_HASH_BITS: usize = Self::RANK_HASH_BITS;
             const NUM_REGISTERS: usize = Self::NUM_REGISTERS;
-            const P_MASK: u64 = Self::P_MASK;
+            const INDEX_MASK: u64 = Self::INDEX_MASK;
 
             #[inline(always)]
             fn as_slice(&self) -> &[u8] {
@@ -260,12 +260,12 @@ macro_rules! impl_hll_bucket_list {
     };
 }
 
-impl_hll_bucket_list!(HllBucketListP12, 12, 1_usize << 12);
-impl_hll_bucket_list!(HllBucketListP14, 14, 1_usize << 14);
-impl_hll_bucket_list!(HllBucketListP16, 16, 1_usize << 16);
+impl_hll_registers!(HllRegistersP12, 12, 1_usize << 12);
+impl_hll_registers!(HllRegistersP14, 14, 1_usize << 14);
+impl_hll_registers!(HllRegistersP16, 16, 1_usize << 16);
 
 /// Default HLL register storage alias using 14-bit precision.
-pub type HllBucketList = HllBucketListP14;
+pub type HllRegisters = HllRegistersP14;
 
 #[macro_export]
 /// Generates a fixed-size matrix storage type.

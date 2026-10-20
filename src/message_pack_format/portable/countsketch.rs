@@ -11,7 +11,7 @@ use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 // `CountSketch` and `CountSketchDelta` below are the public-field,
 // proto-decode-friendly types consumed by the ASAP query engine
 // accumulators. The high-throughput in-process variant is
-// `crate::sketches::countsketch::Count`, which keeps its own design.
+// `crate::sketches::countsketch::CountSketch`, which keeps its own design.
 // =====================================================================
 
 // Count Sketch (a.k.a. Count-Min-style signed-counter sketch) —
@@ -149,7 +149,7 @@ impl CountSketch {
     }
 
     /// Insert a single weighted observation. Uses the shared
-    /// [`crate::MatrixHashType::Packed64`] fast-path hash so the matrix-cell
+    /// [`crate::MatrixHash::Packed64`] fast-path hash so the matrix-cell
     /// layout matches `sketchlib-go::CountSketch.UpdateString`
     /// bit-for-bit. Locked in by
     /// `tests/sketches_go_parity_probe.rs`.
@@ -163,17 +163,16 @@ impl CountSketch {
             return;
         }
         let input = crate::common::DataInput::String(key.to_owned());
-        let hashed = crate::common::MatrixHashType::Packed64(
+        let hashed = crate::common::MatrixHash::Packed64(
             <crate::DefaultXxHasher as crate::common::SketchHasher>::hash64_seeded(0, &input),
         );
         for r in 0..self.rows {
-            let col = <crate::common::MatrixHashType as crate::common::MatrixFastHash>::col_for_row(
+            let col = <crate::common::MatrixHash as crate::common::MatrixFastHash>::col_for_row(
                 &hashed, r, self.cols,
             );
-            let sign =
-                <crate::common::MatrixHashType as crate::common::MatrixFastHash>::sign_for_row(
-                    &hashed, r,
-                ) as f64;
+            let sign = <crate::common::MatrixHash as crate::common::MatrixFastHash>::sign_for_row(
+                &hashed, r,
+            ) as f64;
             self.matrix[r][col] += sign * value;
         }
     }
@@ -186,18 +185,17 @@ impl CountSketch {
             return 0.0;
         }
         let input = crate::common::DataInput::String(key.to_owned());
-        let hashed = crate::common::MatrixHashType::Packed64(
+        let hashed = crate::common::MatrixHash::Packed64(
             <crate::DefaultXxHasher as crate::common::SketchHasher>::hash64_seeded(0, &input),
         );
         let mut estimates: Vec<f64> = Vec::with_capacity(self.rows);
         for r in 0..self.rows {
-            let col = <crate::common::MatrixHashType as crate::common::MatrixFastHash>::col_for_row(
+            let col = <crate::common::MatrixHash as crate::common::MatrixFastHash>::col_for_row(
                 &hashed, r, self.cols,
             );
-            let sign =
-                <crate::common::MatrixHashType as crate::common::MatrixFastHash>::sign_for_row(
-                    &hashed, r,
-                ) as f64;
+            let sign = <crate::common::MatrixHash as crate::common::MatrixFastHash>::sign_for_row(
+                &hashed, r,
+            ) as f64;
             estimates.push(sign * self.matrix[r][col]);
         }
         estimates.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));

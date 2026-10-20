@@ -1,6 +1,6 @@
 # Signed DDSketch
 
-Both `DDSketch` (core) and `DdSketch` (portable) retain positive samples, negative samples, and zeros. The design follows [DataDog DDSketch](https://github.com/DataDog/sketches-go/blob/master/ddsketch/ddsketch.go): separate positive and negative magnitude stores, plus a zero count. Bucket indices can be negative in either store; an index's sign does not encode an observation's sign.
+Both `DdSketch` (core) and `DdSketch` (portable) retain positive samples, negative samples, and zeros. The design follows [DataDog DDSketch](https://github.com/DataDog/sketches-go/blob/master/ddsketch/ddsketch.go): separate positive and negative magnitude stores, plus a zero count. Bucket indices can be negative in either store; an index's sign does not encode an observation's sign.
 
 `try_add` / `try_update` return errors for NaN, infinities, or magnitudes above the mapping's maximum. Existing `add` / `update` wrappers keep their return types and ignore those errors. Magnitudes below the mapping's minimum are counted as zero, including subnormal inputs. Such nonzero tiny observations are outside the relative-error guarantee. Original sample values are still compressed into buckets, not retained individually.
 
@@ -10,9 +10,9 @@ If interpolation combines endpoints x and y with weight t, the absolute error is
 
 ## Wire and downstream upgrade
 
-- Native ASAPv1: every state is metadata version 1 with the eight-field payload, negative counts, negative offset and zero count included. `DDSketchDelta` (`0x05 0x80`) carries both stores and a zero-count increment.
+- Native ASAPv1: every state is metadata version 1 with the eight-field payload, negative counts, negative offset and zero count included. `DdSketchDelta` (`0x05 0x80`) carries both stores and a zero-count increment.
 - Portable MessagePack: positive-only snapshots keep their three fields; signed snapshots append the same three fields. Positive-only deltas keep their two arrays; signed deltas append negative indices, negative counts, and zero-count increment. New readers accept both layouts.
 - Protobuf: `DdSketchState` adds fields 16–18; `DdSketchDelta` adds fields 16–17. `DdSketch::to_proto` / `from_proto` preserve all stores. Old protobuf readers silently ignore unknown fields: upgrade Collector, backend, and Go producer schema/mapping together before emitting signed protobuf. This is not DataDog's binary wire format.
-- Octo: `DdDelta` now requires a `store: DdStore` discriminator. Existing positive delta constructors should use `DdStore::Positive`. Worker residual keys are `(DdStore, i32)`. Both promotion and flush preserve all three categories; partial counts still need flushing before complete queries.
+- Octo: `DdSketchBucketDelta` now requires a `sign: DdSign` discriminator. Existing positive delta constructors should use `DdSign::Positive`. Worker residual keys are `(DdSign, i32)`. Both promotion and flush preserve all three categories; partial counts still need flushing before complete queries.
 
 Go implementations of the ASAP wire formats and downstream dependency pins are not changed by this Rust library patch.

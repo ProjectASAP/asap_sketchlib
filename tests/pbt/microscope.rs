@@ -1,4 +1,4 @@
-//! Property tests for `MicroCM` (MicroscopeSketch): sliding-window frequency
+//! Property tests for `MicroCm` (MicroscopeSketch): sliding-window frequency
 //! estimation with adaptive zoom.
 //!
 //! Zhao, Wang, Li, Dong, Yang, Chen, Zhang, Uhlig, KDD '23.
@@ -21,7 +21,7 @@ use crate::support::close;
 use asap_sketchlib::sketches::microscope::{
     DeltaStrategy, MicroLayout, MicroParams, SubWindowClock,
 };
-use asap_sketchlib::{DataInput, DefaultXxHasher, MatrixFastHash, MicroCM, SketchHasher, Vector3D};
+use asap_sketchlib::{DataInput, DefaultXxHasher, MatrixFastHash, MicroCm, SketchHasher, Vector3D};
 use proptest::prelude::*;
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
@@ -31,14 +31,14 @@ use std::collections::{HashMap, VecDeque};
 const DOMAIN: u64 = 12;
 
 /// The default-hasher instantiation, so the turbofish stays out of the laws.
-type Micro = MicroCM<DefaultXxHasher>;
+type Micro = MicroCm<DefaultXxHasher>;
 
 fn key(k: u64) -> DataInput<'static> {
     DataInput::U64(k)
 }
 
 /// The column `k` lands in on each row, through the hash entry point
-/// `MicroCM` routes with.
+/// `MicroCm` routes with.
 fn columns_of(rows: usize, cols: usize, k: u64) -> Vec<usize> {
     let packed = DefaultXxHasher::hash128_seeded(0, &key(k));
     (0..rows)
@@ -160,7 +160,7 @@ struct Run {
 
 impl Run {
     fn empty(&self) -> Micro {
-        MicroCM::with_dimensions(
+        MicroCm::with_dimensions(
             self.rows,
             self.cols,
             MicroParams::new(self.t, self.c),
@@ -180,7 +180,7 @@ impl Run {
         let mut peak = 0;
         for (i, k) in self.stream.iter().enumerate() {
             window.record(i as u64 / self.per_sub_window, *k);
-            sketch.insert(&key(*k));
+            sketch.update(&key(*k));
             peak = peak.max(sketch.max_zoom());
         }
         peak
@@ -301,11 +301,11 @@ fn a_zoom_is_reclaimed_once_the_hot_key_leaves_the_window() {
         0xABCD,
     );
     for _ in 0..2_400 {
-        sketch.insert(&key(1));
+        sketch.update(&key(1));
     }
     assert!(sketch.max_zoom() > 0, "the burst must have zoomed");
     for i in 0..3_600u64 {
-        sketch.insert(&key(1_000 + i));
+        sketch.update(&key(1_000 + i));
     }
     assert_eq!(
         sketch.max_zoom(),
@@ -334,7 +334,7 @@ fn a_zoom_out_and_its_reclaim_preserve_the_window_count() {
 
     fn push(sketch: &mut Micro, sub_window: u64, items: u64) {
         for _ in 0..items {
-            sketch.insert_at(&key(1), sub_window * LEN);
+            sketch.update_at(&key(1), sub_window * LEN);
         }
     }
 
@@ -403,7 +403,7 @@ fn the_rounding_seed_reaches_the_zoom() {
             seed,
         );
         for i in 0..8_000u64 {
-            sketch.insert(&key(i % 3));
+            sketch.update(&key(i % 3));
         }
         assert!(sketch.max_zoom() > 0, "the load must have zoomed");
         sketch.as_storage().as_slice().to_vec()
@@ -431,7 +431,7 @@ proptest! {
         let mut sketch = run.empty();
         let mut peak = 0;
         for (step, k) in run.stream.iter().enumerate() {
-            sketch.insert(&key(*k));
+            sketch.update(&key(*k));
             peak = peak.max(sketch.max_zoom());
             for (index, record) in sketch
                 .as_storage()
@@ -601,8 +601,8 @@ proptest! {
 
         for (seen, (a, b)) in left.iter().zip(&right).enumerate() {
             let seen = seen as u64 + 1;
-            first.insert(&key(*a));
-            second.insert(&key(*b));
+            first.update(&key(*a));
+            second.update(&key(*b));
 
             prop_assert_eq!(
                 first.sub_window(), seen / per_sub_window,
@@ -636,7 +636,7 @@ proptest! {
         );
         let mut now = epoch;
         for (step, (k, timestamp)) in arrivals.iter().enumerate() {
-            sketch.insert_at(&key(*k), *timestamp);
+            sketch.update_at(&key(*k), *timestamp);
             now = now.max(*timestamp);
             prop_assert_eq!(
                 sketch.sub_window(),
@@ -651,8 +651,8 @@ proptest! {
     //
     // Fed item `i` at timestamp `i`, a time-based sketch does the same work
     // in the same order as a count-based one of the same sub-window length.
-    // `insert` records against the sub-window it is already in and ticks
-    // afterwards; `insert_at` advances first and then records. So the
+    // `update` records against the sub-window it is already in and ticks
+    // afterwards; `update_at` advances first and then records. So the
     // boundary between item `mL - 1` and item `mL` falls in the same place in
     // the sequence either way, and with it every clear, shutter close-out and
     // reclaim the boundary owes the cells. The rounding stream is driven by
@@ -676,8 +676,8 @@ proptest! {
 
         for i in 0..per_sub_window * (t as u64 + 3) + 1 {
             let k = key(keys[i as usize % keys.len()]);
-            counted.insert(&k);
-            timed.insert_at(&k, i);
+            counted.update(&k);
+            timed.update_at(&k, i);
         }
         prop_assert_eq!(counted.sub_window(), timed.sub_window());
         prop_assert_eq!(
@@ -713,7 +713,7 @@ proptest! {
         // of the candidate's own length lands it there exactly.
         let at_the_same_sub_window = |sketch: &mut Micro, length: u64| {
             for i in 0..left.sub_window() * length {
-                sketch.insert(&key(run.stream[i as usize % run.stream.len()]));
+                sketch.update(&key(run.stream[i as usize % run.stream.len()]));
             }
         };
 
@@ -746,7 +746,7 @@ proptest! {
         let mut behind = run.empty();
         let kept = run.stream.len() - (trim + 1) * run.per_sub_window as usize;
         for k in run.stream.iter().take(kept) {
-            behind.insert(&key(*k));
+            behind.update(&key(*k));
         }
         prop_assert!(behind.sub_window() < left.sub_window());
 
@@ -810,8 +810,8 @@ proptest! {
 
     // ===== A grid that was sized but never filled =====
     //
-    // `Vector3D::init` leaves the storage empty and every bucket accessor
-    // panics until `fill` has run, so a `MicroCM` around one would panic on
+    // `Vector3D::unfilled` leaves the storage empty and every bucket accessor
+    // panics until `fill` has run, so a `MicroCm` around one would panic on
     // its first insert or query. No public constructor produces that state,
     // and the wire must not either: the geometry a payload declares has to
     // match the bytes it carries.
@@ -849,11 +849,11 @@ proptest! {
 
         // The same geometry, filled, is the control: the refusal below is
         // about the missing bytes and nothing else.
-        let mut filled = Vector3D::init(rows, cols, depth);
+        let mut filled = Vector3D::unfilled(rows, cols, depth);
         filled.fill(0u8);
         prop_assert!(forge(filled).is_ok(), "the control payload must decode");
 
-        let refused = forge(Vector3D::init(rows, cols, depth));
+        let refused = forge(Vector3D::unfilled(rows, cols, depth));
         prop_assert!(refused.is_err(), "a grid with no bytes must be refused");
         let err = refused.err().unwrap_or_default();
         prop_assert!(

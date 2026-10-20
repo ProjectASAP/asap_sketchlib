@@ -5,9 +5,9 @@
 //!   SIGCOMM 2018.
 //!   <https://dl.acm.org/doi/10.1145/3230543.3230544>
 
-use crate::{CANONICAL_HASH_SEED, DataInput, DefaultXxHasher, SketchHasher};
+use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, SketchHasher};
 
-use super::{CountMin, RegularPath};
+use super::{CountMinSketch, RegularPath};
 use crate::Vector2D;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
@@ -20,12 +20,12 @@ mod wire;
 /// later, on `>`.
 pub const LAMBDA: i32 = 8;
 
-/// Rows in the light layer built by [`Elastic::new`] and
-/// [`Elastic::init_with_length`].
+/// Rows in the light layer built by [`ElasticSketch::new`] and
+/// [`ElasticSketch::with_heavy_buckets`].
 pub const DEFAULT_LIGHT_ROWS: usize = 3;
 
-/// Columns per light-layer row built by [`Elastic::new`] and
-/// [`Elastic::init_with_length`].
+/// Columns per light-layer row built by [`ElasticSketch::new`] and
+/// [`ElasticSketch::with_heavy_buckets`].
 pub const DEFAULT_LIGHT_COLS: usize = 4096;
 
 /// One slot of the heavy part: the resident flow, its vote pair, and the flag
@@ -42,11 +42,11 @@ pub struct HeavyBucket {
 /// a Count-Min light layer that absorbs evicted and unelected flows.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(bound = "")]
-pub struct Elastic<H: SketchHasher = DefaultXxHasher> {
+pub struct ElasticSketch<H: SketchHasher = DefaultXxHasher> {
     pub heavy: Vec<HeavyBucket>,
-    pub light: CountMin<Vector2D<i32>, RegularPath, H>,
-    pub bktlen: i32,
-    /// Set by [`Elastic::expand_heavy`] while copies of pre-expansion
+    pub light: CountMinSketch<Vector2D<i32>, RegularPath, H>,
+    pub heavy_buckets: i32,
+    /// Set by [`ElasticSketch::expand_heavy`] while copies of pre-expansion
     /// residents may still sit in the half they no longer hash to.
     #[serde(default)]
     stale_copies: bool,
@@ -77,13 +77,13 @@ impl HeavyBucket {
     }
 
     /// Seats `id` in a vacant bucket. The `eviction` flag is carried over so a
-    /// bucket vacated by [`Elastic::merge`] still reports its light-layer mass.
+    /// bucket vacated by [`ElasticSketch::merge`] still reports its light-layer mass.
     pub fn occupy(&mut self, id: String) {
         self.occupy_many(id, 1);
     }
 
     /// Seats `id` in a vacant bucket with `count` positive votes already to its
-    /// name, for [`Elastic::insert_many`].
+    /// name, for [`ElasticSketch::update_weighted`].
     pub fn occupy_many(&mut self, id: String, count: i32) {
         self.flow_id = id;
         self.vote_pos = count;
@@ -106,26 +106,26 @@ impl HeavyBucket {
     }
 }
 
-impl Default for Elastic {
+impl Default for ElasticSketch {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<H: SketchHasher> Elastic<H> {
+impl<H: SketchHasher> ElasticSketch<H> {
     pub fn new() -> Self {
-        Elastic::init_with_length(8)
+        ElasticSketch::with_heavy_buckets(8)
     }
 
     /// Heavy table of `l` buckets over the default light layer.
-    pub fn init_with_length(l: i32) -> Self {
-        Elastic::init_with_dimensions(l, DEFAULT_LIGHT_ROWS, DEFAULT_LIGHT_COLS)
+    pub fn with_heavy_buckets(l: i32) -> Self {
+        ElasticSketch::with_heavy_and_light(l, DEFAULT_LIGHT_ROWS, DEFAULT_LIGHT_COLS)
     }
 
     /// Heavy table of `bucket_count` buckets over a `light_rows` by
     /// `light_cols` Count-Min. Bucket count sets the elephant collision rate;
     /// the light dimensions set the error carried by every non-resident flow.
-    pub fn init_with_dimensions(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self {
+    pub fn with_heavy_and_light(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self {
         assert!(
             bucket_count > 0,
             "Elastic needs at least one heavy bucket, got {bucket_count}"
@@ -136,12 +136,13 @@ impl<H: SketchHasher> Elastic<H> {
         );
 
         let heavy = (0..bucket_count).map(|_| HeavyBucket::new()).collect();
-        let light =
-            CountMin::<Vector2D<i32>, RegularPath, H>::with_dimensions(light_rows, light_cols);
-        Elastic {
+        let light = CountMinSketch::<Vector2D<i32>, RegularPath, H>::with_dimensions(
+            light_rows, light_cols,
+        );
+        ElasticSketch {
             heavy,
             light,
-            bktlen: bucket_count,
+            heavy_buckets: bucket_count,
             stale_copies: false,
             _hasher: PhantomData,
         }
@@ -154,57 +155,57 @@ impl<H: SketchHasher> Elastic<H> {
     /// goes to the light layer, or, once `vote_neg >= LAMBDA * vote_pos`, the
     /// resident flow is evicted into the light layer with its full positive
     /// vote and `id` takes the bucket.
-    pub fn insert(&mut self, id: String) {
-        self.insert_many(id, 1);
+    pub fn update(&mut self, id: String) {
+        self.update_weighted(id, 1);
     }
 
     /// Records `count` occurrences of `id` in one step.
     ///
-    /// The weighted form of [`Self::insert`]: a matching bucket takes `count`
+    /// The weighted form of [`Self::update`]: a matching bucket takes `count`
     /// positive votes, a non-matching one takes `count` negative votes, and a
     /// takeover seats the arrival with `count` of each. `count` of 1 is
-    /// [`Self::insert`] exactly.
+    /// [`Self::update`] exactly.
     ///
     /// This is the insertion an OctoSketch aggregator applies to a heavy-part
     /// `<key, votes>` message; it absorbs the whole promoted counter in one
     /// pass rather than replaying it `count` times.
-    pub fn insert_many(&mut self, id: String, count: i32) {
-        if count <= 0 {
+    pub fn update_weighted(&mut self, id: String, weight: i32) {
+        if weight <= 0 {
             return;
         }
         let idx = self.bucket_index(&id);
         if self.stale_at(idx) {
-            self.seat_over_stale_copy(idx, id, count);
+            self.seat_over_stale_copy(idx, id, weight);
             return;
         }
         let bucket = &mut self.heavy[idx];
 
         if bucket.is_vacant() {
-            bucket.occupy_many(id, count);
+            bucket.occupy_many(id, weight);
             return;
         }
         if bucket.flow_id == id {
-            bucket.vote_pos += count;
+            bucket.vote_pos += weight;
             return;
         }
 
-        bucket.vote_neg += count;
+        bucket.vote_neg += weight;
         if bucket.vote_neg < LAMBDA * bucket.vote_pos {
-            self.light.insert_many(&DataInput::String(id), count);
+            self.light.update_weighted(&DataInput::String(id), weight);
             return;
         }
 
         let evicted_votes = bucket.vote_pos;
-        let evicted_id = bucket.evict_many(id, count);
+        let evicted_id = bucket.evict_many(id, weight);
         self.light
-            .insert_many(&DataInput::String(evicted_id), evicted_votes);
+            .update_weighted(&DataInput::String(evicted_id), evicted_votes);
     }
 
     /// Absorbs a `<flow, votes, eviction>` message from another sketch's heavy
     /// part, the insertion an OctoSketch aggregator applies to a heavy-part
     /// delta (§4.4) once the flag is carried with the counter.
     ///
-    /// [`Self::insert_many`], plus the sender's flag OR-ed in when the arrival
+    /// [`Self::update_weighted`], plus the sender's flag OR-ed in when the arrival
     /// ends up resident here. The counter word handed between the two parts
     /// *is* the flag. A sender whose bucket is unflagged holds the flow's whole
     /// mass in its heavy part, so flagging it here would make the estimate read
@@ -215,7 +216,7 @@ impl<H: SketchHasher> Elastic<H> {
         }
         let idx = self.bucket_index(&id);
         let arrival = id.clone();
-        self.insert_many(id, votes);
+        self.update_weighted(id, votes);
         if eviction && !self.heavy[idx].is_vacant() && self.heavy[idx].flow_id == arrival {
             self.heavy[idx].eviction = true;
         }
@@ -232,7 +233,7 @@ impl<H: SketchHasher> Elastic<H> {
         let idx = self.bucket_index(&id);
         if votes > 0 {
             self.light
-                .insert_many(&DataInput::String(id.clone()), votes);
+                .update_weighted(&DataInput::String(id.clone()), votes);
         }
         if !self.heavy[idx].is_vacant() && self.heavy[idx].flow_id == id {
             self.heavy[idx].eviction = true;
@@ -244,7 +245,7 @@ impl<H: SketchHasher> Elastic<H> {
     /// queries but never written, so an unelected flow is dropped outright.
     ///
     /// A vacant bucket seats the flow and a matching bucket takes a positive
-    /// vote, both as in [`Self::insert`]. A non-matching arrival takes a
+    /// vote, both as in [`Self::update`]. A non-matching arrival takes a
     /// negative vote and is discarded. On takeover the arrival keeps the
     /// evicted flow's positive vote instead of starting at 1, and the evicted
     /// flow's size is lost rather than spilled.
@@ -252,7 +253,7 @@ impl<H: SketchHasher> Elastic<H> {
     /// The arrival also inherits the bucket's eviction flag, and the negative
     /// vote resets to 0: this path leaves the counter and its flag bit
     /// untouched.
-    pub fn insert_heavy_only(&mut self, id: String) {
+    pub fn update_heavy_only(&mut self, id: String) {
         let idx = self.bucket_index(&id);
         if self.stale_at(idx) {
             self.seat_over_stale_copy(idx, id, 1);
@@ -282,7 +283,7 @@ impl<H: SketchHasher> Elastic<H> {
 
     /// Frequency estimate for `id`: the resident vote count, plus the light
     /// layer whenever the bucket carries the eviction flag.
-    pub fn query(&self, id: String) -> i32 {
+    pub fn estimate(&self, id: String) -> i32 {
         let idx = self.bucket_index(&id);
         let bucket = &self.heavy[idx];
         if !bucket.is_vacant() && bucket.flow_id == id {
@@ -300,9 +301,9 @@ impl<H: SketchHasher> Elastic<H> {
     /// light layers counter by counter -- the paper's Sum merging for the
     /// light half. Correct whatever the two sketches saw, including flows that
     /// appear on both sides.
-    pub fn merge(&mut self, other: &Elastic<H>) {
+    pub fn merge(&mut self, other: &ElasticSketch<H>) {
         assert_eq!(
-            self.bktlen, other.bktlen,
+            self.heavy_buckets, other.heavy_buckets,
             "bucket length mismatch while merging Elastic sketches"
         );
 
@@ -320,9 +321,9 @@ impl<H: SketchHasher> Elastic<H> {
     /// rather than the sum. Flows held by both heavy parts are summed either
     /// way. Use [`Self::merge`] whenever mouse flows can repeat across
     /// sketches.
-    pub fn merge_max(&mut self, other: &Elastic<H>) {
+    pub fn merge_max(&mut self, other: &ElasticSketch<H>) {
         assert_eq!(
-            self.bktlen, other.bktlen,
+            self.heavy_buckets, other.heavy_buckets,
             "bucket length mismatch while merging Elastic sketches"
         );
 
@@ -350,7 +351,7 @@ impl<H: SketchHasher> Elastic<H> {
     ///
     /// `vote_neg` takes the larger of the pair. The paper does not say what
     /// becomes of the votes, and the larger one evicts sooner.
-    fn contest_heavy_against(&mut self, other: &Elastic<H>) -> Vec<(String, i32)> {
+    fn contest_heavy_against(&mut self, other: &ElasticSketch<H>) -> Vec<(String, i32)> {
         let mut losers: Vec<(String, i32)> = Vec::new();
         let mut merged: Vec<Option<HeavyBucket>> = Vec::with_capacity(self.heavy.len());
 
@@ -369,8 +370,8 @@ impl<H: SketchHasher> Elastic<H> {
                     Some(kept)
                 }
                 (Some(mine), Some(theirs)) => {
-                    let my_size = self.query(mine.flow_id.clone());
-                    let their_size = other.query(theirs.flow_id.clone());
+                    let my_size = self.estimate(mine.flow_id.clone());
+                    let their_size = other.estimate(theirs.flow_id.clone());
                     let (kept, lost) = if my_size >= their_size {
                         (mine, theirs)
                     } else {
@@ -404,7 +405,8 @@ impl<H: SketchHasher> Elastic<H> {
     /// Adds each flow's votes to the light layer.
     fn spill(&mut self, flows: Vec<(String, i32)>) {
         for (flow_id, votes) in flows {
-            self.light.insert_many(&DataInput::String(flow_id), votes);
+            self.light
+                .update_weighted(&DataInput::String(flow_id), votes);
         }
     }
 
@@ -418,12 +420,12 @@ impl<H: SketchHasher> Elastic<H> {
     /// asserts on the bucket count.
     pub fn expand_heavy(&mut self) {
         let doubled = self
-            .bktlen
+            .heavy_buckets
             .checked_mul(2)
             .expect("heavy table size overflowed i32 while expanding");
         let copy = self.heavy.clone();
         self.heavy.extend(copy);
-        self.bktlen = doubled;
+        self.heavy_buckets = doubled;
         self.stale_copies = true;
     }
 
@@ -434,7 +436,7 @@ impl<H: SketchHasher> Elastic<H> {
             .filter(|idx| !self.heavy[*idx].is_vacant() && !self.stale_at(*idx))
             .map(|idx| {
                 let id = self.heavy[idx].flow_id.clone();
-                let size = self.query(id.clone());
+                let size = self.estimate(id.clone());
                 (id, size)
             })
             .collect();
@@ -460,7 +462,11 @@ impl<H: SketchHasher> Elastic<H> {
     ///
     /// Each entry is `(flow, size in self, size in other)`; a flow absent from
     /// one window reads whatever that window's light layer holds for it.
-    pub fn heavy_changes(&self, other: &Elastic<H>, threshold: i32) -> Vec<(String, i32, i32)> {
+    pub fn heavy_changes(
+        &self,
+        other: &ElasticSketch<H>,
+        threshold: i32,
+    ) -> Vec<(String, i32, i32)> {
         let mut ids: Vec<String> = self
             .resident_flows()
             .into_iter()
@@ -472,8 +478,8 @@ impl<H: SketchHasher> Elastic<H> {
 
         ids.into_iter()
             .map(|id| {
-                let before = self.query(id.clone());
-                let after = other.query(id.clone());
+                let before = self.estimate(id.clone());
+                let after = other.estimate(id.clone());
                 (id, before, after)
             })
             .filter(|(_, before, after)| (after - before).abs() > threshold)
@@ -509,9 +515,9 @@ impl<H: SketchHasher> Elastic<H> {
             "Elastic compression ratio must be at least 1, got {ratio}"
         );
         assert!(
-            self.bktlen % ratio == 0,
+            self.heavy_buckets % ratio == 0,
             "Elastic compression ratio {ratio} must divide the bucket count {}",
-            self.bktlen
+            self.heavy_buckets
         );
         if ratio == 1 {
             return;
@@ -519,7 +525,7 @@ impl<H: SketchHasher> Elastic<H> {
 
         self.drop_stale_copies();
 
-        let width = (self.bktlen / ratio) as usize;
+        let width = (self.heavy_buckets / ratio) as usize;
         let mut winner: Vec<Option<usize>> = vec![None; width];
         let mut best: Vec<i32> = vec![0; width];
         let mut flagged: Vec<bool> = vec![false; width];
@@ -530,7 +536,7 @@ impl<H: SketchHasher> Elastic<H> {
                 flagged[group] |= self.heavy[idx].eviction;
                 continue;
             }
-            let size = self.query(self.heavy[idx].flow_id.clone());
+            let size = self.estimate(self.heavy[idx].flow_id.clone());
             if winner[group].is_none() || size > best[group] {
                 best[group] = size;
                 winner[group] = Some(idx);
@@ -560,10 +566,11 @@ impl<H: SketchHasher> Elastic<H> {
         }
 
         self.heavy = compressed;
-        self.bktlen = width as i32;
+        self.heavy_buckets = width as i32;
 
         for (flow_id, votes) in losers {
-            self.light.insert_many(&DataInput::String(flow_id), votes);
+            self.light
+                .update_weighted(&DataInput::String(flow_id), votes);
         }
     }
 
@@ -611,22 +618,22 @@ impl<H: SketchHasher> Elastic<H> {
 
     #[inline]
     fn bucket_index(&self, id: &str) -> usize {
-        let hash = H::hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(id));
-        hash as usize % self.bktlen as usize
+        let hash = H::hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, &DataInput::Str(id));
+        hash as usize % self.heavy_buckets as usize
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CANONICAL_HASH_SEED, DataInput, hash64_seeded};
+    use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, hash64_seeded};
 
-    fn bucket_for(id: &str, sketch: &Elastic) -> usize {
-        let hash = hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(id));
-        hash as usize % sketch.bktlen as usize
+    fn bucket_for(id: &str, sketch: &ElasticSketch) -> usize {
+        let hash = hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, &DataInput::Str(id));
+        hash as usize % sketch.heavy_buckets as usize
     }
 
-    fn colliding_key(primary: &str, sketch: &Elastic) -> String {
+    fn colliding_key(primary: &str, sketch: &ElasticSketch) -> String {
         let target = bucket_for(primary, sketch);
         (0..10_000)
             .map(|idx| format!("flow::secondary::{idx}"))
@@ -636,17 +643,17 @@ mod tests {
 
     #[test]
     fn init_with_dimensions_sizes_both_parts() {
-        let sketch: Elastic = Elastic::init_with_dimensions(12, 2, 256);
+        let sketch: ElasticSketch = ElasticSketch::with_heavy_and_light(12, 2, 256);
 
         assert_eq!(sketch.heavy.len(), 12);
-        assert_eq!(sketch.bktlen, 12);
+        assert_eq!(sketch.heavy_buckets, 12);
         assert_eq!(sketch.light.rows(), 2);
         assert_eq!(sketch.light.cols(), 256);
     }
 
     #[test]
     fn init_with_length_keeps_the_default_light_layer() {
-        let sketch: Elastic = Elastic::init_with_length(8);
+        let sketch: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
 
         assert_eq!(sketch.heavy.len(), 8);
         assert_eq!(sketch.light.rows(), DEFAULT_LIGHT_ROWS);
@@ -656,57 +663,57 @@ mod tests {
     #[test]
     #[should_panic(expected = "at least one heavy bucket")]
     fn an_empty_heavy_table_is_rejected() {
-        let _: Elastic = Elastic::init_with_length(0);
+        let _: ElasticSketch = ElasticSketch::with_heavy_buckets(0);
     }
 
     #[test]
     #[should_panic(expected = "at least one heavy bucket")]
     fn a_negative_heavy_table_is_rejected() {
-        let _: Elastic = Elastic::init_with_length(-1);
+        let _: ElasticSketch = ElasticSketch::with_heavy_buckets(-1);
     }
 
     #[test]
     #[should_panic(expected = "non-empty light layer")]
     fn an_empty_light_layer_is_rejected() {
-        let _: Elastic = Elastic::init_with_dimensions(8, 0, 4096);
+        let _: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 0, 4096);
     }
 
     #[test]
     #[should_panic(expected = "non-empty light layer")]
     fn a_zero_width_light_layer_is_rejected() {
-        let _: Elastic = Elastic::init_with_dimensions(8, 3, 0);
+        let _: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 3, 0);
     }
 
     #[test]
     fn heavy_bucket_tracks_repeated_flow_exactly() {
         // repeated inserts of the same flow should accumulate in the heavy bucket
-        let mut sketch: Elastic = Elastic::init_with_length(8);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         let flow = "flow::primary".to_string();
 
         for _ in 0..12 {
-            sketch.insert(flow.clone());
+            sketch.update(flow.clone());
         }
 
-        assert_eq!(sketch.query(flow.clone()), 12);
-        assert_eq!(sketch.query("other".to_string()), 0);
+        assert_eq!(sketch.estimate(flow.clone()), 12);
+        assert_eq!(sketch.estimate("other".to_string()), 0);
     }
 
     #[test]
     fn light_sketch_counts_colliding_flows() {
-        // simulate two flows mapped to the same bucket so the light CountMin tracks the second one
-        let mut sketch: Elastic = Elastic::init_with_length(8);
+        // simulate two flows mapped to the same bucket so the light CountMinSketch tracks the second one
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
-            sketch.insert(primary.to_string());
+            sketch.update(primary.to_string());
         }
         for _ in 0..6 {
-            sketch.insert(secondary.clone());
+            sketch.update(secondary.clone());
         }
 
-        let heavy_est = sketch.query(primary.to_string());
-        let light_est = sketch.query(secondary.clone());
+        let heavy_est = sketch.estimate(primary.to_string());
+        let light_est = sketch.estimate(secondary.clone());
 
         assert!(
             heavy_est >= 10,
@@ -721,16 +728,16 @@ mod tests {
     #[test]
     fn eviction_moves_the_resident_flow_into_the_light_layer() {
         // the paper evicts the flow sitting in the bucket, not the arriving one
-        let mut sketch: Elastic = Elastic::init_with_length(8);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
-            sketch.insert(primary.to_string());
+            sketch.update(primary.to_string());
         }
         // vote_neg reaches LAMBDA * 10 on the 80th arrival, which triggers takeover
         for _ in 0..(LAMBDA * 10) {
-            sketch.insert(secondary.clone());
+            sketch.update(secondary.clone());
         }
 
         let idx = bucket_for(primary, &sketch);
@@ -740,12 +747,12 @@ mod tests {
         assert_eq!(sketch.heavy[idx].vote_neg, 1);
 
         assert_eq!(
-            sketch.query(primary.to_string()),
+            sketch.estimate(primary.to_string()),
             10,
             "evicted flow keeps its full size in the light layer"
         );
         assert_eq!(
-            sketch.query(secondary.clone()),
+            sketch.estimate(secondary.clone()),
             LAMBDA * 10,
             "arriving flow must not absorb the evicted flow's votes"
         );
@@ -753,20 +760,20 @@ mod tests {
 
     #[test]
     fn merge_keeps_uncontested_flows_in_the_heavy_part() {
-        let mut left: Elastic = Elastic::init_with_length(16);
-        let mut right: Elastic = Elastic::init_with_length(16);
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_buckets(16);
+        let mut right: ElasticSketch = ElasticSketch::with_heavy_buckets(16);
 
         for _ in 0..30 {
-            left.insert("flow::left".to_string());
+            left.update("flow::left".to_string());
         }
         for _ in 0..18 {
-            right.insert("flow::right".to_string());
+            right.update("flow::right".to_string());
         }
 
         left.merge(&right);
 
-        assert_eq!(left.query("flow::left".to_string()), 30);
-        assert_eq!(left.query("flow::right".to_string()), 18);
+        assert_eq!(left.estimate("flow::left".to_string()), 30);
+        assert_eq!(left.estimate("flow::right".to_string()), 18);
 
         // both keep a bucket: neither was flushed into the light layer
         let residents: Vec<(&str, i32)> = left
@@ -786,38 +793,38 @@ mod tests {
 
     #[test]
     fn merge_preserves_colliding_flow_mass() {
-        let mut left: Elastic = Elastic::init_with_length(8);
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &left);
 
         for _ in 0..20 {
-            left.insert(primary.to_string());
+            left.update(primary.to_string());
         }
 
-        let mut right: Elastic = Elastic::init_with_length(8);
+        let mut right: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         for _ in 0..9 {
-            right.insert(secondary.clone());
+            right.update(secondary.clone());
         }
 
         left.merge(&right);
 
-        assert!(left.query(primary.to_string()) >= 20);
-        assert!(left.query(secondary.clone()) >= 9);
+        assert!(left.estimate(primary.to_string()) >= 20);
+        assert!(left.estimate(secondary.clone()) >= 9);
     }
 
     #[test]
     fn a_bucket_reoccupied_after_merge_still_reads_the_light_layer() {
-        let mut left: Elastic = Elastic::init_with_length(8);
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         for _ in 0..30 {
-            left.insert("flow::left".to_string());
+            left.update("flow::left".to_string());
         }
-        let right: Elastic = Elastic::init_with_length(8);
+        let right: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
 
         left.merge(&right);
-        left.insert("flow::left".to_string());
+        left.update("flow::left".to_string());
 
         assert_eq!(
-            left.query("flow::left".to_string()),
+            left.estimate("flow::left".to_string()),
             31,
             "a flow that kept its bucket through a merge goes on accumulating"
         );
@@ -825,16 +832,16 @@ mod tests {
 
     #[test]
     fn merge_keeps_the_larger_flow_on_a_contested_bucket() {
-        let mut left: Elastic = Elastic::init_with_length(8);
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &left);
 
         for _ in 0..20 {
-            left.insert(primary.to_string());
+            left.update(primary.to_string());
         }
-        let mut right: Elastic = Elastic::init_with_length(8);
+        let mut right: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         for _ in 0..9 {
-            right.insert(secondary.clone());
+            right.update(secondary.clone());
         }
 
         left.merge(&right);
@@ -843,20 +850,20 @@ mod tests {
         assert_eq!(left.heavy[idx].flow_id, primary, "the larger flow keeps it");
         assert_eq!(left.heavy[idx].vote_pos, 20);
         assert!(
-            left.query(secondary.clone()) >= 9,
+            left.estimate(secondary.clone()) >= 9,
             "the loser's votes must reach the light layer"
         );
     }
 
     #[test]
     fn merge_sums_the_votes_of_a_flow_both_sides_held() {
-        let mut left: Elastic = Elastic::init_with_length(8);
-        let mut right: Elastic = Elastic::init_with_length(8);
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
+        let mut right: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         for _ in 0..30 {
-            left.insert("flow::shared".to_string());
+            left.update("flow::shared".to_string());
         }
         for _ in 0..20 {
-            right.insert("flow::shared".to_string());
+            right.update("flow::shared".to_string());
         }
 
         left.merge(&right);
@@ -864,23 +871,23 @@ mod tests {
         let idx = bucket_for("flow::shared", &left);
         assert_eq!(left.heavy[idx].flow_id, "flow::shared");
         assert_eq!(left.heavy[idx].vote_pos, 50);
-        assert_eq!(left.query("flow::shared".to_string()), 50);
+        assert_eq!(left.estimate("flow::shared".to_string()), 50);
     }
 
     #[test]
     fn merge_keeps_the_peers_flow_when_it_is_the_larger() {
         // each side must be sized against its own sketch: the peer's flow is
         // absent from ours, so asking ours would read a light estimate near 0
-        let mut left: Elastic = Elastic::init_with_length(8);
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &left);
 
         for _ in 0..3 {
-            left.insert(primary.to_string());
+            left.update(primary.to_string());
         }
-        let mut right: Elastic = Elastic::init_with_length(8);
+        let mut right: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         for _ in 0..50 {
-            right.insert(secondary.clone());
+            right.update(secondary.clone());
         }
 
         left.merge(&right);
@@ -891,7 +898,7 @@ mod tests {
             "the peer's larger flow takes the bucket"
         );
         assert_eq!(left.heavy[idx].vote_pos, 50);
-        assert!(left.query(primary.to_string()) >= 3);
+        assert!(left.estimate(primary.to_string()) >= 3);
     }
 
     #[test]
@@ -900,7 +907,7 @@ mod tests {
         let (mut sk, _) = seeded_sketch(8, 24);
         sk.expand_heavy();
 
-        let empty: Elastic = Elastic::init_with_length(16);
+        let empty: ElasticSketch = ElasticSketch::with_heavy_buckets(16);
         sk.merge(&empty);
 
         let mut ids: Vec<String> = sk.heavy_hitters(1).into_iter().map(|(id, _)| id).collect();
@@ -916,9 +923,9 @@ mod tests {
 
     /// Two sketches sharing half their flows, over a light layer tight enough
     /// that contested buckets and spills both happen.
-    fn overlapping_pair() -> (Elastic, Elastic, Vec<(String, i32)>) {
-        let mut left: Elastic = Elastic::init_with_dimensions(8, 2, 64);
-        let mut right: Elastic = Elastic::init_with_dimensions(8, 2, 64);
+    fn overlapping_pair() -> (ElasticSketch, ElasticSketch, Vec<(String, i32)>) {
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 64);
+        let mut right: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 64);
         let mut truth: Vec<(String, i32)> = Vec::new();
 
         for i in 0..60i32 {
@@ -926,10 +933,10 @@ mod tests {
             let in_left = (i % 3) + 1;
             let in_right = if i % 2 == 0 { (i % 4) + 1 } else { 0 };
             for _ in 0..in_left {
-                left.insert(key.clone());
+                left.update(key.clone());
             }
             for _ in 0..in_right {
-                right.insert(key.clone());
+                right.update(key.clone());
             }
             truth.push((key, in_left + in_right));
         }
@@ -942,23 +949,23 @@ mod tests {
         left.merge(&right);
 
         for (key, count) in &truth {
-            let est = left.query(key.clone());
+            let est = left.estimate(key.clone());
             assert!(est >= *count, "merge underestimated {key}: {est} < {count}");
         }
     }
 
     #[test]
     fn maximum_merging_keeps_the_larger_flow_on_a_contested_bucket() {
-        let mut left: Elastic = Elastic::init_with_length(8);
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &left);
 
         for _ in 0..20 {
-            left.insert(primary.to_string());
+            left.update(primary.to_string());
         }
-        let mut right: Elastic = Elastic::init_with_length(8);
+        let mut right: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         for _ in 0..9 {
-            right.insert(secondary.clone());
+            right.update(secondary.clone());
         }
 
         left.merge_max(&right);
@@ -966,20 +973,20 @@ mod tests {
         let idx = bucket_for(primary, &left);
         assert_eq!(left.heavy[idx].flow_id, primary);
         assert_eq!(left.heavy[idx].vote_pos, 20);
-        assert!(left.query(secondary.clone()) >= 9);
+        assert!(left.estimate(secondary.clone()) >= 9);
     }
 
     /// Builds two sketches over disjoint flow sets, plus the truth table.
-    fn disjoint_pair() -> (Elastic, Elastic, Vec<(String, i32)>) {
-        let mut left: Elastic = Elastic::init_with_dimensions(8, 2, 64);
-        let mut right: Elastic = Elastic::init_with_dimensions(8, 2, 64);
+    fn disjoint_pair() -> (ElasticSketch, ElasticSketch, Vec<(String, i32)>) {
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 64);
+        let mut right: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 64);
         let mut truth = Vec::new();
 
         for i in 0..40i32 {
             let key = format!("left::{i}");
             let count = (i % 7) + 1;
             for _ in 0..count {
-                left.insert(key.clone());
+                left.update(key.clone());
             }
             truth.push((key, count));
         }
@@ -987,7 +994,7 @@ mod tests {
             let key = format!("right::{i}");
             let count = (i % 5) + 1;
             for _ in 0..count {
-                right.insert(key.clone());
+                right.update(key.clone());
             }
             truth.push((key, count));
         }
@@ -1000,7 +1007,7 @@ mod tests {
         left.merge_max(&right);
 
         for (key, count) in &truth {
-            let est = left.query(key.clone());
+            let est = left.estimate(key.clone());
             assert!(
                 est >= *count,
                 "maximum merging underestimated {key}: {est} < {count}"
@@ -1017,8 +1024,8 @@ mod tests {
 
         let mut strictly_tighter = 0;
         for (key, _) in &truth {
-            let sum_est = summed.query(key.clone());
-            let max_est = maxed.query(key.clone());
+            let sum_est = summed.estimate(key.clone());
+            let max_est = maxed.estimate(key.clone());
             assert!(
                 max_est <= sum_est,
                 "maximum merging must not be looser on {key}: {max_est} > {sum_est}"
@@ -1035,19 +1042,19 @@ mod tests {
 
     /// One bucket held by a hot flow, so `flow::mouse` never gets a bucket and
     /// lives entirely in the light layer on both sides.
-    fn shared_mouse_pair(left_count: i32, right_count: i32) -> (Elastic, Elastic) {
-        let mut left: Elastic = Elastic::init_with_dimensions(1, 2, 64);
-        let mut right: Elastic = Elastic::init_with_dimensions(1, 2, 64);
+    fn shared_mouse_pair(left_count: i32, right_count: i32) -> (ElasticSketch, ElasticSketch) {
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_and_light(1, 2, 64);
+        let mut right: ElasticSketch = ElasticSketch::with_heavy_and_light(1, 2, 64);
         for sketch in [&mut left, &mut right] {
             for _ in 0..500 {
-                sketch.insert("flow::hot".to_string());
+                sketch.update("flow::hot".to_string());
             }
         }
         for _ in 0..left_count {
-            left.insert("flow::mouse".to_string());
+            left.update("flow::mouse".to_string());
         }
         for _ in 0..right_count {
-            right.insert("flow::mouse".to_string());
+            right.update("flow::mouse".to_string());
         }
         assert_eq!(
             left.heavy[0].flow_id, "flow::hot",
@@ -1062,35 +1069,35 @@ mod tests {
         // shared mouse reads back as the larger side instead of the sum
         let (mut maxed, right) = shared_mouse_pair(30, 20);
         maxed.merge_max(&right);
-        assert_eq!(maxed.query("flow::mouse".to_string()), 30);
+        assert_eq!(maxed.estimate("flow::mouse".to_string()), 30);
 
         let (mut summed, right) = shared_mouse_pair(30, 20);
         summed.merge(&right);
-        assert_eq!(summed.query("flow::mouse".to_string()), 50);
+        assert_eq!(summed.estimate("flow::mouse".to_string()), 50);
     }
 
     #[test]
     fn maximum_merging_sums_a_flow_both_heavy_parts_held() {
         // the heavy halves are combined bucket by bucket either way, so a
         // shared elephant is summed even under maximum merging
-        let mut left: Elastic = Elastic::init_with_length(8);
-        let mut right: Elastic = Elastic::init_with_length(8);
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
+        let mut right: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         for _ in 0..30 {
-            left.insert("flow::shared".to_string());
+            left.update("flow::shared".to_string());
         }
         for _ in 0..20 {
-            right.insert("flow::shared".to_string());
+            right.update("flow::shared".to_string());
         }
 
         left.merge_max(&right);
 
         let idx = bucket_for("flow::shared", &left);
         assert_eq!(left.heavy[idx].vote_pos, 50);
-        assert_eq!(left.query("flow::shared".to_string()), 50);
+        assert_eq!(left.estimate("flow::shared".to_string()), 50);
     }
 
     /// Every counter of the light layer, so a test can prove it went untouched.
-    fn light_snapshot(sketch: &Elastic) -> Vec<i32> {
+    fn light_snapshot(sketch: &ElasticSketch) -> Vec<i32> {
         let storage = sketch.light.as_storage();
         (0..storage.rows())
             .flat_map(|i| (0..storage.cols()).map(move |j| (i, j)))
@@ -1102,14 +1109,14 @@ mod tests {
     fn heavy_only_insert_never_touches_the_light_layer() {
         // seed the light layer through the normal path so the comparison is
         // against real counters rather than an all-zero table
-        let mut sketch: Elastic = Elastic::init_with_dimensions(8, 2, 64);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_and_light(8, 2, 64);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &sketch);
         for _ in 0..4 {
-            sketch.insert(primary.to_string());
+            sketch.update(primary.to_string());
         }
         for _ in 0..3 {
-            sketch.insert(secondary.clone());
+            sketch.update(secondary.clone());
         }
 
         let before = light_snapshot(&sketch);
@@ -1123,12 +1130,12 @@ mod tests {
             .map(|idx| format!("flow::fresh::{idx}"))
             .find(|candidate| sketch.heavy[bucket_for(candidate, &sketch)].is_vacant())
             .expect("a vacant bucket must exist in an 8-bucket table");
-        sketch.insert_heavy_only(vacant.clone());
-        sketch.insert_heavy_only(vacant.clone());
+        sketch.update_heavy_only(vacant.clone());
+        sketch.update_heavy_only(vacant.clone());
 
         // non-matching arrivals: discarded first, then a takeover
         for _ in 0..(LAMBDA * 4 + 4) {
-            sketch.insert_heavy_only(secondary.clone());
+            sketch.update_heavy_only(secondary.clone());
         }
         assert_eq!(
             sketch.heavy[bucket_for(primary, &sketch)].flow_id,
@@ -1145,16 +1152,16 @@ mod tests {
 
     #[test]
     fn heavy_only_takeover_inherits_the_evicted_flow_size() {
-        let mut sketch: Elastic = Elastic::init_with_length(8);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
-            sketch.insert_heavy_only(primary.to_string());
+            sketch.update_heavy_only(primary.to_string());
         }
         // vote_neg reaches LAMBDA * 10 on the 80th arrival, which takes over
         for _ in 0..(LAMBDA * 10) {
-            sketch.insert_heavy_only(secondary.clone());
+            sketch.update_heavy_only(secondary.clone());
         }
 
         let bucket = &sketch.heavy[bucket_for(primary, &sketch)];
@@ -1171,18 +1178,18 @@ mod tests {
         // the counter and its flag bit stay in place, so the arrival takes
         // over both
         for seeded_flag in [false, true] {
-            let mut sketch: Elastic = Elastic::init_with_length(8);
+            let mut sketch: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
             let primary = "flow::primary";
             let secondary = colliding_key(primary, &sketch);
             let idx = bucket_for(primary, &sketch);
 
             for _ in 0..10 {
-                sketch.insert_heavy_only(primary.to_string());
+                sketch.update_heavy_only(primary.to_string());
             }
             sketch.heavy[idx].eviction = seeded_flag;
 
             for _ in 0..(LAMBDA * 10) {
-                sketch.insert_heavy_only(secondary.clone());
+                sketch.update_heavy_only(secondary.clone());
             }
 
             assert_eq!(sketch.heavy[idx].flow_id, secondary);
@@ -1196,19 +1203,19 @@ mod tests {
     #[test]
     fn heavy_only_takeover_discards_the_evicted_flow_as_designed() {
         // the paper trades the evicted flow's size for one probe per packet
-        let mut sketch: Elastic = Elastic::init_with_length(8);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
-            sketch.insert_heavy_only(primary.to_string());
+            sketch.update_heavy_only(primary.to_string());
         }
         for _ in 0..(LAMBDA * 10) {
-            sketch.insert_heavy_only(secondary.clone());
+            sketch.update_heavy_only(secondary.clone());
         }
 
         assert_eq!(
-            sketch.query(primary.to_string()),
+            sketch.estimate(primary.to_string()),
             0,
             "the evicted flow's 10 packets are gone, not spilled to the light layer"
         );
@@ -1216,14 +1223,14 @@ mod tests {
 
     #[test]
     fn heavy_only_matches_insert_while_buckets_seat_and_match() {
-        let mut normal: Elastic = Elastic::init_with_length(16);
-        let mut overload: Elastic = Elastic::init_with_length(16);
+        let mut normal: ElasticSketch = ElasticSketch::with_heavy_buckets(16);
+        let mut overload: ElasticSketch = ElasticSketch::with_heavy_buckets(16);
 
         for i in 0..6 {
             let flow = format!("flow::{i}");
             for _ in 0..(i + 3) {
-                normal.insert(flow.clone());
-                overload.insert_heavy_only(flow.clone());
+                normal.update(flow.clone());
+                overload.update_heavy_only(flow.clone());
             }
         }
 
@@ -1236,22 +1243,22 @@ mod tests {
         for i in 0..6 {
             let flow = format!("flow::{i}");
             assert_eq!(
-                normal.query(flow.clone()),
-                overload.query(flow.clone()),
+                normal.estimate(flow.clone()),
+                overload.estimate(flow.clone()),
                 "seating and matching must agree between the two paths"
             );
         }
     }
 
     /// Flows whose estimate should survive a doubling, with the truth table.
-    fn seeded_sketch(buckets: i32, flows: usize) -> (Elastic, Vec<(String, i32)>) {
-        let mut sk: Elastic = Elastic::init_with_length(buckets);
+    fn seeded_sketch(buckets: i32, flows: usize) -> (ElasticSketch, Vec<(String, i32)>) {
+        let mut sk: ElasticSketch = ElasticSketch::with_heavy_buckets(buckets);
         let mut truth = Vec::new();
         for i in 0..flows {
             let key = format!("flow::{i}");
             let count = (i as i32 % 5) + 1;
             for _ in 0..count {
-                sk.insert(key.clone());
+                sk.update(key.clone());
             }
             truth.push((key, count));
         }
@@ -1260,12 +1267,12 @@ mod tests {
 
     #[test]
     fn expansion_doubles_the_heavy_table() {
-        let mut sk: Elastic = Elastic::init_with_length(8);
-        sk.insert("flow::a".to_string());
+        let mut sk: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
+        sk.update("flow::a".to_string());
 
         sk.expand_heavy();
 
-        assert_eq!(sk.bktlen, 16);
+        assert_eq!(sk.heavy_buckets, 16);
         assert_eq!(sk.heavy.len(), 16);
         assert!(sk.stale_copies);
     }
@@ -1274,26 +1281,26 @@ mod tests {
     fn expansion_preserves_every_existing_estimate() {
         // lemma 3.2: h(f) % 2w lands on a half that already holds f
         let (mut sk, truth) = seeded_sketch(8, 24);
-        let before: Vec<i32> = truth.iter().map(|(k, _)| sk.query(k.clone())).collect();
+        let before: Vec<i32> = truth.iter().map(|(k, _)| sk.estimate(k.clone())).collect();
 
         sk.expand_heavy();
 
         for ((key, _), was) in truth.iter().zip(before) {
-            assert_eq!(sk.query(key.clone()), was, "estimate for {key} moved");
+            assert_eq!(sk.estimate(key.clone()), was, "estimate for {key} moved");
         }
     }
 
     #[test]
     fn repeated_expansion_keeps_estimates_intact() {
         let (mut sk, truth) = seeded_sketch(8, 24);
-        let before: Vec<i32> = truth.iter().map(|(k, _)| sk.query(k.clone())).collect();
+        let before: Vec<i32> = truth.iter().map(|(k, _)| sk.estimate(k.clone())).collect();
 
         sk.expand_heavy();
         sk.expand_heavy();
 
-        assert_eq!(sk.bktlen, 32);
+        assert_eq!(sk.heavy_buckets, 32);
         for ((key, _), was) in truth.iter().zip(before) {
-            assert_eq!(sk.query(key.clone()), was, "estimate for {key} moved");
+            assert_eq!(sk.estimate(key.clone()), was, "estimate for {key} moved");
         }
     }
 
@@ -1311,13 +1318,16 @@ mod tests {
             .map(|i| format!("late::{i}"))
             .find(|key| sk.bucket_index(key) == stale_idx)
             .expect("unable to find a key for the stale bucket");
-        sk.insert(arrival.clone());
+        sk.update(arrival.clone());
 
         assert_eq!(sk.heavy[stale_idx].flow_id, arrival);
         assert_eq!(sk.heavy[stale_idx].vote_pos, 1);
         assert!(!sk.stale_at(stale_idx));
         // the displaced copy was not the flow's live entry, which still answers
-        assert!(sk.query(displaced.clone()) > 0, "{displaced} lost its mass");
+        assert!(
+            sk.estimate(displaced.clone()) > 0,
+            "{displaced} lost its mass"
+        );
     }
 
     #[test]
@@ -1327,12 +1337,12 @@ mod tests {
         let (mut sk, truth) = seeded_sketch(8, 24);
         sk.expand_heavy();
 
-        let empty: Elastic = Elastic::init_with_length(16);
+        let empty: ElasticSketch = ElasticSketch::with_heavy_buckets(16);
         sk.merge(&empty);
 
         for (key, count) in &truth {
             assert_eq!(
-                sk.query(key.clone()),
+                sk.estimate(key.clone()),
                 *count,
                 "{key} came back doubled or short after merging an expanded table"
             );
@@ -1345,12 +1355,12 @@ mod tests {
         let (mut right, truth) = seeded_sketch(8, 24);
         right.expand_heavy();
 
-        let mut left: Elastic = Elastic::init_with_length(16);
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_buckets(16);
         left.merge(&right);
 
         for (key, count) in &truth {
             assert_eq!(
-                left.query(key.clone()),
+                left.estimate(key.clone()),
                 *count,
                 "{key} came back doubled or short after merging an expanded peer"
             );
@@ -1362,12 +1372,12 @@ mod tests {
         let (mut right, truth) = seeded_sketch(8, 24);
         right.expand_heavy();
 
-        let mut left: Elastic = Elastic::init_with_length(16);
+        let mut left: ElasticSketch = ElasticSketch::with_heavy_buckets(16);
         left.merge_max(&right);
 
         for (key, count) in &truth {
             assert_eq!(
-                left.query(key.clone()),
+                left.estimate(key.clone()),
                 *count,
                 "{key} came back doubled or short after max merging an expanded peer"
             );
@@ -1376,11 +1386,11 @@ mod tests {
 
     #[test]
     fn full_bucket_count_counts_residents_above_the_threshold() {
-        let mut sk: Elastic = Elastic::init_with_length(64);
+        let mut sk: ElasticSketch = ElasticSketch::with_heavy_buckets(64);
         for i in 0..6 {
             let key = format!("hot::{i}");
             for _ in 0..10 {
-                sk.insert(key.clone());
+                sk.update(key.clone());
             }
         }
 
@@ -1389,8 +1399,8 @@ mod tests {
     }
 
     /// Sums every flow's estimate, for checking mass is neither lost nor doubled.
-    fn total_estimate(sk: &Elastic, truth: &[(String, i32)]) -> i32 {
-        truth.iter().map(|(k, _)| sk.query(k.clone())).sum()
+    fn total_estimate(sk: &ElasticSketch, truth: &[(String, i32)]) -> i32 {
+        truth.iter().map(|(k, _)| sk.estimate(k.clone())).sum()
     }
 
     #[test]
@@ -1399,13 +1409,13 @@ mod tests {
 
         sk.compress_heavy(4);
 
-        assert_eq!(sk.bktlen, 4);
+        assert_eq!(sk.heavy_buckets, 4);
         assert_eq!(sk.heavy.len(), 4);
     }
 
     #[test]
     fn compression_keeps_the_larger_flow_and_spills_the_smaller() {
-        let mut sk: Elastic = Elastic::init_with_length(8);
+        let mut sk: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         // after halving, buckets j and j+4 merge, so pick a pair four apart
         let big = (0..10_000)
             .map(|i| format!("big::{i}"))
@@ -1417,24 +1427,24 @@ mod tests {
             .expect("no key for bucket 4");
 
         for _ in 0..30 {
-            sk.insert(big.clone());
+            sk.update(big.clone());
         }
         for _ in 0..3 {
-            sk.insert(small.clone());
+            sk.update(small.clone());
         }
 
         sk.compress_heavy(2);
 
         assert_eq!(sk.heavy[0].flow_id, big, "the larger flow keeps the bucket");
-        assert_eq!(sk.query(big.clone()), 30);
+        assert_eq!(sk.estimate(big.clone()), 30);
         assert!(
             sk.heavy.iter().all(|b| b.flow_id != small),
             "the smaller flow must leave the heavy part"
         );
         assert!(
-            sk.query(small.clone()) >= 3,
+            sk.estimate(small.clone()) >= 3,
             "the spilled flow underestimated: {}",
-            sk.query(small.clone())
+            sk.estimate(small.clone())
         );
     }
 
@@ -1447,7 +1457,7 @@ mod tests {
 
         for (key, count) in &truth {
             assert!(
-                sk.query(key.clone()) >= *count,
+                sk.estimate(key.clone()) >= *count,
                 "{key} underestimated after compression"
             );
         }
@@ -1465,7 +1475,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "must divide the bucket count")]
     fn a_ratio_that_does_not_divide_the_table_is_rejected() {
-        let mut sk: Elastic = Elastic::init_with_length(8);
+        let mut sk: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         sk.compress_heavy(3);
     }
 
@@ -1480,7 +1490,7 @@ mod tests {
         sk.compress_heavy(3);
 
         assert!(!sk.stale_copies);
-        assert_eq!(sk.bktlen, 8);
+        assert_eq!(sk.heavy_buckets, 8);
         let twice: Vec<&String> = truth
             .iter()
             .map(|(k, _)| k)
@@ -1490,11 +1500,11 @@ mod tests {
 
         // merging reads every flow back through the light layer, where a
         // spurious spill of the copy's votes would show up as doubled mass
-        let empty: Elastic = Elastic::init_with_length(8);
+        let empty: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         sk.merge(&empty);
         for (key, count) in &truth {
             assert_eq!(
-                sk.query(key.clone()),
+                sk.estimate(key.clone()),
                 *count,
                 "{key} came back doubled or short after expand then compress"
             );
@@ -1508,11 +1518,11 @@ mod tests {
         sk.expand_heavy();
         sk.compress_heavy(2);
 
-        assert_eq!(sk.bktlen, 8);
+        assert_eq!(sk.heavy_buckets, 8);
         assert_eq!(sk.heavy.len(), 8);
         for (key, count) in &truth {
             assert!(
-                sk.query(key.clone()) >= *count,
+                sk.estimate(key.clone()) >= *count,
                 "{key} underestimated after a round trip"
             );
         }
@@ -1520,11 +1530,11 @@ mod tests {
     /// Seats each `(flow, count)` in its own sketch and asserts every one of
     /// them really is resident, so a hash collision fails the fixture loudly
     /// rather than quietly changing what the test covers.
-    fn sketch_with_resident_flows(buckets: i32, flows: &[(&str, i32)]) -> Elastic {
-        let mut sk: Elastic = Elastic::init_with_length(buckets);
+    fn sketch_with_resident_flows(buckets: i32, flows: &[(&str, i32)]) -> ElasticSketch {
+        let mut sk: ElasticSketch = ElasticSketch::with_heavy_buckets(buckets);
         for (id, count) in flows {
             for _ in 0..*count {
-                sk.insert((*id).to_string());
+                sk.update((*id).to_string());
             }
         }
         for (id, count) in flows {
@@ -1533,7 +1543,7 @@ mod tests {
                 sk.heavy[idx].flow_id, *id,
                 "fixture flow {id} is not resident; pick different keys"
             );
-            assert_eq!(sk.query((*id).to_string()), *count, "fixture flow {id}");
+            assert_eq!(sk.estimate((*id).to_string()), *count, "fixture flow {id}");
         }
         sk
     }
@@ -1565,15 +1575,15 @@ mod tests {
     fn heavy_hitters_size_a_flagged_resident_through_the_light_layer() {
         // a resident that took its bucket over carries most of its size in the
         // light layer, so vote_pos alone would not clear the threshold
-        let mut sketch: Elastic = Elastic::init_with_length(8);
+        let mut sketch: ElasticSketch = ElasticSketch::with_heavy_buckets(8);
         let primary = "flow::primary";
         let secondary = colliding_key(primary, &sketch);
 
         for _ in 0..10 {
-            sketch.insert(primary.to_string());
+            sketch.update(primary.to_string());
         }
         for _ in 0..(LAMBDA * 10) {
-            sketch.insert(secondary.clone());
+            sketch.update(secondary.clone());
         }
 
         let idx = bucket_for(primary, &sketch);

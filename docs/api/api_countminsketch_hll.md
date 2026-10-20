@@ -4,7 +4,7 @@ Status: `Experimental`
 
 > Warning: Behind the `experimental` cargo feature. The API and the wire form
 > may change without a major version bump. For a per-key distinct count on a
-> stable API today, use [`Hydra`](./api_hydra.md) with `HydraCounter::HLL`.
+> stable API today, use [`Hydra`](./api_hydra.md) with `HydraCounter::Hll`.
 
 ## Purpose
 
@@ -41,15 +41,15 @@ any row count.
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, key: &DataInput, distinct_value: &DataInput)
-fn insert_many(&mut self, pairs: &[(&DataInput, &DataInput)])
+fn update(&mut self, key: &DataInput, distinct_value: &DataInput)
+fn update_batch(&mut self, pairs: &[(&DataInput, &DataInput)])
 ```
 
 Two hash calls per insert regardless of row count: one `hash128_seeded(0, ..)`
 over the key, which `Vector3D` slices into one column index per row, and one
 `hash64_seeded` over the value for the register index and rank. The value
 hash uses a fixed non-zero seed index — not one derived from `rows`, since
-`SEEDLIST` indices wrap and a row count equal to its length would have
+`SEED_LIST` indices wrap and a row count equal to its length would have
 selected the column hash's own seed.
 
 ## Query
@@ -119,8 +119,8 @@ use asap_sketchlib::{CountMinHll, DataInput};
 // Distinct pages visited, per user.
 let mut sk = CountMinHll::default();
 for page in 0..500u64 {
-    sk.insert(&DataInput::Str("alice"), &DataInput::U64(page));
-    sk.insert(&DataInput::Str("bob"), &DataInput::U64(page % 20));
+    sk.update(&DataInput::Str("alice"), &DataInput::U64(page));
+    sk.update(&DataInput::Str("bob"), &DataInput::U64(page % 20));
 }
 
 let alice = sk.estimate(&DataInput::Str("alice"));

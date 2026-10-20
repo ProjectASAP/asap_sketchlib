@@ -6,7 +6,7 @@
 //! model states only what the paper fixes, because an implementation is
 //! entitled to the other option.
 //!
-//! For `Classic` and `ErtlMLE`, `estimate` is a deterministic function of the
+//! For `Classic` and `Ertl`, `estimate` is a deterministic function of the
 //! registers, so no model of it can be independent of the code it checks. Its
 //! laws here are relations between estimates instead: a permutation, a uniform
 //! shift, a single rise. The HIP estimator is the exception - its estimate is
@@ -27,14 +27,16 @@
 
 use crate::support::keys;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::sketches::hll::{HyperLogLogHIPImpl, HyperLogLogImpl};
-use asap_sketchlib::{Classic, DataInput, ErtlMLE, HllSketch, HllVariant, HyperLogLog};
+use asap_sketchlib::message_pack_format::portable::hll::HllSketch;
+use asap_sketchlib::message_pack_format::portable::hll::HllVariant;
+use asap_sketchlib::sketches::hll::{HyperLogLogHipImpl, HyperLogLogImpl};
+use asap_sketchlib::{Classic, DataInput, Ertl, HyperLogLog};
 use proptest::prelude::*;
 
-asap_sketchlib::impl_hll_bucket_list!(BucketsP4, 4, 1_usize << 4);
-asap_sketchlib::impl_hll_bucket_list!(BucketsP6, 6, 1_usize << 6);
-asap_sketchlib::impl_hll_bucket_list!(BucketsP8, 8, 1_usize << 8);
-asap_sketchlib::impl_hll_bucket_list!(BucketsP10, 10, 1_usize << 10);
+asap_sketchlib::impl_hll_registers!(BucketsP4, 4, 1_usize << 4);
+asap_sketchlib::impl_hll_registers!(BucketsP6, 6, 1_usize << 6);
+asap_sketchlib::impl_hll_registers!(BucketsP8, 8, 1_usize << 8);
+asap_sketchlib::impl_hll_registers!(BucketsP10, 10, 1_usize << 10);
 
 /// Register values stay in this band so the sum of `2^-v` is exact in f64: a
 /// 41-bit span plus the 10 bits of count at the widest precision here sits
@@ -138,7 +140,7 @@ macro_rules! insertion_laws {
             fn sketch_of(keys: &[u64]) -> S {
                 let mut s = S::new();
                 for k in keys {
-                    s.insert(&DataInput::U64(*k));
+                    s.update(&DataInput::U64(*k));
                 }
                 s
             }
@@ -167,7 +169,7 @@ macro_rules! insertion_laws {
                         .map(|k| S::canonical_hash(&DataInput::U64(*k)))
                         .collect();
                     let mut by_hash = S::new();
-                    by_hash.insert_many_with_hashes(&hashes);
+                    by_hash.update_batch_with_hashes(&hashes);
 
                     prop_assert_eq!(by_value.registers_as_slice(), by_hash.registers_as_slice());
                 }
@@ -184,7 +186,7 @@ macro_rules! insertion_laws {
                     let mut sketch = S::new();
                     let mut previous = vec![0u8; M];
                     for k in &stream {
-                        sketch.insert(&DataInput::U64(*k));
+                        sketch.update(&DataInput::U64(*k));
                         for (j, (now, before)) in
                             sketch.registers_as_slice().iter().zip(&previous).enumerate()
                         {
@@ -202,7 +204,7 @@ macro_rules! insertion_laws {
                     let mut sketch = S::new();
                     let mut previous = vec![0u8; M];
                     for k in &stream {
-                        sketch.insert(&DataInput::U64(*k));
+                        sketch.update(&DataInput::U64(*k));
                         let changed = sketch
                             .registers_as_slice()
                             .iter()
@@ -240,7 +242,7 @@ macro_rules! estimation_laws {
                 let mut sketch = S::new();
                 for (bucket, &value) in target.iter().enumerate() {
                     if value != 0 {
-                        sketch.insert_with_hash(hash_placing(P, bucket, value));
+                        sketch.update_with_hash(hash_placing(P, bucket, value));
                     }
                 }
                 assert_eq!(sketch.registers_as_slice(), target, "crafted registers");
@@ -295,11 +297,11 @@ macro_rules! estimation_laws {
                 ) {
                     let mut ascending = S::new();
                     for v in &values {
-                        ascending.insert_with_hash(hash_placing(P, bucket, *v));
+                        ascending.update_with_hash(hash_placing(P, bucket, *v));
                     }
                     let mut descending = S::new();
                     for v in values.iter().rev() {
-                        descending.insert_with_hash(hash_placing(P, bucket, *v));
+                        descending.update_with_hash(hash_placing(P, bucket, *v));
                     }
 
                     let mut expected = vec![0u8; M];
@@ -338,10 +340,10 @@ estimation_laws!(classic_p4, Classic, BucketsP4, TRUNCATES);
 estimation_laws!(classic_p6, Classic, BucketsP6, TRUNCATES);
 estimation_laws!(classic_p8, Classic, BucketsP8, TRUNCATES);
 estimation_laws!(classic_p10, Classic, BucketsP10, TRUNCATES);
-estimation_laws!(ertl_p4, ErtlMLE, BucketsP4, ROUNDS);
-estimation_laws!(ertl_p6, ErtlMLE, BucketsP6, ROUNDS);
-estimation_laws!(ertl_p8, ErtlMLE, BucketsP8, ROUNDS);
-estimation_laws!(ertl_p10, ErtlMLE, BucketsP10, ROUNDS);
+estimation_laws!(ertl_p4, Ertl, BucketsP4, ROUNDS);
+estimation_laws!(ertl_p6, Ertl, BucketsP6, ROUNDS);
+estimation_laws!(ertl_p8, Ertl, BucketsP8, ROUNDS);
+estimation_laws!(ertl_p10, Ertl, BucketsP10, ROUNDS);
 
 macro_rules! merge_laws {
     ($name:ident, $buckets:ty) => {
@@ -354,7 +356,7 @@ macro_rules! merge_laws {
             fn sketch_of(keys: &[u64]) -> S {
                 let mut s = S::new();
                 for k in keys {
-                    s.insert(&DataInput::U64(*k));
+                    s.update(&DataInput::U64(*k));
                 }
                 s
             }
@@ -432,7 +434,7 @@ merge_laws!(merge_p6, BucketsP6);
 merge_laws!(merge_p8, BucketsP8);
 merge_laws!(merge_p10, BucketsP10);
 
-// `HyperLogLogHIPImpl` exposes no merge and keeps its registers private, so
+// `HyperLogLogHipImpl` exposes no merge and keeps its registers private, so
 // the register state reaches these laws through the ASAPv1 envelope. That
 // estimate accumulates one increment per register upgrade, which makes it a
 // function of the arrival order and not of the registers alone - the opposite
@@ -442,7 +444,7 @@ macro_rules! hip_laws {
         mod $name {
             use super::*;
 
-            type S = HyperLogLogHIPImpl<$buckets>;
+            type S = HyperLogLogHipImpl<$buckets>;
             const M: usize = <$buckets>::NUM_REGISTERS;
             const P: u32 = <$buckets>::PRECISION as u32;
 
@@ -469,7 +471,7 @@ macro_rules! hip_laws {
                     let mut sketch = S::new();
                     let mut previous = sketch.estimate();
                     for k in &stream {
-                        sketch.insert(&DataInput::U64(*k));
+                        sketch.update(&DataInput::U64(*k));
                         let now = sketch.estimate();
                         prop_assert!(now >= previous, "estimate fell to {} on {}", now, k);
                         previous = now;
@@ -482,7 +484,7 @@ macro_rules! hip_laws {
                     let mut seen = std::collections::HashSet::new();
                     for k in &stream {
                         let before = sketch.estimate();
-                        sketch.insert(&DataInput::U64(*k));
+                        sketch.update(&DataInput::U64(*k));
                         if !seen.insert(*k) {
                             prop_assert_eq!(
                                 sketch.estimate(),
@@ -504,11 +506,11 @@ macro_rules! hip_laws {
                 ) {
                     let mut ascending = S::new();
                     for v in &values {
-                        ascending.insert_with_hash(hash_placing(P, bucket, *v));
+                        ascending.update_with_hash(hash_placing(P, bucket, *v));
                     }
                     let mut descending = S::new();
                     for v in values.iter().rev() {
-                        descending.insert_with_hash(hash_placing(P, bucket, *v));
+                        descending.update_with_hash(hash_placing(P, bucket, *v));
                     }
 
                     prop_assert_eq!(descending.estimate(), 1);
@@ -540,7 +542,7 @@ macro_rules! hip_laws {
                     let mut expected = 0.0_f64;
 
                     for (step, (bucket, value)) in plan.iter().enumerate() {
-                        sketch.insert_with_hash(hash_placing(P, *bucket, *value));
+                        sketch.update_with_hash(hash_placing(P, *bucket, *value));
                         let after = registers_of(&sketch);
                         if after != before {
                             expected += M as f64 / inverse_probability_sum(&before);
@@ -660,10 +662,10 @@ proptest! {
 
     #[test]
     fn hyperloglog_round_trips_including_the_empty_sketch(stream in keys(400)) {
-        type Hll = HyperLogLog<ErtlMLE>;
+        type Hll = HyperLogLog<Ertl>;
         let mut sketch = Hll::new();
         for k in &stream {
-            sketch.insert(&DataInput::U64(*k));
+            sketch.update(&DataInput::U64(*k));
         }
 
         round_trip!(

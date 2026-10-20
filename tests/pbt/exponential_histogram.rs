@@ -1,5 +1,5 @@
 //! Property tests for the sliding-window structures: `ExponentialHistogram`,
-//! `EHSketchList` and the tumbling-window wrappers.
+//! `EhBucketSketch` and the tumbling-window wrappers.
 //!
 //! Datar, Gionis, Indyk, Motwani, SODA '02.
 //!
@@ -18,14 +18,15 @@
 
 use crate::support::{QUANTILES, grid};
 use asap_sketchlib::{
-    CountMin, DataInput, EHSketchList, ExponentialHistogram, FastPath, FoldCMS, FoldCMSConfig,
-    FoldCS, FoldCSConfig, KLL, KLLConfig, SketchPool, TumblingWindow, UnivMon, UnivMonQ,
-    UnivMonQConfig, UnivSketchPool, Vector2D,
+    CountMinSketch, CountMinSketchFold, CountMinSketchFoldConfig, CountSketchFold,
+    CountSketchFoldConfig, DataInput, EhBucketSketch, ExponentialHistogram, FastPath, Kll,
+    KllConfig, SketchPool, TumblingWindow, UnivMon, UnivMonPool, UnivMonQ, UnivMonQConfig,
+    Vector2D,
 };
 use proptest::prelude::*;
 use std::collections::HashSet;
 
-type Cm = CountMin<Vector2D<i32>, FastPath>;
+type Cm = CountMinSketch<Vector2D<i32>, FastPath>;
 
 const ROWS: usize = 3;
 const COLS: usize = 64;
@@ -34,18 +35,18 @@ const COLS: usize = 64;
 // Exponential histogram
 // ---------------------------------------------------------------------------
 
-fn proto() -> EHSketchList {
-    EHSketchList::CM(Cm::with_dimensions(ROWS, COLS))
+fn proto() -> EhBucketSketch {
+    EhBucketSketch::CountMinSketch(Cm::with_dimensions(ROWS, COLS))
 }
 
-fn cm(list: &EHSketchList) -> &Cm {
+fn cm(list: &EhBucketSketch) -> &Cm {
     match list {
-        EHSketchList::CM(sketch) => sketch,
+        EhBucketSketch::CountMinSketch(sketch) => sketch,
         other => panic!("the histogram under test carries Count-Min, found {other:?}"),
     }
 }
 
-fn cells(list: &EHSketchList) -> Vec<i32> {
+fn cells(list: &EhBucketSketch) -> Vec<i32> {
     let sketch = cm(list);
     grid(sketch.rows(), sketch.cols(), |r, c| {
         sketch.as_storage().query_one_counter(r, c)
@@ -53,22 +54,22 @@ fn cells(list: &EHSketchList) -> Vec<i32> {
 }
 
 /// Arrivals the sketch absorbed, read off row zero.
-fn arrivals_in(list: &EHSketchList) -> i64 {
+fn arrivals_in(list: &EhBucketSketch) -> i64 {
     let sketch = cm(list);
     (0..sketch.cols())
         .map(|c| i64::from(sketch.as_storage().query_one_counter(0, c)))
         .sum()
 }
 
-fn cm_over(stream: &[(u64, u64)]) -> EHSketchList {
+fn cm_over(stream: &[(u64, u64)]) -> EhBucketSketch {
     let mut sketch = Cm::with_dimensions(ROWS, COLS);
     for (_, key) in stream {
-        sketch.insert(&DataInput::U64(*key));
+        sketch.update(&DataInput::U64(*key));
     }
-    EHSketchList::CM(sketch)
+    EhBucketSketch::CountMinSketch(sketch)
 }
 
-fn merge_all(eh: &ExponentialHistogram) -> Option<EHSketchList> {
+fn merge_all(eh: &ExponentialHistogram) -> Option<EhBucketSketch> {
     let mut buckets = eh.payload.iter();
     let mut merged = buckets.next()?.bucket.clone();
     for b in buckets {
@@ -95,7 +96,7 @@ fn stream(max: usize) -> impl Strategy<Value = Vec<(u64, u64)>> {
 }
 
 /// The same, with no two arrivals sharing a timestamp. A shared timestamp
-/// leaves `query_interval_merge` no way to tell which of the two buckets
+/// leaves `query_interval` no way to tell which of the two buckets
 /// meeting at it an endpoint names, so the interval law draws its stream
 /// from here.
 fn distinct_stream(max: usize) -> impl Strategy<Value = Vec<(u64, u64)>> {
@@ -285,7 +286,7 @@ proptest! {
         let to = start + sizes[..=b].iter().sum::<usize>();
 
         let answer = eh
-            .query_interval_merge(eh.payload[a].min_time, eh.payload[b].max_time)
+            .query_interval(eh.payload[a].min_time, eh.payload[b].max_time)
             .expect("a fed histogram answers");
 
         prop_assert_eq!(
@@ -330,42 +331,42 @@ const FOLD_COLS: usize = 64;
 const FOLD_LEVEL: u32 = 2;
 const FOLD_TOP_K: usize = 8;
 
-fn fold_cms_config() -> FoldCMSConfig {
-    FoldCMSConfig {
+fn fold_cms_config() -> CountMinSketchFoldConfig {
+    CountMinSketchFoldConfig {
         rows: FOLD_ROWS,
         full_cols: FOLD_COLS,
         fold_level: FOLD_LEVEL,
-        top_k: FOLD_TOP_K,
+        heap_size: FOLD_TOP_K,
     }
 }
 
-fn fold_cs_config() -> FoldCSConfig {
-    FoldCSConfig {
+fn fold_cs_config() -> CountSketchFoldConfig {
+    CountSketchFoldConfig {
         rows: FOLD_ROWS,
         full_cols: FOLD_COLS,
         fold_level: FOLD_LEVEL,
-        top_k: FOLD_TOP_K,
+        heap_size: FOLD_TOP_K,
     }
 }
 
-fn roomy_kll_config() -> KLLConfig {
-    KLLConfig {
+fn roomy_kll_config() -> KllConfig {
+    KllConfig {
         k: 512,
         m: 8,
         seed: Some(0x5eed_1234_5678_9abc),
     }
 }
 
-fn fresh_fold_cms() -> FoldCMS {
-    FoldCMS::new(FOLD_ROWS, FOLD_COLS, FOLD_LEVEL, FOLD_TOP_K)
+fn fresh_fold_cms() -> CountMinSketchFold {
+    CountMinSketchFold::new(FOLD_ROWS, FOLD_COLS, FOLD_LEVEL, FOLD_TOP_K)
 }
 
-fn fresh_fold_cs() -> FoldCS {
-    FoldCS::new(FOLD_ROWS, FOLD_COLS, FOLD_LEVEL, FOLD_TOP_K)
+fn fresh_fold_cs() -> CountSketchFold {
+    CountSketchFold::new(FOLD_ROWS, FOLD_COLS, FOLD_LEVEL, FOLD_TOP_K)
 }
 
-fn kll_config() -> KLLConfig {
-    KLLConfig {
+fn kll_config() -> KllConfig {
+    KllConfig {
         k: 32,
         m: 8,
         seed: Some(0x5eed_1234_5678_9abc),
@@ -374,10 +375,10 @@ fn kll_config() -> KLLConfig {
 
 fn univ_q_config() -> UnivMonQConfig {
     UnivMonQConfig {
-        levels: 4,
-        width: 256,
-        depth: 3,
-        candidates: 64,
+        layers: 4,
+        top_layer_cols: 256,
+        rows: 3,
+        heap_size: 64,
         ordered_samples: 128,
         ..UnivMonQConfig::default()
     }
@@ -388,7 +389,7 @@ proptest! {
     //
     // Windows carve the stream into disjoint pieces; merging the retained
     // pieces has to rebuild what a single sketch fed those same arrivals
-    // holds. `merge_same_level` and `insert` are separate code paths, and the
+    // holds. `merge_same_level` and `update` are separate code paths, and the
     // retained set is chosen by eviction rather than by the test, so neither
     // side is the other by construction.
 
@@ -401,9 +402,9 @@ proptest! {
         max_windows in 1usize..6,
         stream in timed_stream(200),
     ) {
-        let mut tw = TumblingWindow::<FoldCMS>::new(size, max_windows, fold_cms_config(), 2);
+        let mut tw = TumblingWindow::<CountMinSketchFold>::new(size, max_windows, fold_cms_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let elapsed = stream.last().map(|(t, _)| t / size).unwrap_or(0) as usize;
@@ -420,15 +421,15 @@ proptest! {
         max_windows in 1usize..6,
         stream in timed_stream(200),
     ) {
-        let mut tw = TumblingWindow::<FoldCMS>::new(size, max_windows, fold_cms_config(), 2);
+        let mut tw = TumblingWindow::<CountMinSketchFold>::new(size, max_windows, fold_cms_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let kept = retained_after(&stream, size, max_windows);
         let mut single = fresh_fold_cms();
         for i in &kept {
-            single.insert(&DataInput::F64(stream[*i].1), 1);
+            single.update_weighted(&DataInput::F64(stream[*i].1), 1);
         }
 
         prop_assert_eq!(
@@ -445,15 +446,15 @@ proptest! {
         max_windows in 1usize..6,
         stream in timed_stream(200),
     ) {
-        let mut tw = TumblingWindow::<FoldCS>::new(size, max_windows, fold_cs_config(), 2);
+        let mut tw = TumblingWindow::<CountSketchFold>::new(size, max_windows, fold_cs_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let kept = retained_after(&stream, size, max_windows);
         let mut single = fresh_fold_cs();
         for i in &kept {
-            single.insert(&DataInput::F64(stream[*i].1), 1);
+            single.update_weighted(&DataInput::F64(stream[*i].1), 1);
         }
 
         prop_assert_eq!(
@@ -474,20 +475,20 @@ proptest! {
         max_windows in 1usize..6,
         stream in timed_stream(200),
     ) {
-        let mut tw = TumblingWindow::<KLL>::new(size, max_windows, roomy_kll_config(), 2);
+        let mut tw = TumblingWindow::<Kll>::new(size, max_windows, roomy_kll_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let kept = retained_after(&stream, size, max_windows);
         let merged = tw.query_all();
 
         prop_assert_eq!(
-            merged.wire_num_levels(), 1,
+            merged.num_levels(), 1,
             "the capacity was meant to hold {} observations uncompacted", kept.len()
         );
 
-        let mut held = merged.wire_items();
+        let mut held = merged.items_top_down();
         held.sort_by(f64::total_cmp);
         let mut expected: Vec<f64> = kept.iter().map(|i| stream[*i].1).collect();
         expected.sort_by(f64::total_cmp);
@@ -512,9 +513,9 @@ proptest! {
         max_windows in 1usize..6,
         stream in timed_stream(200),
     ) {
-        let mut tw = TumblingWindow::<KLL>::new(size, max_windows, kll_config(), 2);
+        let mut tw = TumblingWindow::<Kll>::new(size, max_windows, kll_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let kept = retained_after(&stream, size, max_windows);
@@ -524,11 +525,11 @@ proptest! {
         prop_assert!(
             merged.count() >= kept.len(),
             "the merge totals {} over {} retained observations, {} levels in use",
-            merged.count(), kept.len(), merged.wire_num_levels()
+            merged.count(), kept.len(), merged.num_levels()
         );
 
         let arrived: HashSet<u64> = kept.iter().map(|i| stream[*i].1.to_bits()).collect();
-        for item in merged.wire_items() {
+        for item in merged.items_top_down() {
             prop_assert!(
                 arrived.contains(&item.to_bits()),
                 "the merge holds {}, which no retained window saw", item
@@ -558,7 +559,7 @@ proptest! {
     ) {
         let mut tw = TumblingWindow::<UnivMonQ>::new(size, max_windows, univ_q_config(), 2);
         for (t, key) in &stream {
-            tw.insert(*t, &DataInput::F64(*key), 1);
+            tw.update_weighted(*t, &DataInput::F64(*key), 1);
         }
 
         let kept = retained_after(&stream, size, max_windows);
@@ -592,10 +593,10 @@ proptest! {
         stream in timed_stream(120),
     ) {
         let (first, second) = stream.split_at(stream.len() / 2);
-        let mut pool = SketchPool::<FoldCMS>::new(0, fold_cms_config());
+        let mut pool = SketchPool::<CountMinSketchFold>::new(0, fold_cms_config());
         let mut used = pool.take();
         for (_, key) in first {
-            used.insert(&DataInput::F64(*key), 1);
+            used.update_weighted(&DataInput::F64(*key), 1);
         }
         pool.put(used);
 
@@ -607,8 +608,8 @@ proptest! {
         prop_assert_eq!(recycled.heap().heap().len(), fresh.heap().heap().len(), "heap handed back");
 
         for (_, key) in second {
-            recycled.insert(&DataInput::F64(*key), 1);
-            fresh.insert(&DataInput::F64(*key), 1);
+            recycled.update_weighted(&DataInput::F64(*key), 1);
+            fresh.update_weighted(&DataInput::F64(*key), 1);
         }
 
         prop_assert_eq!(recycled.to_flat_counters(), fresh.to_flat_counters(), "counters reused");
@@ -621,10 +622,10 @@ proptest! {
         stream in timed_stream(120),
     ) {
         let (first, second) = stream.split_at(stream.len() / 2);
-        let mut pool = SketchPool::<FoldCS>::new(0, fold_cs_config());
+        let mut pool = SketchPool::<CountSketchFold>::new(0, fold_cs_config());
         let mut used = pool.take();
         for (_, key) in first {
-            used.insert(&DataInput::F64(*key), 1);
+            used.update_weighted(&DataInput::F64(*key), 1);
         }
         pool.put(used);
 
@@ -636,8 +637,8 @@ proptest! {
         prop_assert_eq!(recycled.heap().heap().len(), fresh.heap().heap().len(), "heap handed back");
 
         for (_, key) in second {
-            recycled.insert(&DataInput::F64(*key), 1);
-            fresh.insert(&DataInput::F64(*key), 1);
+            recycled.update_weighted(&DataInput::F64(*key), 1);
+            fresh.update_weighted(&DataInput::F64(*key), 1);
         }
 
         prop_assert_eq!(recycled.to_flat_counters(), fresh.to_flat_counters(), "counters reused");
@@ -654,7 +655,7 @@ proptest! {
     ) {
         let (first, second) = stream.split_at(stream.len() / 2);
         let config = kll_config();
-        let mut pool = SketchPool::<KLL>::new(0, config.clone());
+        let mut pool = SketchPool::<Kll>::new(0, config.clone());
         let mut used = pool.take();
         for (_, key) in first {
             let _ = used.update_data_input(&DataInput::F64(*key));
@@ -662,12 +663,12 @@ proptest! {
         pool.put(used);
 
         let mut recycled = pool.take();
-        let mut fresh = KLL::init_with_seed(config.k, config.m, config.seed.expect("seeded"));
+        let mut fresh = Kll::with_seed(config.k, config.m, config.seed.expect("seeded"));
 
         prop_assert_eq!(recycled.count(), fresh.count(), "count handed back");
-        prop_assert_eq!(recycled.wire_items(), fresh.wire_items(), "items handed back");
-        prop_assert_eq!(recycled.wire_levels(), fresh.wire_levels(), "levels handed back");
-        prop_assert_eq!(recycled.wire_coin(), fresh.wire_coin(), "coin handed back");
+        prop_assert_eq!(recycled.items_top_down(), fresh.items_top_down(), "items handed back");
+        prop_assert_eq!(recycled.level_bounds_top_down(), fresh.level_bounds_top_down(), "levels handed back");
+        prop_assert_eq!(recycled.coin_state(), fresh.coin_state(), "coin handed back");
 
         for (_, key) in second {
             let _ = recycled.update_data_input(&DataInput::F64(*key));
@@ -675,10 +676,10 @@ proptest! {
         }
 
         prop_assert_eq!(recycled.count(), fresh.count(), "count reused");
-        prop_assert_eq!(recycled.wire_items(), fresh.wire_items(), "items reused");
-        prop_assert_eq!(recycled.wire_levels(), fresh.wire_levels(), "levels reused");
-        prop_assert_eq!(recycled.wire_num_levels(), fresh.wire_num_levels(), "levels in use reused");
-        prop_assert_eq!(recycled.wire_coin(), fresh.wire_coin(), "coin reused");
+        prop_assert_eq!(recycled.items_top_down(), fresh.items_top_down(), "items reused");
+        prop_assert_eq!(recycled.level_bounds_top_down(), fresh.level_bounds_top_down(), "levels reused");
+        prop_assert_eq!(recycled.num_levels(), fresh.num_levels(), "levels in use reused");
+        prop_assert_eq!(recycled.coin_state(), fresh.coin_state(), "coin reused");
     }
 
     #[test]
@@ -717,27 +718,27 @@ proptest! {
         stream in timed_stream(120),
     ) {
         let (first, second) = stream.split_at(stream.len() / 2);
-        let mut pool = UnivSketchPool::new(0, 8, 3, 256, 4);
+        let mut pool = UnivMonPool::new(0, 8, 3, 256, 4);
         let mut used = pool.take();
         for (_, key) in first {
-            used.insert(&DataInput::F64(*key), 1);
+            used.update_weighted(&DataInput::F64(*key), 1);
         }
         pool.put(used);
 
         let mut recycled = pool.take();
-        let mut fresh = UnivMon::init_univmon(8, 3, 256, 4);
+        let mut fresh = UnivMon::new(8, 3, 256, 4);
 
-        prop_assert_eq!(recycled.calc_l1(), fresh.calc_l1(), "L1 handed back");
-        prop_assert_eq!(recycled.calc_card(), fresh.calc_card(), "cardinality handed back");
+        prop_assert_eq!(recycled.estimate_l1(), fresh.estimate_l1(), "L1 handed back");
+        prop_assert_eq!(recycled.estimate_cardinality(), fresh.estimate_cardinality(), "cardinality handed back");
 
         for (_, key) in second {
-            recycled.insert(&DataInput::F64(*key), 1);
-            fresh.insert(&DataInput::F64(*key), 1);
+            recycled.update_weighted(&DataInput::F64(*key), 1);
+            fresh.update_weighted(&DataInput::F64(*key), 1);
         }
 
-        prop_assert_eq!(recycled.calc_l1(), fresh.calc_l1(), "L1 reused");
-        prop_assert_eq!(recycled.calc_l2(), fresh.calc_l2(), "L2 reused");
-        prop_assert_eq!(recycled.calc_card(), fresh.calc_card(), "cardinality reused");
+        prop_assert_eq!(recycled.estimate_l1(), fresh.estimate_l1(), "L1 reused");
+        prop_assert_eq!(recycled.estimate_l2(), fresh.estimate_l2(), "L2 reused");
+        prop_assert_eq!(recycled.estimate_cardinality(), fresh.estimate_cardinality(), "cardinality reused");
         prop_assert_eq!(
             recycled.candidates_complete(), fresh.candidates_complete(), "candidate flags reused"
         );

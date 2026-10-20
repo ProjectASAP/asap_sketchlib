@@ -1,8 +1,8 @@
 //! Older `MessagePackCodec` shims over the pure-Rust sketch types in
 //! [`crate::sketches`], being retired.
 //!
-//! Each impl forwards to that sketch's own `serialize_to_bytes` /
-//! `deserialize_from_bytes`, so the bytes are ASAPv1 — the framing in
+//! Each impl forwards to that sketch's own `to_asapv1` /
+//! `from_asapv1`, so the bytes are ASAPv1 — the framing in
 //! `envelope.rs` plus the per-sketch `wire.rs` — and the shim adds nothing
 //! to them. Call those methods directly; `docs/asapv1_wire_format.md`
 //! specifies the format `sketchlib-go` mirrors.

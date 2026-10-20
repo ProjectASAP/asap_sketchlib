@@ -15,10 +15,13 @@ use crate::common;
 use common::specs::{CardinalityConfidenceSpec, CountMinSpec, CountSketchSpec, KllRankSpec, Tally};
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
+use asap_sketchlib::message_pack_format::MessagePackCodec;
+use asap_sketchlib::message_pack_format::portable::countminsketch_topk::CountMinSketchWithHeap;
+use asap_sketchlib::message_pack_format::portable::countsketch_topk::CountSketchWithHeap;
+use asap_sketchlib::message_pack_format::portable::kll::KllSketch;
 use asap_sketchlib::{
-    Classic, Count, CountMin, CountMinSketchWithHeap, CountSketchWithHeap, DataInput,
-    EnsembleSketch, ErtlMLE, FastPath, HashSketchEnsemble, HyperLogLog, HyperLogLogHIP, KllSketch,
-    MessagePackCodec, UnivMonQ, UnivMonQConfig, Vector2D,
+    Classic, CountMinSketch, CountSketch, DataInput, EnsembleSketch, Ertl, FastPath,
+    HashSketchEnsemble, HyperLogLog, HyperLogLogHip, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
 const ROWS: usize = 3;
@@ -31,16 +34,16 @@ const STREAM_SEED: u64 = 0xC090_5101;
 
 /// The ensemble's whole purpose is to compute one hash and hand it to several
 /// sketches, so every member is compared against a standalone sketch fed the
-/// same stream through its own `insert`.
+/// same stream through its own `update`.
 ///
 /// The two kinds of member have different obligations, and conflating them
 /// would make this test either vacuous or wrong:
 ///
-/// - **matrix members** (`CountMinFast`, `CountFast`) receive exactly the hash
+/// - **matrix members** (`CountMinFast`, `CountSketchFast`) receive exactly the hash
 ///   their own fast path would have computed, so they must match a standalone
 ///   sketch *exactly*, key for key;
 /// - **HLL members** receive the low 64 bits of that shared matrix hash, not
-///   the canonical seed `HyperLogLog::insert` uses. Two different hash
+///   the canonical seed `HyperLogLog::update` uses. Two different hash
 ///   functions land the same stream in different registers, so the ensemble's
 ///   readings are equally accurate but not equal. They are held to their own
 ///   cardinality bands, and to agreeing with the standalone readings within
@@ -50,34 +53,34 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
     let stream = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
 
     let mut ens: HashSketchEnsemble = HashSketchEnsemble::new(vec![
-        EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
-        EnsembleSketch::from(Count::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
-        EnsembleSketch::from(HyperLogLog::<ErtlMLE>::new()),
+        EnsembleSketch::from(HyperLogLog::<Ertl>::new()),
         EnsembleSketch::from(HyperLogLog::<Classic>::new()),
-        EnsembleSketch::from(HyperLogLogHIP::new()),
+        EnsembleSketch::from(HyperLogLogHip::new()),
     ])
     .expect("all matrix members share dimensions");
 
-    let mut ref_cm = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
-    let mut ref_cs = Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
-    let mut ref_ertl = HyperLogLog::<ErtlMLE>::new();
+    let mut ref_cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut ref_cs = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut ref_ertl = HyperLogLog::<Ertl>::new();
     let mut ref_classic = HyperLogLog::<Classic>::new();
-    let mut ref_hip = HyperLogLogHIP::new();
+    let mut ref_hip = HyperLogLogHip::new();
 
     let mut truth = FreqTruth::default();
     for k in &stream {
         let d = DataInput::U64(*k);
         truth.observe(*k as i64);
-        ens.insert(&d);
-        ref_cm.insert(&d);
-        ref_cs.insert(&d);
-        ref_ertl.insert(&d);
-        ref_classic.insert(&d);
-        ref_hip.insert(&d);
+        ens.update(&d);
+        ref_cm.update(&d);
+        ref_cs.update(&d);
+        ref_ertl.update(&d);
+        ref_classic.update(&d);
+        ref_hip.update(&d);
     }
 
     let context = format!(
@@ -103,7 +106,7 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
 
     // HLL members are deliberately *not* bit-identical to a standalone HLL.
     // The ensemble feeds them the low 64 bits of the shared **matrix** hash
-    // (seed index 0), while `HyperLogLog::insert` hashes with the canonical
+    // (seed index 0), while `HyperLogLog::update` hashes with the canonical
     // seed index. Two different hash functions land the same stream in
     // different registers, so the two are equally accurate rather than equal —
     // which is the point of sharing a hash, not a defect.
@@ -163,28 +166,28 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
 }
 
 /// Every member still satisfies its own family's bound after riding the shared
-/// hash path. `CountFast` gets the L2 bound, not Count-Min's; the HLL members
+/// hash path. `CountSketchFast` gets the L2 bound, not Count-Min's; the HLL members
 /// get their register models.
 #[test]
 fn ensemble_members_stay_inside_their_own_error_models() {
     let stream = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut ens: HashSketchEnsemble = HashSketchEnsemble::new(vec![
-        EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
-        EnsembleSketch::from(Count::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
-        EnsembleSketch::from(HyperLogLog::<ErtlMLE>::new()),
+        EnsembleSketch::from(HyperLogLog::<Ertl>::new()),
         EnsembleSketch::from(HyperLogLog::<Classic>::new()),
-        EnsembleSketch::from(HyperLogLogHIP::new()),
+        EnsembleSketch::from(HyperLogLogHip::new()),
     ])
     .expect("ensemble");
 
     let mut truth = FreqTruth::default();
     let mut distinct = std::collections::HashSet::new();
     for k in &stream {
-        ens.insert(&DataInput::U64(*k));
+        ens.update(&DataInput::U64(*k));
         truth.observe(*k as i64);
         distinct.insert(*k);
     }
@@ -235,7 +238,7 @@ fn ensemble_members_stay_inside_their_own_error_models() {
 /// Compatibility inside an ensemble is by **hash layout**, not by literal
 /// dimensions.
 ///
-/// The shared hash is `hash_for_matrix_seeded_with_mode(0, mode, rows, input)`,
+/// The shared hash is `hash_for_matrix_seeded_with_layout(0, mode, rows, input)`,
 /// where `mode` is chosen from `rows * mask_bits(cols)`: it decides whether the
 /// row hashes are packed into one `u64`, one `u128`, or one value per row. Two
 /// sketches with the same `(mode, rows)` can share that hash even at different
@@ -249,14 +252,14 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     // Same rows, same packing mode, *different* widths: compatible, and each
     // member must answer correctly at its own width.
     let mut mixed = HashSketchEnsemble::<asap_sketchlib::DefaultXxHasher>::new(vec![
-        EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
-        EnsembleSketch::from(CountMin::<Vector2D<i64>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(
             ROWS,
             COLS / 2,
         )),
-        EnsembleSketch::from(Count::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
     ])
@@ -266,7 +269,7 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     let stream = zipf_u64(N, DOMAIN, 1.1, STREAM_SEED);
     let mut truth = FreqTruth::default();
     for k in &stream {
-        mixed.insert(&DataInput::U64(*k));
+        mixed.update(&DataInput::U64(*k));
         truth.observe(*k as i64);
     }
     let context = format!("zipf(1.1) domain={DOMAIN} n={N} seed={STREAM_SEED:#x}");
@@ -295,10 +298,10 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     // construction and on push.
     assert!(
         HashSketchEnsemble::<asap_sketchlib::DefaultXxHasher>::new(vec![
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 ROWS, COLS
             )),
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 ROWS + 2,
                 COLS
             )),
@@ -310,7 +313,7 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     assert!(
         mixed
             .push(EnsembleSketch::from(
-                Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS + 2, COLS)
+                CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS + 2, COLS)
             ))
             .is_err(),
         "push must reject a member with a different row count"
@@ -328,10 +331,10 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     // 5 * 13 = 65 and spills into a `u128`.
     assert!(
         HashSketchEnsemble::<asap_sketchlib::DefaultXxHasher>::new(vec![
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 5, 1024
             )),
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 5, 4096
             )),
         ])
@@ -341,8 +344,10 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     // ...while two widths on the same side of that boundary compose fine.
     assert!(
         HashSketchEnsemble::<asap_sketchlib::DefaultXxHasher>::new(vec![
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(5, 512)),
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+                5, 512
+            )),
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 5, 1024
             )),
         ])
@@ -353,7 +358,7 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     // HLL members carry no matrix dimensions, so they compose with any grid.
     assert!(
         mixed
-            .push(EnsembleSketch::from(HyperLogLogHIP::new()))
+            .push(EnsembleSketch::from(HyperLogLogHip::new()))
             .is_ok(),
         "an HLL member has no dimensions to clash with"
     );
@@ -384,14 +389,14 @@ fn univmonq_configuration_variants_all_build_and_keep_exact_aggregates() {
         (
             "width_halving_period=2",
             UnivMonQConfig {
-                width_halving_period: 2,
+                cols_halving_period: 2,
                 ..base
             },
         ),
         (
             "explicit hash_seed",
             UnivMonQConfig {
-                hash_seed: 3,
+                seed_index: 3,
                 ..base
             },
         ),
@@ -444,7 +449,7 @@ fn univmonq_with_ordered_samples_disabled_answers_everything_except_ordered_quer
         "F2 does not depend on ordered samples"
     );
     assert!(
-        q.estimate_distinct() > 0.0,
+        q.estimate_cardinality() > 0.0,
         "distinct does not depend on ordered samples"
     );
 
@@ -475,33 +480,33 @@ fn univmonq_with_window_bound_chooses_a_hierarchy_that_satisfies_its_own_inequal
         // level sees `max_updates / 2^(levels-1)` updates in expectation, and
         // its upper tail must sit under the candidate table's capacity.
         let log_inv_delta = (1.0 / DELTA).ln();
-        let mean = max_updates as f64 / 2f64.powi((cfg.levels - 1) as i32);
+        let mean = max_updates as f64 / 2f64.powi((cfg.layers - 1) as i32);
         let upper = mean + (2.0 * mean * log_inv_delta).sqrt() + (2.0 / 3.0) * log_inv_delta;
         assert!(
-            upper < cfg.candidates as f64,
+            upper < cfg.heap_size as f64,
             "levels={} leaves the deepest stratum with an upper bound of {upper:.1}, \
              above the {} candidate slots",
-            cfg.levels,
-            cfg.candidates
+            cfg.layers,
+            cfg.heap_size
         );
         // And it must be the *smallest* such hierarchy.
-        if cfg.levels > 2 {
-            let mean_lower = max_updates as f64 / 2f64.powi((cfg.levels - 2) as i32);
+        if cfg.layers > 2 {
+            let mean_lower = max_updates as f64 / 2f64.powi((cfg.layers - 2) as i32);
             let upper_lower = mean_lower
                 + (2.0 * mean_lower * log_inv_delta).sqrt()
                 + (2.0 / 3.0) * log_inv_delta;
             assert!(
-                upper_lower >= cfg.candidates as f64,
+                upper_lower >= cfg.heap_size as f64,
                 "levels={} is not minimal: {} levels would already fit",
-                cfg.levels,
-                cfg.levels - 1
+                cfg.layers,
+                cfg.layers - 1
             );
         }
         assert!(
-            cfg.levels >= previous,
+            cfg.layers >= previous,
             "a larger window must not need a shallower hierarchy"
         );
-        previous = cfg.levels;
+        previous = cfg.layers;
 
         // The chosen config must build and answer.
         let mut q = UnivMonQ::new(cfg).expect("chosen config must be valid");
@@ -793,7 +798,7 @@ fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_a
 // ---------------------------------------------------------------------------
 
 /// `tests/TEST_COVERAGE.md` specifies the ensemble as a Count-Min cell at
-/// `row 3, col 4096` on the fast path beside a `HyperLogLog<ErtlMLE>` cell,
+/// `row 3, col 4096` on the fast path beside a `HyperLogLog<Ertl>` cell,
 /// over the twelve numbered inputs, with both cells required to answer as their
 /// standalone instances do.
 ///
@@ -803,7 +808,7 @@ fn portable_kll_sketch_satisfies_the_rank_error_characterization_through_merge_a
 /// - the matrix cell is handed exactly the hash its own fast path would have
 ///   computed, so it must match key for key, as an equality;
 /// - the HLL cell is handed the low 64 bits of that same matrix hash, not the
-///   canonical seed `HyperLogLog::insert` uses. Two different hash functions
+///   canonical seed `HyperLogLog::update` uses. Two different hash functions
 ///   put the same stream in different registers, so the cell is as accurate as
 ///   the standalone sketch rather than equal to it: it is held to its own
 ///   cardinality band, and to agreeing with the standalone reading inside the
@@ -823,23 +828,23 @@ mod documented_matrix {
 
     fn ensemble_documented_input(input: &KeyInput) {
         let mut ens: HashSketchEnsemble = HashSketchEnsemble::new(vec![
-            EnsembleSketch::from(CountMin::<Vector2D<i32>, FastPath>::with_dimensions(
+            EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 DOC_ROWS, DOC_COLS,
             )),
-            EnsembleSketch::from(HyperLogLog::<ErtlMLE>::new()),
+            EnsembleSketch::from(HyperLogLog::<Ertl>::new()),
         ])
         .expect("one matrix member cannot disagree with itself about dimensions");
 
         let mut reference_cm =
-            CountMin::<Vector2D<i32>, FastPath>::with_dimensions(DOC_ROWS, DOC_COLS);
-        let mut reference_hll = HyperLogLog::<ErtlMLE>::new();
+            CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(DOC_ROWS, DOC_COLS);
+        let mut reference_hll = HyperLogLog::<Ertl>::new();
         let mut truth = FreqTruth::default();
         for key in &input.keys {
             let d = input.data(*key);
             truth.observe(*key);
-            ens.insert(&d);
-            reference_cm.insert(&d);
-            reference_hll.insert(&d);
+            ens.update(&d);
+            reference_cm.update(&d);
+            reference_hll.update(&d);
         }
 
         let context = format!(

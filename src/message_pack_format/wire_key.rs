@@ -322,14 +322,14 @@ mod tests {
 
     #[test]
     fn float_fields_reject_an_integer_and_the_other_float_width() {
-        type CmsF64 = CountMin<Vector2D<f64>, FastPath>;
-        type HeapF64 = CMSHeap<Vector2D<f64>, RegularPath>;
-        let mut positive = DDSketch::new(0.25);
-        let mut kll = KLL::<f64>::init_kll_with_seed(200, 1);
+        type CmsF64 = CountMinSketch<Vector2D<f64>, FastPath>;
+        type HeapF64 = CountMinSketchWithHeap<Vector2D<f64>, RegularPath>;
+        let mut positive = DdSketch::new(0.25);
+        let mut kll = Kll::<f64>::with_k_and_seed(200, 1);
         let mut heap = HeapF64::from_storage(Vector2D::from_fn(2, 4, |r, c| (r * 4 + c) as f64), 4);
         let mut space_saving: SpaceSaving = SpaceSaving::with_capacity(4);
-        let mut univmon = UnivMon::init_univmon(4, 2, 16, 3);
-        let mut hydra = Hydra::with_schema(2, 8, ["region"], HydraCounter::KLL(KLL::default()))
+        let mut univmon = UnivMon::new(4, 2, 16, 3);
+        let mut hydra = Hydra::with_schema(2, 8, ["region"], HydraCounter::Kll(Kll::default()))
             .expect("schema");
         for value in [1.0, 2.0] {
             positive.add(&value);
@@ -339,18 +339,23 @@ mod tests {
         }
         heap.heap_mut().update(&DataInput::F32(1.5), 11.0);
         heap.heap_mut().update(&DataInput::F32(3.0), 5.0);
-        let mut delta_heap = HHHeap::new(4);
+        let mut delta_heap = TopKHeap::new(4);
         delta_heap.update(&DataInput::F32(1.5), 13.0);
-        let heap_delta =
-            CMSHeapDelta::<f64, RegularPath>::new(2, 4, vec![1], vec![2.5], delta_heap)
-                .expect("delta");
-        space_saving.insert(&DataInput::F64(2.5));
-        univmon.insert(&DataInput::F64(2.5), 2);
+        let heap_delta = CountMinSketchWithHeapDelta::<f64, RegularPath>::new(
+            2,
+            4,
+            vec![1],
+            vec![2.5],
+            delta_heap,
+        )
+        .expect("delta");
+        space_saving.update(&DataInput::F64(2.5));
+        univmon.update_weighted(&DataInput::F64(2.5), 2);
         hydra
             .update(&["eu"], &DataInput::F64(7.0), None)
             .expect("arity");
 
-        let dd = &positive.serialize_to_bytes().unwrap();
+        let dd = &positive.to_asapv1().unwrap();
         let hip = &hex(include_str!("../../asapv1_golden/hll_hip_p12.hex"));
         let cms = &hex(include_str!("../../asapv1_golden/cms_f64_fast_2x3.hex"));
         let cms_delta = &hex(include_str!(
@@ -360,28 +365,27 @@ mod tests {
         let cs_delta = &hex(include_str!(
             "../../asapv1_golden/cs_f64_fast_2x4_delta.hex"
         ));
-        let kll = &kll.serialize_to_bytes().unwrap();
-        let heap = &heap.serialize_to_bytes().unwrap();
-        let heap_delta = &heap_delta.serialize_to_bytes().unwrap();
-        let ss = &space_saving.serialize_to_bytes().unwrap();
-        let um = &univmon.serialize_to_bytes().unwrap();
-        let hy = &hydra.serialize_to_bytes().unwrap();
+        let kll = &kll.to_asapv1().unwrap();
+        let heap = &heap.to_asapv1().unwrap();
+        let heap_delta = &heap_delta.to_asapv1().unwrap();
+        let ss = &space_saving.to_asapv1().unwrap();
+        let um = &univmon.to_asapv1().unwrap();
+        let hy = &hydra.to_asapv1().unwrap();
 
-        let dd_ok = |b: &[u8]| DDSketch::deserialize_from_bytes(b).is_ok();
-        let hip_ok = |b: &[u8]| HyperLogLogHIPP12::deserialize_from_bytes(b).is_ok();
-        let cms_ok = |b: &[u8]| CmsF64::deserialize_from_bytes(b).is_ok();
-        let delta_ok = |b: &[u8]| CountMinDelta::<f64, FastPath>::deserialize_from_bytes(b).is_ok();
-        let cs_ok = |b: &[u8]| Count::<Vector2D<f64>, FastPath>::deserialize_from_bytes(b).is_ok();
-        let cs_delta_ok = |b: &[u8]| {
-            sketches::CountSketchDelta::<f64, FastPath>::deserialize_from_bytes(b).is_ok()
-        };
-        let kll_ok = |b: &[u8]| KLL::<f64>::deserialize_from_bytes(b).is_ok();
-        let heap_ok = |b: &[u8]| HeapF64::deserialize_from_bytes(b).is_ok();
+        let dd_ok = |b: &[u8]| DdSketch::from_asapv1(b).is_ok();
+        let hip_ok = |b: &[u8]| HyperLogLogHipP12::from_asapv1(b).is_ok();
+        let cms_ok = |b: &[u8]| CmsF64::from_asapv1(b).is_ok();
+        let delta_ok = |b: &[u8]| CountMinSketchDelta::<f64, FastPath>::from_asapv1(b).is_ok();
+        let cs_ok = |b: &[u8]| CountSketch::<Vector2D<f64>, FastPath>::from_asapv1(b).is_ok();
+        let cs_delta_ok =
+            |b: &[u8]| sketches::CountSketchDelta::<f64, FastPath>::from_asapv1(b).is_ok();
+        let kll_ok = |b: &[u8]| Kll::<f64>::from_asapv1(b).is_ok();
+        let heap_ok = |b: &[u8]| HeapF64::from_asapv1(b).is_ok();
         let heap_delta_ok =
-            |b: &[u8]| CMSHeapDelta::<f64, RegularPath>::deserialize_from_bytes(b).is_ok();
-        let ss_ok = |b: &[u8]| SpaceSaving::<DefaultXxHasher>::deserialize_from_bytes(b).is_ok();
-        let um_ok = |b: &[u8]| UnivMon::deserialize_from_bytes(b).is_ok();
-        let hy_ok = |b: &[u8]| Hydra::deserialize_from_bytes(b).is_ok();
+            |b: &[u8]| CountMinSketchWithHeapDelta::<f64, RegularPath>::from_asapv1(b).is_ok();
+        let ss_ok = |b: &[u8]| SpaceSaving::<DefaultXxHasher>::from_asapv1(b).is_ok();
+        let um_ok = |b: &[u8]| UnivMon::from_asapv1(b).is_ok();
+        let hy_ok = |b: &[u8]| Hydra::from_asapv1(b).is_ok();
 
         let rows = vec![
             row("DDSketch alpha", dd, 0.25, F32, dd_ok),
@@ -417,8 +421,8 @@ mod tests {
             let mut rows = rows;
             let mut uniform = UniformSampling::with_seed(1.0, 7);
             uniform.update(2.5);
-            let us = &uniform.serialize_to_bytes().unwrap();
-            let us_ok = |b: &[u8]| UniformSampling::deserialize_from_bytes(b).is_ok();
+            let us = &uniform.to_asapv1().unwrap();
+            let us_ok = |b: &[u8]| UniformSampling::from_asapv1(b).is_ok();
             rows.push(row("Uniform sample_rate", us, 1.0, Int, us_ok));
             rows.push(row("Uniform value", us, 2.5, F32, us_ok));
             rows

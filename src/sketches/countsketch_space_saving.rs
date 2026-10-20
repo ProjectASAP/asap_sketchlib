@@ -1,12 +1,12 @@
-//! CSSpaceSaving: a [`Count`] sketch beside a [`SpaceSaving`] summary. Every
+//! CountSketchWithSpaceSaving: a [`CountSketch`] sketch beside a [`SpaceSaving`] summary. Every
 //! update reaches both; top-k ranks the summary's keys by their Count Sketch
 //! estimate. The summary's `capacity` is independent of `k`.
 
-use crate::sketches::countminsketch_space_saving::{SpaceSavingCounter, rank_candidates};
+use crate::sketches::countminsketch_space_saving::{CandidateCounter, rank_candidates};
 use crate::sketches::countsketch::CountSketchCounter;
 use crate::{
-    Count, DataInput, DefaultXxHasher, HeapItem, MatrixStorage, RegularPath, SketchHasher,
-    SpaceSaving, Vector2D,
+    CountSketch, DataInput, DefaultXxHasher, MatrixStorage, OwnedDataInput, RegularPath,
+    SketchHasher, SpaceSaving, Vector2D,
 };
 
 mod wire;
@@ -14,44 +14,44 @@ mod wire;
 /// A Count Sketch paired with a Space-Saving candidate summary that hashes with
 /// the same `H`.
 #[derive(Clone)]
-pub struct CSSpaceSaving<
+pub struct CountSketchWithSpaceSaving<
     S: MatrixStorage = Vector2D<i64>,
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
 > {
-    cs: Count<S, Mode, H>,
+    count_sketch: CountSketch<S, Mode, H>,
     summary: SpaceSaving<H>,
 }
 
-impl<T, M, H: SketchHasher> CSSpaceSaving<Vector2D<T>, M, H>
+impl<T, M, H: SketchHasher> CountSketchWithSpaceSaving<Vector2D<T>, M, H>
 where
     T: CountSketchCounter,
 {
     /// Creates a `rows x cols` sketch whose summary monitors at most
     /// `capacity` keys.
     pub fn new(rows: usize, cols: usize, capacity: usize) -> Self {
-        CSSpaceSaving {
-            cs: Count::with_dimensions(rows, cols),
+        CountSketchWithSpaceSaving {
+            count_sketch: CountSketch::with_dimensions(rows, cols),
             summary: SpaceSaving::with_capacity(capacity),
         }
     }
 }
 
-impl<S: MatrixStorage, M, H: SketchHasher> CSSpaceSaving<S, M, H>
+impl<S: MatrixStorage, M, H: SketchHasher> CountSketchWithSpaceSaving<S, M, H>
 where
     S::Counter: CountSketchCounter,
 {
     /// Pairs an existing matrix with an existing summary.
-    pub fn from_parts(cs: Count<S, M, H>, space_saving: SpaceSaving<H>) -> Self {
-        CSSpaceSaving {
-            cs,
+    pub fn from_parts(count_sketch: CountSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self {
+        CountSketchWithSpaceSaving {
+            count_sketch,
             summary: space_saving,
         }
     }
 
     /// The Count Sketch matrix.
-    pub fn cs(&self) -> &Count<S, M, H> {
-        &self.cs
+    pub fn count_sketch(&self) -> &CountSketch<S, M, H> {
+        &self.count_sketch
     }
 
     /// The candidate summary.
@@ -61,12 +61,12 @@ where
 
     /// Number of rows in the matrix.
     pub fn rows(&self) -> usize {
-        self.cs.rows()
+        self.count_sketch.rows()
     }
 
     /// Number of columns in the matrix.
     pub fn cols(&self) -> usize {
-        self.cs.cols()
+        self.count_sketch.cols()
     }
 
     /// Keys the summary can monitor.
@@ -82,99 +82,99 @@ where
             other.summary.capacity(),
             "Space-Saving capacity mismatch while merging CSSpaceSaving sketches"
         );
-        self.cs.merge(&other.cs);
+        self.count_sketch.merge(&other.count_sketch);
         self.summary.merge(&other.summary);
     }
 }
 
-impl<S: MatrixStorage, H: SketchHasher> CSSpaceSaving<S, RegularPath, H>
+impl<S: MatrixStorage, H: SketchHasher> CountSketchWithSpaceSaving<S, RegularPath, H>
 where
-    S::Counter: CountSketchCounter + SpaceSavingCounter,
+    S::Counter: CountSketchCounter + CandidateCounter,
 {
     /// Records one occurrence of `key`.
     #[inline]
-    pub fn insert(&mut self, key: &DataInput) {
-        self.cs.insert(key);
-        self.summary.insert(key);
+    pub fn update(&mut self, key: &DataInput) {
+        self.count_sketch.update(key);
+        self.summary.update(key);
     }
 
     /// Adds `±many` to `key`'s cells and its
-    /// [`SpaceSavingCounter::summary_weight`] to the summary.
+    /// [`CandidateCounter::summary_weight`] to the summary.
     #[inline]
-    pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
-        self.cs.insert_many(key, many);
-        self.summary.insert_many(key, many.summary_weight());
+    pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
+        self.count_sketch.update_weighted(key, weight);
+        self.summary.update_weighted(key, weight.summary_weight());
     }
 
     /// Records every key in `values`.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
     /// The Count Sketch estimate (row median) for `key`.
     #[inline]
     pub fn estimate(&self, key: &DataInput) -> f64 {
-        self.cs.estimate(key)
+        self.count_sketch.estimate(key)
     }
 
     /// The `k` monitored keys with the largest Count Sketch estimates, highest
     /// first by `f64::total_cmp`, ties broken by heap key order.
-    pub fn top_k(&self, k: usize) -> Vec<(HeapItem, f64)> {
-        rank_candidates(&self.summary, k, |key| self.cs.estimate(key))
+    pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, f64)> {
+        rank_candidates(&self.summary, k, |key| self.count_sketch.estimate(key))
     }
 }
 
-impl<S, H: SketchHasher> CSSpaceSaving<S, crate::FastPath, H>
+impl<S, H: SketchHasher> CountSketchWithSpaceSaving<S, crate::FastPath, H>
 where
     S: MatrixStorage + crate::FastPathHasher<H>,
-    S::Counter: CountSketchCounter + SpaceSavingCounter,
+    S::Counter: CountSketchCounter + CandidateCounter,
 {
     /// Records one occurrence of `key`.
     #[inline]
-    pub fn insert(&mut self, key: &DataInput) {
-        self.cs.insert(key);
-        self.summary.insert(key);
+    pub fn update(&mut self, key: &DataInput) {
+        self.count_sketch.update(key);
+        self.summary.update(key);
     }
 
     /// Adds `±many` to `key`'s cells and its
-    /// [`SpaceSavingCounter::summary_weight`] to the summary.
+    /// [`CandidateCounter::summary_weight`] to the summary.
     #[inline]
-    pub fn insert_many(&mut self, key: &DataInput, many: S::Counter) {
-        self.cs.insert_many(key, many);
-        self.summary.insert_many(key, many.summary_weight());
+    pub fn update_weighted(&mut self, key: &DataInput, weight: S::Counter) {
+        self.count_sketch.update_weighted(key, weight);
+        self.summary.update_weighted(key, weight.summary_weight());
     }
 
     /// Records every key in `values`.
-    pub fn bulk_insert(&mut self, values: &[DataInput]) {
+    pub fn update_batch(&mut self, values: &[DataInput]) {
         for value in values {
-            self.insert(value);
+            self.update(value);
         }
     }
 
     /// The Count Sketch estimate (row median) for `key`.
     #[inline]
     pub fn estimate(&self, key: &DataInput) -> f64 {
-        self.cs.estimate(key)
+        self.count_sketch.estimate(key)
     }
 
     /// The `k` monitored keys with the largest Count Sketch estimates, highest
     /// first by `f64::total_cmp`, ties broken by heap key order.
-    pub fn top_k(&self, k: usize) -> Vec<(HeapItem, f64)> {
-        rank_candidates(&self.summary, k, |key| self.cs.estimate(key))
+    pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, f64)> {
+        rank_candidates(&self.summary, k, |key| self.count_sketch.estimate(key))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CSHeap, FastPath};
+    use crate::{CountSketchWithHeap, FastPath};
 
-    fn ranked(top: &[(HeapItem, f64)]) -> Vec<(u64, f64)> {
+    fn ranked(top: &[(OwnedDataInput, f64)]) -> Vec<(u64, f64)> {
         top.iter()
             .map(|(key, count)| match key {
-                HeapItem::U64(v) => (*v, *count),
+                OwnedDataInput::U64(v) => (*v, *count),
                 other => panic!("expected a U64 key, got {other:?}"),
             })
             .collect()
@@ -184,10 +184,10 @@ mod tests {
     /// error, yet `top_k` reports the matrix's `1` for it and never reports `2`.
     #[test]
     fn top_k_ranks_the_candidates_by_their_matrix_estimate() {
-        let mut sk = CSSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 1024, 2);
-        sk.insert_many(&DataInput::U64(1), 5);
-        sk.insert(&DataInput::U64(2));
-        sk.insert(&DataInput::U64(3));
+        let mut sk = CountSketchWithSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 1024, 2);
+        sk.update_weighted(&DataInput::U64(1), 5);
+        sk.update(&DataInput::U64(2));
+        sk.update(&DataInput::U64(3));
         assert_eq!(sk.estimate(&DataInput::U64(2)), 1.0);
         assert_eq!(sk.estimate(&DataInput::U64(3)), 1.0);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(3)), 2);
@@ -199,17 +199,17 @@ mod tests {
     /// one-entry heap per source drops it, a three-counter summary keeps it.
     #[test]
     fn merge_keeps_a_candidate_no_local_heap_held() {
-        let mut heap_a = CSHeap::<Vector2D<i64>, FastPath>::new(3, 1024, 1);
+        let mut heap_a = CountSketchWithHeap::<Vector2D<i64>, FastPath>::new(3, 1024, 1);
         let mut heap_b = heap_a.clone();
-        let mut ss_a = CSSpaceSaving::<Vector2D<i64>, FastPath>::new(3, 1024, 3);
+        let mut ss_a = CountSketchWithSpaceSaving::<Vector2D<i64>, FastPath>::new(3, 1024, 3);
         let mut ss_b = ss_a.clone();
         for (local, heap) in [(1u64, &mut heap_a), (2, &mut heap_b)] {
-            heap.insert_many(&DataInput::U64(local), 5);
-            heap.insert_many(&DataInput::U64(3), 3);
+            heap.update_weighted(&DataInput::U64(local), 5);
+            heap.update_weighted(&DataInput::U64(3), 3);
         }
         for (local, ss) in [(1u64, &mut ss_a), (2, &mut ss_b)] {
-            ss.insert_many(&DataInput::U64(local), 5);
-            ss.insert_many(&DataInput::U64(3), 3);
+            ss.update_weighted(&DataInput::U64(local), 5);
+            ss.update_weighted(&DataInput::U64(3), 3);
         }
         heap_a.merge(&heap_b);
         ss_a.merge(&ss_b);
@@ -222,22 +222,22 @@ mod tests {
     #[test]
     #[should_panic(expected = "capacity mismatch")]
     fn merge_rejects_a_capacity_mismatch() {
-        let mut a = CSSpaceSaving::<Vector2D<i64>, RegularPath>::new(2, 64, 4);
-        a.merge(&CSSpaceSaving::new(2, 64, 3));
+        let mut a = CountSketchWithSpaceSaving::<Vector2D<i64>, RegularPath>::new(2, 64, 4);
+        a.merge(&CountSketchWithSpaceSaving::new(2, 64, 3));
     }
 
     #[test]
     #[should_panic(expected = "dimension mismatch")]
     fn merge_rejects_a_dimension_mismatch() {
-        let mut a = CSSpaceSaving::<Vector2D<i64>, RegularPath>::new(2, 64, 4);
-        a.merge(&CSSpaceSaving::new(2, 32, 4));
+        let mut a = CountSketchWithSpaceSaving::<Vector2D<i64>, RegularPath>::new(2, 64, 4);
+        a.merge(&CountSketchWithSpaceSaving::new(2, 32, 4));
     }
 
     #[test]
     fn a_negative_weight_reaches_the_matrix_alone() {
-        let mut sk = CSSpaceSaving::<Vector2D<f64>, RegularPath>::new(3, 1024, 4);
-        sk.insert_many(&DataInput::U64(1), -2.5);
-        sk.insert_many(&DataInput::U64(2), 0.5);
+        let mut sk = CountSketchWithSpaceSaving::<Vector2D<f64>, RegularPath>::new(3, 1024, 4);
+        sk.update_weighted(&DataInput::U64(1), -2.5);
+        sk.update_weighted(&DataInput::U64(2), 0.5);
         assert_eq!(sk.estimate(&DataInput::U64(1)), -2.5);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(1)), 0);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(2)), 1);

@@ -5,7 +5,7 @@
 //! is that definition read literally: a `BTreeSet` over the stream, truncated
 //! to k.
 //!
-//! Most laws drive `insert_by_hash`, so the stream the oracle reads is the
+//! Most laws drive `update_with_hash`, so the stream the oracle reads is the
 //! stream the sketch retains from and no hash function stands between them.
 //! One law covers the key path separately, pinning what the wire format
 //! declares: each key is hashed once, at the canonical seed.
@@ -18,10 +18,8 @@
 use std::collections::BTreeSet;
 
 use crate::support::keys;
-use asap_sketchlib::{CANONICAL_HASH_SEED, DataInput, KMV, hash64_seeded};
+use asap_sketchlib::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, Kmv, hash64_seeded};
 use proptest::prelude::*;
-
-type Kmv = KMV;
 
 /// Retention bounds small enough that a few hundred draws cross them.
 fn bound() -> impl Strategy<Value = usize> {
@@ -117,7 +115,7 @@ fn within_a_few_ulps(a: f64, b: f64) -> bool {
 /// The retained hashes, ascending. The heap's array order follows the arrivals,
 /// so the set is read sorted.
 fn retained(sketch: &Kmv) -> Vec<u64> {
-    let mut hashes: Vec<u64> = sketch.k_vals.iter().copied().collect();
+    let mut hashes: Vec<u64> = sketch.retained_hashes.iter().copied().collect();
     hashes.sort_unstable();
     hashes
 }
@@ -136,7 +134,7 @@ fn smallest_distinct(stream: &[u64], k: usize) -> Vec<u64> {
 fn from_hashes(k: usize, stream: &[u64]) -> Kmv {
     let mut sketch = Kmv::new(k);
     for hash in stream {
-        sketch.insert_by_hash(*hash);
+        sketch.update_with_hash(*hash);
     }
     sketch
 }
@@ -165,7 +163,7 @@ proptest! {
             k,
             stream.len()
         );
-        prop_assert_eq!(sketch.k_vals.capacity(), k);
+        prop_assert_eq!(sketch.retained_hashes.capacity(), k);
     }
 
     #[test]
@@ -177,7 +175,7 @@ proptest! {
         let before = retained(&sketch);
 
         for hash in &again {
-            sketch.insert_by_hash(*hash);
+            sketch.update_with_hash(*hash);
         }
 
         prop_assert_eq!(
@@ -212,12 +210,12 @@ proptest! {
     ) {
         let mut sketch = Kmv::new(k);
         for key in &stream {
-            sketch.insert(&DataInput::U64(*key));
+            sketch.update(&DataInput::U64(*key));
         }
 
         let hashed: Vec<u64> = stream
             .iter()
-            .map(|key| hash64_seeded(CANONICAL_HASH_SEED, &DataInput::U64(*key)))
+            .map(|key| hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, &DataInput::U64(*key)))
             .collect();
 
         prop_assert_eq!(
@@ -242,7 +240,7 @@ proptest! {
         (k, stream, raise) in full_stream(),
     ) {
         let mut sketch = from_hashes(k, &stream);
-        prop_assert_eq!(sketch.k_vals.len(), k);
+        prop_assert_eq!(sketch.retained_hashes.len(), k);
         let hashes = retained(&sketch);
         let kth = *hashes.last().expect("a full sketch retains k hashes");
 
@@ -281,11 +279,11 @@ proptest! {
         );
 
         let raised = kth.max(raise);
-        let mut taller = Kmv::new(k);
+        let mut taller: Kmv = Kmv::new(k);
         for hash in hashes[..k - 1].iter().chain(std::iter::once(&raised)) {
-            taller.insert_by_hash(*hash);
+            taller.update_with_hash(*hash);
         }
-        prop_assert_eq!(taller.k_vals.len(), k);
+        prop_assert_eq!(taller.retained_hashes.len(), k);
         prop_assert!(
             taller.estimate() <= estimate,
             "k {}: raising the k-th minimum from {} to {} raised the estimate from {} to {}",
@@ -302,11 +300,11 @@ proptest! {
         k in estimating_bound(),
         stream in hash_stream(300),
     ) {
-        let mut sketch = Kmv::new(k);
+        let mut sketch: Kmv = Kmv::new(k);
         let mut previous = sketch.estimate();
 
         for (i, hash) in stream.iter().enumerate() {
-            sketch.insert_by_hash(*hash);
+            sketch.update_with_hash(*hash);
             let now = sketch.estimate();
             prop_assert!(
                 now.is_finite(),
@@ -335,7 +333,7 @@ proptest! {
     ) {
         let mut sketch = from_hashes(k, &stream);
 
-        prop_assert_eq!(sketch.k_vals.len(), distinct.len());
+        prop_assert_eq!(sketch.retained_hashes.len(), distinct.len());
         prop_assert_eq!(
             sketch.estimate(),
             distinct.len() as f64,
@@ -355,8 +353,8 @@ proptest! {
     ) {
         let mut lower_sketch = from_hashes(k, &lower);
         let mut higher_sketch = from_hashes(k, &higher);
-        prop_assert_eq!(lower_sketch.k_vals.len(), k);
-        prop_assert_eq!(higher_sketch.k_vals.len(), k);
+        prop_assert_eq!(lower_sketch.retained_hashes.len(), k);
+        prop_assert_eq!(higher_sketch.retained_hashes.len(), k);
 
         let (near, far) = (lower_sketch.estimate(), higher_sketch.estimate());
         prop_assert!(
@@ -392,7 +390,7 @@ proptest! {
             left.len(),
             right.len()
         );
-        prop_assert_eq!(a.k_vals.capacity(), k);
+        prop_assert_eq!(a.retained_hashes.capacity(), k);
         prop_assert_eq!(retained(&b), read_before, "the merge changed the operand it read");
     }
 

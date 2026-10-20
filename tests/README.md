@@ -20,16 +20,16 @@ its theorem.
 | `conformance_kit.rs` | Reference adapters: established sketches running through the kit (copy these) |
 | `e2e/` | Every end-to-end suite, one target (`cargo test --test e2e`), with `common/` compiled once for all of them |
 | `e2e/frequency.rs` / `e2e/cardinality.rs` / `e2e/quantiles.rs` | Deep per-family suites, each against its own theorem |
-| `e2e/matrix_instances.rs` | Every built-in `(storage, hashing path)` instance of CountMin / Count / CMSHeap / CSHeap, plus counter-width edges |
-| `e2e/numeric_types.rs` | Every `NumericalValue` type through `KLL<T>`, `KLLDynamic<T>` and `DDSketch::add<T>` |
-| `e2e/windows.rs` | Every `EHSketchList` variant in an `ExponentialHistogram`, every `TumblingWindow` payload, and `MicroCM`'s in-cell sliding window |
+| `e2e/matrix_instances.rs` | Every built-in `(storage, hashing path)` instance of CountMinSketch / Count / CountMinSketchWithHeap / CountSketchWithHeap, plus counter-width edges |
+| `e2e/numeric_types.rs` | Every `NumericalValue` type through `Kll<T>`, `KllDynamic<T>` and `DdSketch::add<T>` |
+| `e2e/windows.rs` | Every `EhBucketSketch` variant in an `ExponentialHistogram`, every `TumblingWindow` payload, and `MicroCm`'s in-cell sliding window |
 | `e2e/composition.rs` | `HashSketchEnsemble`, `UnivMonQ`'s config surface, and the portable sketch+heap facade |
-| `e2e/nitro.rs` | Every Nitro ingestion path — row-level `CountMin`/`Count`, `NitroBatch::insert` / `insert_cached_step`, and the bare `Vector2D<u32>` target — under one sampling model, plus merge, seeding, saturation and serde/context continuation. **All Nitro E2E behaviour lives here**; the sampler's own structural tests are unit tests in `src/common/structure_utils.rs` and `src/sketch_framework/nitro.rs`, where the cursor and skip counter are visible without a public accessor |
+| `e2e/nitro.rs` | Every Nitro ingestion path — row-level `CountMinSketch`/`CountSketch`, `NitroBatch::update_batch` / `update_batch_cached_step`, and the bare `Vector2D<u32>` target — under one sampling model, plus merge, seeding, saturation and serde/context continuation. **All Nitro E2E behaviour lives here**; the sampler's own structural tests are unit tests in `src/common/structure_utils.rs` and `src/sketch_framework/nitro.rs`, where the cursor and skip counter are visible without a public accessor |
 | `e2e/frameworks.rs` | Hydra's subpopulation lattice and UnivMon composition |
 | `e2e/heavy_hitters.rs` | Space-Saving's error sandwich, `min_count` ceiling and Stream-Summary lists under sustained eviction, plus CocoSketch's exact mass partitions and multi-seed unbiasedness, and Elastic through the batteries and the heavy-hitter properties no battery models |
 | `e2e/membership.rs` | Bloom: no false negative, exact union, and the delivered false-positive rate against its own sizing |
 | `e2e/octo.rs` | OctoSketch delta-promotion invariants, the `octo-runtime` pipeline, and conformance to the paper's Theorems 1-4 and its sketch-merge baseline |
-| `e2e/experimental.rs` | The remaining `feature = "experimental"` sketches: KMV, UniformSampling, EHUnivOptimized, CountMinHll |
+| `e2e/experimental.rs` | The remaining `feature = "experimental"` sketches: KMV, UniformSampling, ExponentialHistogramUnivMon, CountMinHll |
 | `bug_verification.rs` | Regression tests for fixed wrong-query-results bugs |
 | `pbt/` | Property tests under `proptest`, one target (`cargo test --test pbt`): merge algebra, path equivalence, wire and ASAPv1 round-trips, and the papers' own reference models. `PBT_COVERAGE.md` lists every law, one section per sketch |
 | `spec_self_tests.rs` | The specs checking themselves — the median's bad-row threshold, the binomial tails it selects, the four-row counter-example behind it, and the simultaneous `kappa` search. Its own binary because a `#[test]` in `common/specs.rs` runs once per target that pulls `common` in |

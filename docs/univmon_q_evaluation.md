@@ -14,7 +14,7 @@ cargo run --release --example evaluate_univmon_q_skew -- 1000000 5 100000 256 al
 The comparison uses one million observations per dataset, five independent
 trials, a 100,000-value domain, Zipf exponents from 0.0 through 2.0, and an
 eight-way merge. Both constructions use 14 logical levels, a top width of
-4,096, depth 5, and 256 candidates. UnivMon uses terminal-only `fast_insert`.
+4,096, depth 5, and 256 candidates. UnivMon uses terminal-only `update_weighted_terminal`.
 UnivMon-Q additionally uses 32-bit counters, width halving every three levels,
 and 4,096 coordinated occurrence samples.
 

@@ -12,8 +12,9 @@
 //! `kll_the_ends_are_exact_until_the_first_compaction`.
 
 use crate::support::{QUANTILES, close, extreme_values};
+use asap_sketchlib::Kll;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::{KLL, KllSketch};
+use asap_sketchlib::message_pack_format::portable::kll::KllSketch;
 use proptest::prelude::*;
 
 const QUANTILE_PROBES: [f64; 7] = [0.0, 0.01, 0.25, 0.5, 0.75, 0.99, 1.0];
@@ -32,8 +33,8 @@ const RANK_SLACK: f64 = 1e-9;
 /// guarantee is probabilistic and the suite draws thousands of streams.
 const ERROR_CONSTANT: f64 = 16.0;
 
-fn native_kll(k: i32, seed: u64, values: &[f64]) -> KLL<f64> {
-    let mut s: KLL<f64> = KLL::init_kll_with_seed(k, seed);
+fn native_kll(k: i32, seed: u64, values: &[f64]) -> Kll<f64> {
+    let mut s: Kll<f64> = Kll::with_k_and_seed(k, seed);
     for v in values {
         s.update(v);
     }
@@ -85,8 +86,8 @@ fn k_and_long_stream(extra: usize) -> impl Strategy<Value = (i32, Vec<f64>)> {
 }
 
 /// The heaviest weight any retained item can carry: level `num_levels - 1`.
-fn top_weight(s: &KLL<f64>) -> f64 {
-    (1u64 << (s.wire_num_levels() - 1)) as f64
+fn top_weight(s: &Kll<f64>) -> f64 {
+    (1u64 << (s.num_levels() - 1)) as f64
 }
 
 fn kll_of(k: u16, values: &[f64]) -> KllSketch {
@@ -184,16 +185,16 @@ proptest! {
         k in prop_oneof![Just(1i32), Just(8), Just(64), Just(200), Just(1_024)],
         values in extreme_values(300),
     ) {
-        let mut sketch: KLL<f64> = KLL::init_kll_with_seed(k, 0x5EED_0001);
+        let mut sketch: Kll<f64> = Kll::with_k_and_seed(k, 0x5EED_0001);
         for v in &values {
             sketch.update(v);
         }
 
         round_trip!(
-            KLL<f64>,
+            Kll<f64>,
             sketch,
-            |s: &KLL<f64>| s.count(),
-            |s: &KLL<f64>| QUANTILES.iter().map(|q| s.quantile(*q).to_bits()).collect::<Vec<_>>(),
+            |s: &Kll<f64>| s.count(),
+            |s: &Kll<f64>| QUANTILES.iter().map(|q| s.quantile(*q).to_bits()).collect::<Vec<_>>(),
         );
     }
 }
@@ -320,7 +321,7 @@ proptest! {
         let mut previous = 0.0f64;
         for i in 0..=40 {
             let x = lo + span * i as f64 / 40.0;
-            let p = cdf.quantile(x);
+            let p = cdf.normalized_rank(x);
 
             prop_assert!((0.0..=1.0).contains(&p), "k={} x={} cdf {} outside [0, 1]", k, x, p);
             prop_assert!(p >= previous, "k={} x={} cdf fell to {} from {}", k, x, p, previous);
@@ -331,8 +332,8 @@ proptest! {
             previous = p;
         }
 
-        prop_assert_eq!(cdf.quantile(lo - span - 1.0), 0.0);
-        prop_assert_eq!(cdf.quantile(hi), 1.0);
+        prop_assert_eq!(cdf.normalized_rank(lo - span - 1.0), 0.0);
+        prop_assert_eq!(cdf.normalized_rank(hi), 1.0);
     }
 
     // ===== Accuracy =====
@@ -383,8 +384,8 @@ proptest! {
         let first = native_kll(k, seed, &values);
         let second = native_kll(k, seed, &values);
 
-        prop_assert_eq!(first.wire_items(), second.wire_items());
-        prop_assert_eq!(first.wire_levels(), second.wire_levels());
+        prop_assert_eq!(first.items_top_down(), second.items_top_down());
+        prop_assert_eq!(first.level_bounds_top_down(), second.level_bounds_top_down());
         prop_assert_eq!(first.count(), second.count());
     }
 
@@ -401,15 +402,15 @@ proptest! {
         reused.clear();
 
         prop_assert_eq!(reused.count(), 0);
-        prop_assert_eq!(reused.wire_num_levels(), 1);
-        prop_assert!(reused.wire_items().is_empty());
+        prop_assert_eq!(reused.num_levels(), 1);
+        prop_assert!(reused.items_top_down().is_empty());
         prop_assert_eq!(reused.quantile(0.5), 0.0);
 
         for v in &values {
             reused.update(v);
         }
         let fresh = native_kll(k, seed, &values);
-        prop_assert_eq!(reused.wire_items(), fresh.wire_items());
-        prop_assert_eq!(reused.wire_levels(), fresh.wire_levels());
+        prop_assert_eq!(reused.items_top_down(), fresh.items_top_down());
+        prop_assert_eq!(reused.level_bounds_top_down(), fresh.level_bounds_top_down());
     }
 }

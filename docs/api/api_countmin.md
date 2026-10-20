@@ -1,4 +1,4 @@
-# API: CountMin
+# API: CountMinSketch
 
 Status: `Ready`
 
@@ -8,7 +8,7 @@ Approximate frequency estimation with sub-linear memory.
 
 ## Type/Struct
 
-- `CountMin<S = Vector2D<i32>, Mode = RegularPath, H = DefaultXxHasher>`
+- `CountMinSketch<S = Vector2D<i32>, Mode = RegularPath, H = DefaultXxHasher>`
 
 ## Constructors
 
@@ -21,19 +21,19 @@ fn from_storage(counts: S) -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, value: &DataInput)
-fn insert_many(&mut self, value: &DataInput, many: S::Counter)
-fn bulk_insert(&mut self, values: &[DataInput])
-fn bulk_insert_many(&mut self, values: &[(DataInput, S::Counter)])
-fn fast_insert_with_hash_value(&mut self, hashed_val: &H::HashType)
-fn fast_insert_many_with_hash_value(&mut self, hashed_val: &H::HashType, many: S::Counter)
+fn update(&mut self, value: &DataInput)
+fn update_weighted(&mut self, value: &DataInput, weight: S::Counter)
+fn update_batch(&mut self, values: &[DataInput])
+fn update_weighted_batch(&mut self, values: &[(DataInput, S::Counter)])
+fn update_with_hash(&mut self, hashed_val: &H::HashType)
+fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, weight: S::Counter)
 ```
 
 ## Query
 
 ```rust
 fn estimate(&self, value: &DataInput) -> S::Counter
-fn fast_estimate_with_hash(&self, hashed_val: &H::HashType) -> S::Counter
+fn estimate_with_hash(&self, hashed_val: &H::HashType) -> S::Counter
 fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn as_storage(&self) -> &S
@@ -55,14 +55,14 @@ Both assert matching dimensions.
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 These produce/consume the **ASAPv1** wire envelope (kind `0x02 0x00`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). They are **not** available
-on every `CountMin`: the impl exists only for wire-eligible configs
-`CountMin<Vector2D<T>, Mode, H>` where `T` is `i32`, `i64` or `f64`
+on every `CountMinSketch`: the impl exists only for wire-eligible configs
+`CountMinSketch<Vector2D<T>, Mode, H>` where `T` is `i32`, `i64` or `f64`
 (`CmsWireCounter`), `Mode` is `FastPath` or `RegularPath` (`CmsWireMode`), and
 `H: HashProfile`. `i32` is carried at its own width and pinned on decode. An
 `i128` / other exotic-counter or non-`Vector2D` sketch must be converted to a
@@ -76,17 +76,17 @@ either mode.
 ## Deltas
 
 ```rust
-CountMinDelta<T = i32, Mode = RegularPath, H = DefaultXxHasher>
+CountMinSketchDelta<T = i32, Mode = RegularPath, H = DefaultXxHasher>
 
 fn new(rows: usize, cols: usize, indices: Vec<u64>, deltas: Vec<T>) -> Result<Self, String>
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 
-// on CountMin<Vector2D<T>, Mode, H>
-fn merge_delta(&mut self, delta: &CountMinDelta<T, Mode, H>) -> Result<(), String>
+// on CountMinSketch<Vector2D<T>, Mode, H>
+fn merge_delta(&mut self, delta: &CountMinSketchDelta<T, Mode, H>) -> Result<(), String>
 ```
 
-A `CountMinDelta` is the ASAPv1 delta kind `0x02 0x80`, for the same configs
+A `CountMinSketchDelta` is the ASAPv1 delta kind `0x02 0x80`, for the same configs
 as the state serialization: the changed cells as strictly ascending row-major
 indices `row * cols + col`, below `rows * cols`, and the non-zero value added
 to each. `new` and the decoder refuse anything else. `merge_delta` adds the
@@ -99,7 +99,7 @@ integer add that overflows, fails and leaves the sketch unchanged.
 fn with_admission_rate(self, p: f64) -> Self
 fn admission_rate(&self) -> f64
 
-// on CountMinDelta
+// on CountMinSketchDelta
 fn with_admission_rate(self, p: f64) -> Self
 ```
 
@@ -108,16 +108,16 @@ Estimates count admitted updates alone; a consumer divides a key's frequency and
 a row's total by `p`. The ASAPv1 metadata carries `p` as its last key,
 `admission_rate`, when `p < 1`; a `p` outside `(0, 1]` fails to serialize.
 `merge` and `merge_max` panic, and `merge_delta` fails, when the two rates
-differ. A sketch nested in another kind (`EHSketchList`, `Hydra`, CMSHeap,
-CSHeap, Elastic) must hold `p = 1` to serialize.
+differ. A sketch nested in another kind (`EhBucketSketch`, `Hydra`, CountMinSketchWithHeap,
+CountSketchWithHeap, Elastic) must hold `p = 1` to serialize.
 
 ## Examples
 
 ```rust
-use asap_sketchlib::{CountMin, DataInput};
+use asap_sketchlib::{CountMinSketch, DataInput};
 
-let mut cm = CountMin::with_dimensions(3, 1024);
-cm.insert(&DataInput::U64(42));
+let mut cm = CountMinSketch::with_dimensions(3, 1024);
+cm.update(&DataInput::U64(42));
 let est = cm.estimate(&DataInput::U64(42));
 assert!(est >= 1);
 ```

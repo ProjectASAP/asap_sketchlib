@@ -1,11 +1,12 @@
+use asap_sketchlib::DdSketch;
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::{DDSketch, DdSketch};
+use asap_sketchlib::message_pack_format::portable::ddsketch::DdSketch as PortableDdSketch;
 
 // Both public implementations must count negative and zero observations.
 #[test]
 fn signed_samples_and_zero_are_retained() {
-    let mut portable = DdSketch::new(0.01);
-    let mut core = DDSketch::new(0.01);
+    let mut portable = PortableDdSketch::new(0.01);
+    let mut core = DdSketch::new(0.01);
     for v in [-20.0, -2.0, 0.0, 0.0, 2.0, 20.0] {
         portable.update(v);
         core.add(&v);
@@ -21,14 +22,14 @@ fn signed_samples_and_zero_are_retained() {
 // Signed snapshots must survive both codecs and merge with positive-only state.
 #[test]
 fn signed_merge_and_serialization() {
-    let mut p = DdSketch::new(0.01);
-    let mut c = DDSketch::new(0.01);
+    let mut p = PortableDdSketch::new(0.01);
+    let mut c = DdSketch::new(0.01);
     for v in [-4.0, 0.0, 4.0] {
         p.update(v);
         c.add(&v);
     }
-    let mut p2 = DdSketch::from_msgpack(&p.to_msgpack().unwrap()).unwrap();
-    let mut c2 = DDSketch::deserialize_from_bytes(&c.serialize_to_bytes().unwrap()).unwrap();
+    let mut p2 = PortableDdSketch::from_msgpack(&p.to_msgpack().unwrap()).unwrap();
+    let mut c2 = DdSketch::from_asapv1(&c.to_asapv1().unwrap()).unwrap();
     p2.merge(&p).unwrap();
     c2.merge(&c).unwrap();
     assert_eq!(p2.total_count(), 6);
@@ -40,7 +41,7 @@ fn signed_merge_and_serialization() {
 #[test]
 fn signed_delta_and_proto_round_trips() {
     use prost::Message;
-    let mut base = DdSketch::new(0.01);
+    let mut base = PortableDdSketch::new(0.01);
     for v in [-100., -1., 0., 1., 100.] {
         base.update(v);
     }
@@ -57,7 +58,7 @@ fn signed_delta_and_proto_round_trips() {
         .apply_delta_msgpack_bytes(&current.compute_delta_msgpack(&msgpack, 1))
         .unwrap();
     let bytes = current.to_proto().encode_to_vec();
-    let snapshot = DdSketch::from_proto(
+    let snapshot = PortableDdSketch::from_proto(
         asap_sketchlib::proto::sketchlib::DdSketchState::decode(bytes.as_slice()).unwrap(),
     );
     for restored in [protobuf, msgpack, snapshot] {
@@ -80,8 +81,8 @@ fn signed_order_statistics_obey_relative_bound() {
         })
         .collect();
     values.sort_by(f64::total_cmp);
-    let mut portable = DdSketch::new(0.01);
-    let mut core = DDSketch::new(0.01);
+    let mut portable = PortableDdSketch::new(0.01);
+    let mut core = DdSketch::new(0.01);
     for v in &values {
         portable.try_update(*v).unwrap();
         core.try_add(v).unwrap();
@@ -104,9 +105,9 @@ fn signed_order_statistics_obey_relative_bound() {
 
 #[test]
 fn zero_only_special_values_and_octo_flush() {
-    use asap_sketchlib::sketch_framework::octo::DdWorkerSketch;
-    let mut portable = DdSketch::new(0.01);
-    let mut core = DDSketch::new(0.01);
+    use asap_sketchlib::sketch_framework::octo::DdSketchWorker;
+    let mut portable = PortableDdSketch::new(0.01);
+    let mut core = DdSketch::new(0.01);
     for v in [0., -0., 0.] {
         portable.try_update(v).unwrap();
         core.try_add(&v).unwrap();
@@ -118,8 +119,8 @@ fn zero_only_special_values_and_octo_flush() {
     assert_eq!(portable.total_count(), 3);
     assert_eq!(core.get_count(), 3);
     assert_eq!(portable.quantile_interpolated(0.9), Some(0.));
-    let mut worker = DdWorkerSketch::new(0.01);
-    let mut replay = DDSketch::new(0.01);
+    let mut worker = DdSketchWorker::new(0.01);
+    let mut replay = DdSketch::new(0.01);
     for v in [-10., -10., -10., -0.1, 0., 0., 0.1, 10.] {
         worker.add_emit_delta(v, 3, &mut |delta| replay.apply_delta(delta));
     }
@@ -133,8 +134,8 @@ fn zero_only_special_values_and_octo_flush() {
 
 #[test]
 fn tiny_values_are_counted_in_zero_bucket_and_signed_serde_survives() {
-    let mut core = DDSketch::new(0.01);
-    let mut portable = DdSketch::new(0.01);
+    let mut core = DdSketch::new(0.01);
+    let mut portable = PortableDdSketch::new(0.01);
     let tiny = f64::MIN_POSITIVE / 2.;
     for v in [-tiny, tiny, 0.] {
         core.try_add(&v).unwrap();
@@ -144,12 +145,12 @@ fn tiny_values_are_counted_in_zero_bucket_and_signed_serde_survives() {
     assert_eq!(core.zero_count(), 3);
     assert_eq!(portable.total_count(), 3);
     assert_eq!(portable.quantile_interpolated(0.5), Some(0.));
-    let named: DdSketch =
+    let named: PortableDdSketch =
         rmp_serde::from_slice(&rmp_serde::to_vec_named(&portable).unwrap()).unwrap();
     assert_eq!(named.total_count(), 3);
     assert_eq!(named.quantile(0.5), Some(0.));
     core.try_add(&-3.).unwrap();
-    let decoded: DDSketch = rmp_serde::from_slice(&rmp_serde::to_vec(&core).unwrap()).unwrap();
+    let decoded: DdSketch = rmp_serde::from_slice(&rmp_serde::to_vec(&core).unwrap()).unwrap();
     assert_eq!(decoded.get_count(), 4);
     assert_eq!(decoded.sum(), core.sum());
     assert_eq!(decoded.min(), core.min());
@@ -158,7 +159,7 @@ fn tiny_values_are_counted_in_zero_bucket_and_signed_serde_survives() {
 
 #[test]
 fn cross_zero_interpolation_is_not_a_relative_error_certificate() {
-    let mut sketch = DdSketch::new(0.01);
+    let mut sketch = PortableDdSketch::new(0.01);
     sketch.update(-1.);
     sketch.update(1.001);
     let exact = (-1. + 1.001) / 2.;

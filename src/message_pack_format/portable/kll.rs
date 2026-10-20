@@ -1,6 +1,6 @@
 //! Wire-format-aligned KLL sketch type for cross-language interop.
 //!
-//! `KllSketch` is a thin facade over the pure-Rust [`crate::sketches::kll::KLL`]
+//! `KllSketch` is a thin facade over the pure-Rust [`crate::sketches::kll::Kll`]
 //! (parity already locked in by the existing
 //! `test_update_then_envelope_matches_sketchlib_go_bytes` in this file
 //! against `sketchlib-go::KLLSketch.SerializePortable`). The wire shape
@@ -10,21 +10,21 @@
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
-use crate::sketches::kll::KLL;
+use crate::sketches::kll::Kll;
 
 /// Concrete KLL type backing the wire-format `KllSketch`.
-pub type SketchlibKll = KLL<f64>;
+pub type SketchlibKll = Kll<f64>;
 
 /// Creates a fresh sketchlib KLL sketch with the requested accuracy
 /// parameter `k`.
 pub fn new_sketchlib_kll(k: u16) -> SketchlibKll {
-    KLL::init_kll(k as i32)
+    Kll::with_k(k as i32)
 }
 
 /// [`new_sketchlib_kll`] with an explicit compaction-coin seed, so the sketch
 /// replays identically across runs.
 pub fn new_sketchlib_kll_with_seed(k: u16, seed: u64) -> SketchlibKll {
-    KLL::init_kll_with_seed(k as i32, seed)
+    Kll::with_k_and_seed(k as i32, seed)
 }
 
 /// Updates a sketchlib KLL with one numeric observation.
@@ -44,12 +44,12 @@ pub fn sketchlib_kll_merge(dst: &mut SketchlibKll, src: &SketchlibKll) {
 
 /// Serializes a sketchlib KLL into MessagePack bytes.
 pub fn bytes_from_sketchlib_kll(inner: &SketchlibKll) -> Vec<u8> {
-    inner.serialize_to_bytes().unwrap()
+    inner.to_asapv1().unwrap()
 }
 
 /// Deserializes a sketchlib KLL from MessagePack bytes.
 pub fn sketchlib_kll_from_bytes(bytes: &[u8]) -> Result<SketchlibKll, Box<dyn std::error::Error>> {
-    Ok(KLL::deserialize_from_bytes(bytes)?)
+    Ok(Kll::from_asapv1(bytes)?)
 }
 
 /// Wire-format KLL sketch — a thin facade over [`SketchlibKll`] with a
@@ -154,7 +154,7 @@ impl KllSketch {
 
 impl Clone for KllSketch {
     fn clone(&self) -> Self {
-        // Structural clone: the backing `KLL<f64>` derives `Clone` (its fields
+        // Structural clone: the backing `Kll<f64>` derives `Clone` (its fields
         // are `Box<[..]>`/`Vec`/scalars), so copy it directly instead of a full
         // msgpack serialize -> deserialize -> rebuild round-trip. Produces an
         // identical sketch far more cheaply (no rmp encode/decode, far fewer
@@ -371,7 +371,7 @@ impl MessagePackCodec for KllSketch {
 
     fn from_msgpack(bytes: &[u8]) -> Result<Self, MsgPackError> {
         let wire: KllSketchData = rmp_serde::from_slice(bytes)?;
-        let backend = KLL::deserialize_from_bytes(&wire.sketch_bytes)?;
+        let backend = Kll::from_asapv1(&wire.sketch_bytes)?;
         Ok(Self { k: wire.k, backend })
     }
 }
@@ -380,7 +380,7 @@ impl MessagePackCodec for KllSketchData {
     /// Encodes the `(k, sketch_bytes)` DTO directly, byte-identical to
     /// [`KllSketch::to_msgpack`] (which serializes this same struct). Lets
     /// producers that hold a raw sketchlib KLL backend (via
-    /// `serialize_to_bytes`) emit the portable KLL msgpack form without
+    /// `to_asapv1`) emit the portable KLL msgpack form without
     /// constructing a [`KllSketch`] facade.
     fn to_msgpack(&self) -> Result<Vec<u8>, MsgPackError> {
         Ok(rmp_serde::to_vec(self)?)
@@ -506,20 +506,20 @@ mod tests {
         };
         use prost::Message;
 
-        let mut sk: KLL<f64> = KLL::init_kll_with_seed(200, 42);
+        let mut sk: Kll<f64> = Kll::with_k_and_seed(200, 42);
         for i in 1..=50 {
             sk.update(&(i as f64));
         }
 
-        let (state, bit_cache, remaining_bits) = sk.wire_coin();
+        let (state, bit_cache, remaining_bits) = sk.coin_state();
         let kll_state = KllState {
             k: sk.wire_k(),
-            m: sk.wire_m(),
-            num_levels: sk.wire_num_levels(),
-            levels: sk.wire_levels(),
+            m: sk.m(),
+            num_levels: sk.num_levels(),
+            levels: sk.level_bounds_top_down(),
             // This golden pins the RAW-F64 wire form; the value-offset fields
             // stay at their proto defaults so the bytes are unchanged.
-            items: sk.wire_items(),
+            items: sk.items_top_down(),
             coin: Some(CoinState {
                 state,
                 bit_cache,
@@ -620,18 +620,18 @@ mod tests {
     /// value-offset forms and yield identical items + quantiles.
     #[test]
     fn proto_dual_read_round_trip_both_forms() {
-        let mut sk: KLL<f64> = KLL::init_kll_with_seed(200, 7);
+        let mut sk: Kll<f64> = Kll::with_k_and_seed(200, 7);
         for i in 1..=5000 {
             sk.update(&(i as f64));
         }
-        let raw_items = sk.wire_items();
-        let levels = sk.wire_levels();
-        let num_levels = sk.wire_num_levels();
+        let raw_items = sk.items_top_down();
+        let levels = sk.level_bounds_top_down();
+        let num_levels = sk.num_levels();
 
         // Raw-f64 form.
         let raw_state = KllState {
             k: sk.wire_k(),
-            m: sk.wire_m(),
+            m: sk.m(),
             num_levels,
             levels: levels.clone(),
             items: raw_items.clone(),
@@ -647,7 +647,7 @@ mod tests {
             encode_value_offset(&raw_items).expect("integer items representable");
         let fp_state = KllState {
             k: sk.wire_k(),
-            m: sk.wire_m(),
+            m: sk.m(),
             num_levels,
             levels,
             items: vec![],

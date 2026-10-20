@@ -10,7 +10,7 @@ K-minimum values cardinality estimator.
 
 ## Type/Struct
 
-- `KMV<H = DefaultXxHasher>`
+- `Kmv<H = DefaultXxHasher>`
 
 ## Constructors
 
@@ -22,8 +22,8 @@ fn new(k: usize) -> Self
 ## Insert/Update
 
 ```rust
-fn insert(&mut self, item: &DataInput)
-fn insert_by_hash(&mut self, hash_value: u64)
+fn update(&mut self, item: &DataInput)
+fn update_with_hash(&mut self, hash_value: u64)
 ```
 
 ## Query
@@ -35,14 +35,14 @@ fn estimate(&mut self) -> f64
 ## Merge
 
 ```rust
-fn merge(&mut self, other: &mut KMV<H>)
+fn merge(&mut self, other: &mut Kmv<H>)
 ```
 
 ## Serialization
 
 ```rust
-fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 These produce/consume the **ASAPv1** wire envelope (kind `0x0e 0x00`) — see the
@@ -57,10 +57,10 @@ than `k` all fail to serialize.
 ## Examples
 
 ```rust
-use asap_sketchlib::{KMV, DataInput};
+use asap_sketchlib::{Kmv, DataInput};
 
-let mut kmv = KMV::new(1024);
-kmv.insert(&DataInput::U64(1));
+let mut kmv = Kmv::new(1024);
+kmv.update(&DataInput::U64(1));
 let _ = kmv.estimate();
 ```
 

@@ -6,9 +6,9 @@
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-use crate::PRECOMPUTED_SAMPLE;
+use crate::LN_ONE_MINUS_U_TABLE;
 use crate::common::hash::MATRIX_MAX_ROWS;
-use crate::common::precompute_sample::PRECOMPUTED_SAMPLE_LEN;
+use crate::common::precompute_sample::LN_ONE_MINUS_U_TABLE_LEN;
 
 /// Helper trait for converting sketch counter types to f64 for median calculation.
 pub trait ToF64 {
@@ -114,7 +114,7 @@ impl Default for Nitro {
             inv_ln_one_minus_p: 0.0, // not used unless Nitro mode is enabled
             delta: 0,
             idx: 0,
-            mask: PRECOMPUTED_SAMPLE_LEN - 1,
+            mask: LN_ONE_MINUS_U_TABLE_LEN - 1,
             rounding_state: ROUNDING_SEED,
         }
     }
@@ -131,11 +131,11 @@ impl Nitro {
     /// # Panics
     ///
     /// If `rate` is NaN or outside `(0.0, 1.0]`.
-    pub fn init_nitro(rate: f64) -> Self {
+    pub fn new(rate: f64) -> Self {
         Self::seeded_from(rate, None)
     }
 
-    /// [`Nitro::init_nitro`] with both sources of randomness selected by
+    /// [`Nitro::new`] with both sources of randomness selected by
     /// `seed`: the skip schedule starts at table offset `seed % table_len`,
     /// and the rounding stream starts at `seed`.
     ///
@@ -146,7 +146,7 @@ impl Nitro {
     /// # Panics
     ///
     /// If `rate` is NaN or outside `(0.0, 1.0]`.
-    pub fn init_nitro_seeded(rate: f64, seed: u64) -> Self {
+    pub fn with_seed(rate: f64, seed: u64) -> Self {
         Self::seeded_from(rate, Some(seed))
     }
 
@@ -166,8 +166,8 @@ impl Nitro {
             to_skip: 0,
             inv_ln_one_minus_p: inv_ln,
             delta: 0,
-            idx: seed.map_or(0, |s| (s % PRECOMPUTED_SAMPLE_LEN as u64) as usize),
-            mask: PRECOMPUTED_SAMPLE_LEN - 1,
+            idx: seed.map_or(0, |s| (s % LN_ONE_MINUS_U_TABLE_LEN as u64) as usize),
+            mask: LN_ONE_MINUS_U_TABLE_LEN - 1,
             rounding_state: match seed {
                 Some(0) | None => ROUNDING_SEED,
                 Some(s) => s,
@@ -184,13 +184,13 @@ impl Nitro {
     /// a value decoded from an older payload cannot index out of bounds.
     #[inline(always)]
     fn cursor(&self) -> usize {
-        self.idx % PRECOMPUTED_SAMPLE_LEN
+        self.idx % LN_ONE_MINUS_U_TABLE_LEN
     }
 
     /// Advances the cursor by one, wrapping at the table's length.
     #[inline(always)]
     fn next_cursor(&mut self) {
-        self.idx = (self.cursor() + 1) % PRECOMPUTED_SAMPLE_LEN;
+        self.idx = (self.cursor() + 1) % LN_ONE_MINUS_U_TABLE_LEN;
     }
 
     /// The weight one admitted row slot carries: stochastic rounding of `1/p`.
@@ -258,7 +258,7 @@ impl Nitro {
             return;
         }
         self.to_skip =
-            (PRECOMPUTED_SAMPLE[self.cursor()] * self.inv_ln_one_minus_p).floor() as usize;
+            (LN_ONE_MINUS_U_TABLE[self.cursor()] * self.inv_ln_one_minus_p).floor() as usize;
         self.next_cursor();
     }
 
@@ -307,7 +307,7 @@ impl Nitro {
 
     #[inline(always)]
     /// Returns the configured sampling rate.
-    pub fn get_sampling_rate(&self) -> f64 {
+    pub fn sampling_rate(&self) -> f64 {
         self.sampling_rate
     }
 
@@ -493,11 +493,11 @@ mod nitro_tests {
     /// The cursor advances by one per draw and wraps at the table's length.
     #[test]
     fn the_skip_cursor_advances_by_one_per_draw_and_wraps_at_the_table_length() {
-        let len = PRECOMPUTED_SAMPLE_LEN;
+        let len = LN_ONE_MINUS_U_TABLE_LEN;
         assert!(len > 1, "the skip table must be non-trivial");
 
         // Construction draws once, so an unseeded sampler is already at 1.
-        let mut nitro = Nitro::init_nitro(0.5);
+        let mut nitro = Nitro::new(0.5);
         assert_eq!(
             nitro.cursor(),
             1,
@@ -516,7 +516,7 @@ mod nitro_tests {
              or aliasing"
         );
 
-        let mut wrapper = Nitro::init_nitro(0.5);
+        let mut wrapper = Nitro::new(0.5);
         for _ in 0..len - 1 {
             wrapper.draw_geometric();
         }
@@ -529,7 +529,7 @@ mod nitro_tests {
 
         // A cursor decoded from an older payload can be anywhere, including
         // past the table. Reading must stay in bounds and rejoin the cycle.
-        let mut hostile = Nitro::init_nitro(0.5);
+        let mut hostile = Nitro::new(0.5);
         hostile.commit_ctx(usize::MAX, 0);
         assert!(
             hostile.cursor() < len,
@@ -538,7 +538,7 @@ mod nitro_tests {
         hostile.draw_geometric(); // must not panic
 
         // Full sampling never consumes an entry.
-        let mut full = Nitro::init_nitro(1.0);
+        let mut full = Nitro::new(1.0);
         for _ in 0..64 {
             full.draw_geometric();
             assert_eq!(full.to_skip, 0, "full sampling must never skip anything");
@@ -558,7 +558,7 @@ mod nitro_tests {
         const DRAWS: usize = 20_000;
 
         for &rate in &[0.5f64, 0.3, 0.1, 0.07, 0.01] {
-            let mut nitro = Nitro::init_nitro(rate);
+            let mut nitro = Nitro::new(rate);
             let mut total = 0f64;
             for _ in 0..DRAWS {
                 total += nitro.to_skip as f64;
@@ -582,7 +582,7 @@ mod nitro_tests {
     #[test]
     fn stochastic_rounding_only_draws_where_the_reciprocal_is_not_an_integer() {
         for &rate in &[1.0f64, 0.5, 0.1, 0.01] {
-            let mut nitro = Nitro::init_nitro(rate);
+            let mut nitro = Nitro::new(rate);
             let before = nitro.rounding_state;
             let expected = if rate >= 1.0 {
                 1
@@ -603,7 +603,7 @@ mod nitro_tests {
         }
 
         for &rate in &[0.3f64, 0.07] {
-            let mut nitro = Nitro::init_nitro(rate);
+            let mut nitro = Nitro::new(rate);
             let exact = 1.0 / rate;
             let floor = exact.floor() as u64;
             let frac = exact.fract();
@@ -650,7 +650,7 @@ mod nitro_tests {
             let mut admissions = 0usize;
             let mut out = AdmittedRows::new();
             for trial in 0..TRIALS {
-                let mut nitro = Nitro::init_nitro_seeded(rate, 1 + trial as u64 * SEED_STRIDE);
+                let mut nitro = Nitro::with_seed(rate, 1 + trial as u64 * SEED_STRIDE);
                 nitro.admit_rows(1, &mut out);
                 assert!(out.len() <= 1, "a one-row update cannot admit twice");
                 if let Some((row, weight)) = out.first() {
@@ -689,10 +689,10 @@ mod nitro_tests {
     ) -> Vec<Vec<(usize, u64)>> {
         let inv_ln = 1.0 / (1.0 - rate).ln();
         let delta = (1.0 / rate).floor() as u64;
-        let mut cursor = start_cursor % PRECOMPUTED_SAMPLE_LEN;
+        let mut cursor = start_cursor % LN_ONE_MINUS_U_TABLE_LEN;
         let draw = |cursor: &mut usize| {
-            let skip = (PRECOMPUTED_SAMPLE[*cursor] * inv_ln).floor() as usize;
-            *cursor = (*cursor + 1) % PRECOMPUTED_SAMPLE_LEN;
+            let skip = (LN_ONE_MINUS_U_TABLE[*cursor] * inv_ln).floor() as usize;
+            *cursor = (*cursor + 1) % LN_ONE_MINUS_U_TABLE_LEN;
             skip
         };
         let mut to_skip = draw(&mut cursor);
@@ -722,13 +722,13 @@ mod nitro_tests {
             (0.5f64, 0usize),
             (0.25, 0),
             // Starts close enough to the end that the run wraps the cursor.
-            (0.5, PRECOMPUTED_SAMPLE_LEN - 4),
+            (0.5, LN_ONE_MINUS_U_TABLE_LEN - 4),
         ] {
             let seed = start_cursor as u64;
-            let mut nitro = Nitro::init_nitro_seeded(rate, seed);
+            let mut nitro = Nitro::with_seed(rate, seed);
             assert_eq!(
                 nitro.cursor(),
-                (start_cursor + 1) % PRECOMPUTED_SAMPLE_LEN,
+                (start_cursor + 1) % LN_ONE_MINUS_U_TABLE_LEN,
                 "the seed must place the cursor before the first draw"
             );
 
@@ -776,7 +776,7 @@ mod nitro_tests {
     /// carried between updates.
     #[test]
     fn full_sampling_admits_every_row_at_unit_weight() {
-        let mut nitro = Nitro::init_nitro(1.0);
+        let mut nitro = Nitro::new(1.0);
         let mut out = AdmittedRows::new();
         for _ in 0..16 {
             nitro.admit_rows(5, &mut out);
@@ -799,7 +799,7 @@ mod nitro_tests {
     fn the_admission_buffer_never_reaches_the_heap_within_the_supported_row_count() {
         let mut out = AdmittedRows::new();
         for &rate in &[1.0f64, 0.9, 0.5, 0.3, 0.07, 0.01] {
-            let mut nitro = Nitro::init_nitro_seeded(rate, 0x0117_0042);
+            let mut nitro = Nitro::with_seed(rate, 0x0117_0042);
             for _ in 0..2_000 {
                 nitro.admit_rows(MATRIX_MAX_ROWS, &mut out);
                 assert!(
@@ -817,7 +817,7 @@ mod nitro_tests {
     /// panic.
     #[test]
     fn an_oversized_skip_counter_does_not_overflow_the_admission_walk() {
-        let mut nitro = Nitro::init_nitro(0.5);
+        let mut nitro = Nitro::new(0.5);
         nitro.commit_ctx(0, usize::MAX);
         let mut out = AdmittedRows::new();
         nitro.admit_rows(5, &mut out);
@@ -830,7 +830,7 @@ mod nitro_tests {
 
         // And the same through the smallest rates the constructor accepts.
         for &rate in &[1e-12f64, 1e-15, f64::MIN_POSITIVE] {
-            let mut tiny = Nitro::init_nitro(rate);
+            let mut tiny = Nitro::new(rate);
             for _ in 0..64 {
                 tiny.admit_rows(20, &mut out);
             }
@@ -843,7 +843,7 @@ mod nitro_tests {
     fn the_context_restores_the_rounding_stream_and_the_legacy_pair_does_not() {
         const ROWS: usize = 5;
         for &rate in &[0.3f64, 0.07] {
-            let mut source = Nitro::init_nitro_seeded(rate, 0x0117_5EED);
+            let mut source = Nitro::with_seed(rate, 0x0117_5EED);
             let mut out = AdmittedRows::new();
             for _ in 0..37 {
                 source.admit_rows(ROWS, &mut out);
@@ -864,7 +864,7 @@ mod nitro_tests {
             let mut continued = source.clone();
             let expected = tail(&mut continued);
 
-            let mut restored = Nitro::init_nitro_seeded(rate, 0x0117_5EED);
+            let mut restored = Nitro::with_seed(rate, 0x0117_5EED);
             restored.restore_context(ctx);
             assert_eq!(
                 tail(&mut restored),
@@ -872,7 +872,7 @@ mod nitro_tests {
                 "rate={rate}: a full context restore must continue the uninterrupted run"
             );
 
-            let mut legacy_restored = Nitro::init_nitro_seeded(rate, 0x0117_5EED);
+            let mut legacy_restored = Nitro::with_seed(rate, 0x0117_5EED);
             legacy_restored.commit_ctx(legacy.0, legacy.2);
             assert_ne!(
                 tail(&mut legacy_restored),

@@ -12,8 +12,8 @@
 //!   instead of shipping whole sketches.
 //! - Idea 2, adaptive resource allocation: [`OctoAdaptiveThreshold`] drives the
 //!   shared [`OctoThreshold`] from the aggregator's queue occupancy.
-//! - Idea 3, reconstructed data structures: [`CmWorkerSketch`] and
-//!   [`CountWorkerSketch`] drop flow-key storage and use one-byte counters,
+//! - Idea 3, reconstructed data structures: [`CountMinSketchWorker`] and
+//!   [`CountSketchWorker`] drop flow-key storage and use one-byte counters,
 //!   while the `*TopK*` aggregators hold the only heavy-hitter heap.
 //!
 //! Reference:
@@ -36,20 +36,26 @@ use std::collections::HashMap;
 use crate::common::input::data_input_to_f64;
 use crate::common::structures::matrix_storage::cols_mask_bits;
 use crate::octo_delta::{
-    DD_PROMASK, DdDelta, KeyedCmDelta, KeyedCountDelta, MAX_PROMASK, OctoThreshold, UNIVMON_PROMASK,
+    DdSketchBucketDelta, KeyedCountMinSketchCellDelta, KeyedCountSketchCellDelta,
+    OCTO_DDSKETCH_DEFAULT_THRESHOLD, OCTO_MAX_PROMOTION_THRESHOLD, OCTO_UNIVMON_DEFAULT_THRESHOLD,
+    OctoThreshold,
 };
-use crate::sketch_framework::univmon::{UnivMonDeltaFidelity, bottom_layer_for_hash};
-use crate::sketches::coco::{Coco, CocoRng};
-use crate::sketches::countminsketch_topk::CMSHeap;
-use crate::sketches::countsketch_topk::{CSHeap, check_l2hh_hash_bits, l2hh_cell_for_row};
-use crate::sketches::elastic::{Elastic, LAMBDA};
+use crate::sketch_framework::univmon::UnivMonDeltaFidelity;
+use crate::sketches::coco::{CocoRng, CocoSketch};
+use crate::sketches::countminsketch_heap::CountMinSketchWithHeap;
+use crate::sketches::countsketch_heap::{CountSketchWithHeap, CountSketchWithL2Norm};
+use crate::sketches::elastic::{ElasticSketch, LAMBDA};
 use crate::{
-    BOTTOM_LAYER_FINDER, CM_PROMASK, COUNT_PROMASK, Classic, CmDelta, Count, CountDelta, CountMin,
-    DDSketch, DataInput, HLL_PROMASK, HeapItem, HllDelta, HyperLogLog, LayeredCountDelta,
-    RegularPath, UnivMon, Vector2D, hash64_seeded, hash128_seeded, heap_item_to_sketch_input,
-    input_to_owned,
+    Classic, CountMinSketch, CountMinSketchCellDelta, CountSketch, CountSketchCellDelta, DataInput,
+    DdSketch, HllRegisterDelta, HyperLogLog, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
+    OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, OCTO_HLL_DEFAULT_THRESHOLD, OwnedDataInput, RegularPath,
+    UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon, UnivMonCellDelta, Vector2D, hash64_seeded,
+    hash128_seeded, heap_item_to_sketch_input, input_to_owned,
 };
-use crate::{CANONICAL_HASH_SEED, COCO_PROMASK, CocoDelta, ELASTIC_PROMASK, ElasticDelta};
+use crate::{
+    CocoDelta, DEFAULT_CANONICAL_SEED_INDEX, ElasticDelta, OCTO_COCO_DEFAULT_THRESHOLD,
+    OCTO_ELASTIC_DEFAULT_THRESHOLD,
+};
 use smallvec::SmallVec;
 
 #[cfg(feature = "octo-runtime")]
@@ -57,7 +63,7 @@ use smallvec::SmallVec;
 const DEFAULT_QUEUE_CAPACITY: usize = 65536;
 
 /// Default heavy-hitter heap capacity for the `*TopK*` aggregators.
-pub const DEFAULT_OCTO_TOP_K: usize = 128;
+pub const OCTO_DEFAULT_HEAP_SIZE: usize = 128;
 
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
@@ -145,16 +151,16 @@ pub trait OctoAggregator: Send {
 /// Count-Min worker sketch: one-byte counters, no flow-key storage.
 ///
 /// A worker counter is cleared the moment it reaches τ, so it never exceeds
-/// `MAX_PROMASK` and `⌈log τ⌉` bits suffice. Against the 32-bit counters a
-/// full `CountMin` uses, this is the 4x memory saving of §4.1.
+/// `OCTO_MAX_PROMOTION_THRESHOLD` and `⌈log τ⌉` bits suffice. Against the 32-bit counters a
+/// full `CountMinSketch` uses, this is the 4x memory saving of §4.1.
 #[derive(Clone, Debug)]
-pub struct CmWorkerSketch {
+pub struct CountMinSketchWorker {
     counters: Vec<u8>,
     rows: usize,
     cols: usize,
 }
 
-impl CmWorkerSketch {
+impl CountMinSketchWorker {
     /// Creates a `rows` x `cols` worker sketch with all counters cleared.
     pub fn new(rows: usize, cols: usize) -> Self {
         let rows = rows.max(1);
@@ -194,22 +200,22 @@ impl CmWorkerSketch {
     /// Inserts a key, emitting and clearing every counter that reaches
     /// `threshold` (Algorithm 1).
     #[inline(always)]
-    pub fn insert_emit_delta(
+    pub fn update_emit_delta(
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(CmDelta),
+        emit: &mut impl FnMut(CountMinSketchCellDelta),
     ) {
-        self.insert_hashes_emit_delta(&Self::hashes(self.rows, value), threshold, emit);
+        self.update_emit_delta_with_row_hashes(&Self::hashes(self.rows, value), threshold, emit);
     }
 
-    /// As `insert_emit_delta`, from hashes already computed by `hashes`.
+    /// As `update_emit_delta`, from hashes already computed by `hashes`.
     #[inline(always)]
-    pub fn insert_hashes_emit_delta(
+    pub fn update_emit_delta_with_row_hashes(
         &mut self,
         hashes: &[u64],
         threshold: u32,
-        emit: &mut impl FnMut(CmDelta),
+        emit: &mut impl FnMut(CountMinSketchCellDelta),
     ) {
         assert_eq!(
             hashes.len(),
@@ -217,16 +223,16 @@ impl CmWorkerSketch {
             "one hash per row; a plan built for a different geometry would \
              leave the untouched rows at zero and every estimate at zero"
         );
-        let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD) as u8;
         for (r, hashed) in hashes.iter().copied().enumerate() {
             let col = ((hashed & LOWER_32_MASK) as usize) % self.cols;
             let cell = &mut self.counters[r * self.cols + col];
             *cell += 1;
             if *cell >= threshold {
-                emit(CmDelta {
+                emit(CountMinSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
-                    value: *cell as u32,
+                    count: *cell as u32,
                 });
                 *cell = 0;
             }
@@ -234,15 +240,15 @@ impl CmWorkerSketch {
     }
 
     /// Promotes and clears every counter still holding a partial count.
-    pub fn flush(&mut self, emit: &mut impl FnMut(CmDelta)) {
+    pub fn flush(&mut self, emit: &mut impl FnMut(CountMinSketchCellDelta)) {
         for row in 0..self.rows {
             for col in 0..self.cols {
                 let cell = &mut self.counters[row * self.cols + col];
                 if *cell != 0 {
-                    emit(CmDelta {
+                    emit(CountMinSketchCellDelta {
                         row: row as u32,
                         col: col as u32,
-                        value: *cell as u32,
+                        count: *cell as u32,
                     });
                     *cell = 0;
                 }
@@ -250,18 +256,18 @@ impl CmWorkerSketch {
         }
     }
 
-    /// As `insert_hashes_emit_delta`, but each delta carries the flow key so
+    /// As `update_emit_delta_with_row_hashes`, but each delta carries the flow key so
     /// the aggregator can maintain the heavy-hitter heap.
     #[inline(always)]
-    pub fn insert_hashes_emit_keyed_delta(
+    pub fn update_emit_keyed_delta_with_row_hashes(
         &mut self,
         hashes: &[u64],
-        key: &HeapItem,
+        key: &OwnedDataInput,
         threshold: u32,
-        emit: &mut impl FnMut(KeyedCmDelta),
+        emit: &mut impl FnMut(KeyedCountMinSketchCellDelta),
     ) {
-        self.insert_hashes_emit_delta(hashes, threshold, &mut |delta| {
-            emit(KeyedCmDelta {
+        self.update_emit_delta_with_row_hashes(hashes, threshold, &mut |delta| {
+            emit(KeyedCountMinSketchCellDelta {
                 key: key.clone(),
                 delta,
             })
@@ -271,13 +277,13 @@ impl CmWorkerSketch {
 
 /// Count-sketch worker sketch: one-byte signed counters, no flow-key storage.
 #[derive(Clone, Debug)]
-pub struct CountWorkerSketch {
+pub struct CountSketchWorker {
     counters: Vec<i8>,
     rows: usize,
     cols: usize,
 }
 
-impl CountWorkerSketch {
+impl CountSketchWorker {
     /// Creates a `rows` x `cols` worker sketch with all counters cleared.
     pub fn new(rows: usize, cols: usize) -> Self {
         let rows = rows.max(1);
@@ -312,23 +318,27 @@ impl CountWorkerSketch {
     /// Inserts a key, emitting and clearing every counter whose magnitude
     /// reaches `threshold` (§4.4: signed counters compare on `|counter|`).
     #[inline(always)]
-    pub fn insert_emit_delta(
+    pub fn update_emit_delta(
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(CountDelta),
+        emit: &mut impl FnMut(CountSketchCellDelta),
     ) {
-        self.insert_hashes_emit_delta(&CmWorkerSketch::hashes(self.rows, value), threshold, emit);
+        self.update_emit_delta_with_row_hashes(
+            &CountMinSketchWorker::hashes(self.rows, value),
+            threshold,
+            emit,
+        );
     }
 
-    /// As `insert_emit_delta`, from hashes already computed by
-    /// `CmWorkerSketch::hashes` - the two share a per-row hashing scheme.
+    /// As `update_emit_delta`, from hashes already computed by
+    /// `CountMinSketchWorker::hashes` - the two share a per-row hashing scheme.
     #[inline(always)]
-    pub fn insert_hashes_emit_delta(
+    pub fn update_emit_delta_with_row_hashes(
         &mut self,
         hashes: &[u64],
         threshold: u32,
-        emit: &mut impl FnMut(CountDelta),
+        emit: &mut impl FnMut(CountSketchCellDelta),
     ) {
         assert_eq!(
             hashes.len(),
@@ -336,17 +346,17 @@ impl CountWorkerSketch {
             "one hash per row; a plan built for a different geometry would \
              leave the untouched rows at zero and every estimate at zero"
         );
-        let threshold = threshold.clamp(1, MAX_PROMASK) as i8;
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD) as i8;
         for (r, hashed) in hashes.iter().copied().enumerate() {
             let col = ((hashed & LOWER_32_MASK) as usize) % self.cols;
             let sign: i8 = if ((hashed >> 63) & 1) == 1 { 1 } else { -1 };
             let cell = &mut self.counters[r * self.cols + col];
             *cell += sign;
             if cell.unsigned_abs() >= threshold as u8 {
-                emit(CountDelta {
+                emit(CountSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
-                    value: *cell as i32,
+                    count: *cell as i32,
                 });
                 *cell = 0;
             }
@@ -354,15 +364,15 @@ impl CountWorkerSketch {
     }
 
     /// Promotes and clears every counter still holding a partial count.
-    pub fn flush(&mut self, emit: &mut impl FnMut(CountDelta)) {
+    pub fn flush(&mut self, emit: &mut impl FnMut(CountSketchCellDelta)) {
         for row in 0..self.rows {
             for col in 0..self.cols {
                 let cell = &mut self.counters[row * self.cols + col];
                 if *cell != 0 {
-                    emit(CountDelta {
+                    emit(CountSketchCellDelta {
                         row: row as u32,
                         col: col as u32,
-                        value: *cell as i32,
+                        count: *cell as i32,
                     });
                     *cell = 0;
                 }
@@ -370,17 +380,17 @@ impl CountWorkerSketch {
         }
     }
 
-    /// As `insert_hashes_emit_delta`, but each delta carries the flow key.
+    /// As `update_emit_delta_with_row_hashes`, but each delta carries the flow key.
     #[inline(always)]
-    pub fn insert_hashes_emit_keyed_delta(
+    pub fn update_emit_keyed_delta_with_row_hashes(
         &mut self,
         hashes: &[u64],
-        key: &HeapItem,
+        key: &OwnedDataInput,
         threshold: u32,
-        emit: &mut impl FnMut(KeyedCountDelta),
+        emit: &mut impl FnMut(KeyedCountSketchCellDelta),
     ) {
-        self.insert_hashes_emit_delta(hashes, threshold, &mut |delta| {
-            emit(KeyedCountDelta {
+        self.update_emit_delta_with_row_hashes(hashes, threshold, &mut |delta| {
+            emit(KeyedCountSketchCellDelta {
                 key: key.clone(),
                 delta,
             })
@@ -389,25 +399,25 @@ impl CountWorkerSketch {
 }
 
 /// UnivMon-layer worker sketch: one-byte signed counters over the cell mapping
-/// `CountL2HH` uses.
+/// `CountSketchWithL2Norm` uses.
 ///
-/// A UnivMon layer is not a plain `Count` sketch: it slices one 128-bit hash
+/// A UnivMon layer is not a plain `CountSketch` sketch: it slices one 128-bit hash
 /// into per-row columns and takes each row's sign from a different high bit,
 /// and every layer hashes under its own seed. This worker calls the same
-/// `l2hh_cell_for_row` the parent does, so the two cannot drift apart.
+/// `CountSketchWithL2Norm::cell_for_row` the parent does, so the two cannot drift apart.
 #[derive(Clone, Debug)]
-pub struct L2hhWorkerSketch {
+pub struct CountSketchWithL2NormWorker {
     counters: Vec<i8>,
     rows: usize,
     cols: usize,
-    seed_idx: usize,
+    seed_index: usize,
     mask_bits: u32,
 }
 
-impl L2hhWorkerSketch {
-    /// Creates a worker over the cell space of a `CountL2HH` with these
+impl CountSketchWithL2NormWorker {
+    /// Creates a worker over the cell space of a `CountSketchWithL2Norm` with these
     /// dimensions and seed.
-    pub fn new(rows: usize, cols: usize, seed_idx: usize) -> Self {
+    pub fn new(rows: usize, cols: usize, seed_index: usize) -> Self {
         let rows = rows.max(1);
         let cols = cols.max(1);
         let mask_bits = cols_mask_bits(cols);
@@ -416,7 +426,7 @@ impl L2hhWorkerSketch {
         // deep row's column reads a shallow row's sign bit, and further on
         // the shift runs off the hash.
         assert!(
-            check_l2hh_hash_bits(rows, cols).is_ok(),
+            CountSketchWithL2Norm::check_hash_bits(rows, cols).is_ok(),
             "{rows} rows x ({mask_bits} column bits + 1 sign bit) exceeds the 128-bit hash budget; \
              reduce rows or columns"
         );
@@ -424,7 +434,7 @@ impl L2hhWorkerSketch {
             counters: vec![0i8; rows * cols],
             rows,
             cols,
-            seed_idx,
+            seed_index,
             mask_bits,
         }
     }
@@ -440,15 +450,15 @@ impl L2hhWorkerSketch {
     }
 
     /// Promotes and clears every counter still holding a partial count.
-    pub fn flush(&mut self, emit: &mut impl FnMut(CountDelta)) {
+    pub fn flush(&mut self, emit: &mut impl FnMut(CountSketchCellDelta)) {
         for row in 0..self.rows {
             for col in 0..self.cols {
                 let cell = &mut self.counters[row * self.cols + col];
                 if *cell != 0 {
-                    emit(CountDelta {
+                    emit(CountSketchCellDelta {
                         row: row as u32,
                         col: col as u32,
-                        value: *cell as i32,
+                        count: *cell as i32,
                     });
                     *cell = 0;
                 }
@@ -459,38 +469,39 @@ impl L2hhWorkerSketch {
     /// Inserts a key, emitting and clearing every counter whose magnitude
     /// reaches `threshold`.
     #[inline(always)]
-    pub fn insert_emit_delta(
+    pub fn update_emit_delta(
         &mut self,
         value: &DataInput,
         threshold: u32,
-        emit: &mut impl FnMut(CountDelta),
+        emit: &mut impl FnMut(CountSketchCellDelta),
     ) {
-        self.insert_hash_emit_delta(hash128_seeded(self.seed_idx, value), threshold, emit);
+        self.update_emit_delta_with_hash(hash128_seeded(self.seed_index, value), threshold, emit);
     }
 
     /// Seed this layer hashes under.
-    pub fn seed_idx(&self) -> usize {
-        self.seed_idx
+    pub fn seed_index(&self) -> usize {
+        self.seed_index
     }
 
-    /// As `insert_emit_delta`, from a hash already computed under `seed_idx`.
+    /// As `update_emit_delta`, from a hash already computed under `seed_index`.
     #[inline(always)]
-    pub fn insert_hash_emit_delta(
+    pub fn update_emit_delta_with_hash(
         &mut self,
         hashed: u128,
         threshold: u32,
-        emit: &mut impl FnMut(CountDelta),
+        emit: &mut impl FnMut(CountSketchCellDelta),
     ) {
-        let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD) as u8;
         for row in 0..self.rows {
-            let (col, sign) = l2hh_cell_for_row(hashed, row, self.cols, self.mask_bits);
+            let (col, sign) =
+                CountSketchWithL2Norm::cell_for_row(hashed, row, self.cols, self.mask_bits);
             let cell = &mut self.counters[row * self.cols + col];
             *cell += sign as i8;
             if cell.unsigned_abs() >= threshold {
-                emit(CountDelta {
+                emit(CountSketchCellDelta {
                     row: row as u32,
                     col: col as u32,
-                    value: *cell as i32,
+                    count: *cell as i32,
                 });
                 *cell = 0;
             }
@@ -503,20 +514,20 @@ impl L2hhWorkerSketch {
 /// §3.2 Idea 3 strips flow-key storage out of a worker, but CocoSketch *is*
 /// key storage - a bucket's key is the only record of what its counter counts -
 /// so this worker keeps the keys and shrinks only the counters. Every step of
-/// `insert_emit_delta` mirrors `Coco::insert`, down to the uniform draw among
+/// `update_emit_delta` mirrors `CocoSketch::update_weighted`, down to the uniform draw among
 /// tied minima and the `v / val` election, so the two cannot drift apart.
 #[derive(Clone, Debug)]
-pub struct CocoWorkerSketch {
+pub struct CocoSketchWorker {
     keys: Vec<Option<String>>,
     counters: Vec<u8>,
-    w: usize,
-    d: usize,
+    cols: usize,
+    rows: usize,
     rng: CocoRng,
 }
 
-impl CocoWorkerSketch {
+impl CocoSketchWorker {
     /// Creates a `d` x `w` worker table, empty and cleared, drawing from the
-    /// thread generator. The argument order is `Coco::init_with_size`'s.
+    /// thread generator. The argument order is `CocoSketch::init_with_size`'s.
     pub fn new(w: usize, d: usize) -> Self {
         Self::with_rng(w, d, CocoRng::default())
     }
@@ -530,20 +541,20 @@ impl CocoWorkerSketch {
         Self {
             keys: vec![None; w * d],
             counters: vec![0u8; w * d],
-            w,
-            d,
+            cols: w,
+            rows: d,
             rng,
         }
     }
 
     /// Buckets per array.
     pub fn width(&self) -> usize {
-        self.w
+        self.cols
     }
 
     /// Number of arrays.
     pub fn depth(&self) -> usize {
-        self.d
+        self.rows
     }
 
     /// Bytes held by the counter array, excluding the keys.
@@ -561,29 +572,29 @@ impl CocoWorkerSketch {
     /// The promoted message carries whichever key the bucket holds *after* the
     /// election, which is the arriving key when it won the bucket and the
     /// incumbent when it did not.
-    pub fn insert_emit_delta(
+    pub fn update_emit_delta(
         &mut self,
         key: &str,
         threshold: u32,
         emit: &mut impl FnMut(CocoDelta),
     ) {
-        if self.d == 0 || self.w == 0 {
+        if self.rows == 0 || self.cols == 0 {
             return;
         }
-        let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD) as u8;
         let key_input = DataInput::Str(key);
         let mut victim = 0usize;
         let mut victim_val = u8::MAX;
         let mut tied = 0u32;
 
-        for i in 0..self.d {
-            let cell = i * self.w + hash64_seeded(i, &key_input) as usize % self.w;
+        for i in 0..self.rows {
+            let cell = i * self.cols + hash64_seeded(i, &key_input) as usize % self.cols;
             if self.keys[cell].as_deref() == Some(key) {
                 self.counters[cell] += 1;
                 if self.counters[cell] >= threshold {
                     emit(CocoDelta {
                         key: key.to_string(),
-                        value: self.counters[cell] as u64,
+                        count: self.counters[cell] as u64,
                     });
                     self.counters[cell] = 0;
                 }
@@ -616,7 +627,7 @@ impl CocoWorkerSketch {
             if let Some(resident) = self.keys[victim].clone() {
                 emit(CocoDelta {
                     key: resident,
-                    value: self.counters[victim] as u64,
+                    count: self.counters[victim] as u64,
                 });
             }
             self.counters[victim] = 0;
@@ -633,7 +644,7 @@ impl CocoWorkerSketch {
             if let Some(resident) = self.keys[cell].clone() {
                 emit(CocoDelta {
                     key: resident,
-                    value: self.counters[cell] as u64,
+                    count: self.counters[cell] as u64,
                 });
             }
             self.counters[cell] = 0;
@@ -641,7 +652,7 @@ impl CocoWorkerSketch {
     }
 }
 
-/// One heavy-part slot of an [`ElasticWorkerSketch`].
+/// One heavy-part slot of an [`ElasticSketchWorker`].
 ///
 /// Occupancy is `flow_id`, not `vote_pos` as in the parent's
 /// `HeavyBucket::is_vacant`: a promotion clears the votes and the flow stays
@@ -662,21 +673,21 @@ struct ElasticWorkerBucket {
 ///
 /// Appendix C keeps both halves in the worker. The heavy part promotes the
 /// resident flow, its votes and its eviction flag; the light part is an
-/// ordinary [`CmWorkerSketch`], promoting cell deltas with no key attached, and
+/// ordinary [`CountMinSketchWorker`], promoting cell deltas with no key attached, and
 /// takes the arrivals that lose a bucket contest. An evicted resident does not
 /// go there: it is handed over keyed, as [`ElasticDelta::Evicted`].
 #[derive(Clone, Debug)]
-pub struct ElasticWorkerSketch {
+pub struct ElasticSketchWorker {
     heavy: Vec<ElasticWorkerBucket>,
-    light: CmWorkerSketch,
+    light: CountMinSketchWorker,
 }
 
-impl ElasticWorkerSketch {
-    /// Creates a worker mirroring an `Elastic` of these dimensions.
+impl ElasticSketchWorker {
+    /// Creates a worker mirroring an `ElasticSketch` of these dimensions.
     pub fn new(bucket_count: usize, light_rows: usize, light_cols: usize) -> Self {
         Self {
             heavy: vec![ElasticWorkerBucket::default(); bucket_count.max(1)],
-            light: CmWorkerSketch::new(light_rows, light_cols),
+            light: CountMinSketchWorker::new(light_rows, light_cols),
         }
     }
 
@@ -686,28 +697,28 @@ impl ElasticWorkerSketch {
     }
 
     /// Borrows the light layer's counter array.
-    pub fn light(&self) -> &CmWorkerSketch {
+    pub fn light(&self) -> &CountMinSketchWorker {
         &self.light
     }
 
     /// Records one occurrence of `id`, promoting whichever half crosses
     /// `threshold`.
     ///
-    /// Every branch is `Elastic::insert`'s: a vacant bucket seats the flow and
+    /// Every branch is `ElasticSketch::update`'s: a vacant bucket seats the flow and
     /// clears the slot's eviction flag, a matching one takes a positive vote,
     /// and otherwise the bucket takes a negative vote and either the arrival
     /// goes to the light layer or, once `vote_neg >= LAMBDA * vote_pos`, the
     /// slot is flagged and the resident is handed over as
     /// [`ElasticDelta::Evicted`] with its whole positive vote.
-    pub fn insert_emit_delta(
+    pub fn update_emit_delta(
         &mut self,
         id: &str,
         threshold: u32,
         emit: &mut impl FnMut(ElasticDelta),
     ) {
-        let threshold = threshold.clamp(1, MAX_PROMASK);
-        let idx =
-            hash64_seeded(CANONICAL_HASH_SEED, &DataInput::Str(id)) as usize % self.heavy.len();
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD);
+        let idx = hash64_seeded(DEFAULT_CANONICAL_SEED_INDEX, &DataInput::Str(id)) as usize
+            % self.heavy.len();
 
         if self.heavy[idx].flow_id.is_none() {
             self.heavy[idx].flow_id = Some(id.to_string());
@@ -753,7 +764,7 @@ impl ElasticWorkerSketch {
             if let Some(resident) = bucket.flow_id.clone() {
                 emit(ElasticDelta::Heavy {
                     key: resident,
-                    value: bucket.vote_pos as u32,
+                    votes: bucket.vote_pos as u32,
                     eviction: bucket.eviction,
                 });
             }
@@ -766,9 +777,9 @@ impl ElasticWorkerSketch {
     /// Adds one to the light layer's cells for `id`, the only unkeyed write
     /// the worker makes.
     fn spill(&mut self, id: &str, threshold: u32, emit: &mut impl FnMut(ElasticDelta)) {
-        let hashes = CmWorkerSketch::hashes(self.light.rows(), &DataInput::Str(id));
+        let hashes = CountMinSketchWorker::hashes(self.light.rows(), &DataInput::Str(id));
         self.light
-            .insert_hashes_emit_delta(&hashes, threshold, &mut |delta| {
+            .update_emit_delta_with_row_hashes(&hashes, threshold, &mut |delta| {
                 emit(ElasticDelta::Light(delta))
             });
     }
@@ -783,7 +794,7 @@ impl ElasticWorkerSketch {
         if let Some(resident) = bucket.flow_id.clone() {
             emit(ElasticDelta::Heavy {
                 key: resident,
-                value: bucket.vote_pos as u32,
+                votes: bucket.vote_pos as u32,
                 eviction: bucket.eviction,
             });
         }
@@ -842,7 +853,7 @@ impl Default for OctoAdaptiveThreshold {
             alpha: 0.25,
             interval: Duration::from_micros(100),
             min_threshold: 1,
-            max_threshold: MAX_PROMASK,
+            max_threshold: OCTO_MAX_PROMOTION_THRESHOLD,
         }
     }
 }
@@ -860,7 +871,7 @@ pub fn threshold_for_error(epsilon: f64, l1: f64, k_prime: usize) -> u32 {
     if !tau.is_finite() || tau < 1.0 {
         return 1;
     }
-    (tau as u32).min(MAX_PROMASK)
+    (tau as u32).min(OCTO_MAX_PROMOTION_THRESHOLD)
 }
 
 #[cfg(feature = "octo-runtime")]
@@ -893,7 +904,7 @@ impl Default for OctoConfig {
             num_workers: 4,
             pin_cores: true,
             queue_capacity: DEFAULT_QUEUE_CAPACITY,
-            threshold: OctoThreshold::new(CM_PROMASK),
+            threshold: OctoThreshold::new(OCTO_COUNT_MIN_DEFAULT_THRESHOLD),
             partition: OctoPartition::default(),
             adaptive: None,
         }
@@ -926,7 +937,7 @@ enum AggregatorMsg {
 ///
 /// Nothing borrowed crosses a thread: [`OctoPlan::prepare`] turns each input
 /// into the worker's payload on the calling thread, so a borrowed key is
-/// finished with by the time `insert` returns.
+/// finished with by the time `update` returns.
 pub struct OctoRuntime<L, P>
 where
     L: OctoPlan,
@@ -1177,10 +1188,12 @@ impl ThresholdController {
         // inverted range. Normalising here keeps a misconfigured band from
         // killing the aggregator thread and surfacing as an unrelated
         // "worker receiver dropped" panic on the caller's thread.
-        settings.min_threshold = settings.min_threshold.clamp(1, MAX_PROMASK);
+        settings.min_threshold = settings
+            .min_threshold
+            .clamp(1, OCTO_MAX_PROMOTION_THRESHOLD);
         settings.max_threshold = settings
             .max_threshold
-            .clamp(settings.min_threshold, MAX_PROMASK);
+            .clamp(settings.min_threshold, OCTO_MAX_PROMOTION_THRESHOLD);
         let next_check = Instant::now() + settings.interval;
         Self {
             settings,
@@ -1268,7 +1281,7 @@ where
     /// The input is hashed for partitioning and converted to the worker's
     /// payload here, on the calling thread, so `input` may borrow from storage
     /// that is dropped as soon as this returns.
-    pub fn insert(&mut self, input: DataInput<'_>) {
+    pub fn update(&mut self, input: DataInput<'_>) {
         let core = self.core.as_ref().expect("runtime core missing");
         if core.closed.load(Ordering::Acquire) {
             panic!("cannot insert after runtime has been closed");
@@ -1329,9 +1342,9 @@ where
     }
 
     /// Inserts a batch, one element at a time.
-    pub fn insert_batch(&mut self, inputs: &[DataInput<'_>]) {
+    pub fn update_batch(&mut self, inputs: &[DataInput<'_>]) {
         for input in inputs {
-            self.insert(input.clone());
+            self.update(input.clone());
         }
     }
 
@@ -1357,58 +1370,62 @@ where
 /// once at the hand-off is what lets the caller drop the original immediately.
 #[derive(Clone, Debug)]
 pub struct KeyedHashes {
-    /// Per-row hashes, as `CmWorkerSketch::hashes` computes them.
+    /// Per-row hashes, as `CountMinSketchWorker::hashes` computes them.
     pub hashes: RowHashes,
     /// The flow key.
-    pub key: HeapItem,
+    pub key: OwnedDataInput,
 }
 
 /// A prepared UnivMon insert.
 #[derive(Clone, Debug)]
-pub struct UnivMonInput {
+pub struct KeyedLayerHashes {
     /// Deepest layer this key reaches; it touches `0..=bottom`.
-    pub bottom: usize,
+    pub bottom_layer: usize,
     /// One 128-bit hash per touched layer, under that layer's seed. Layer depth
     /// is geometric, so this is nearly always one or two entries.
     pub layer_hashes: SmallVec<[u128; 4]>,
     /// The flow key.
-    pub key: HeapItem,
+    pub key: OwnedDataInput,
 }
 
 // ---------------------------------------------------------------------------
 // Concrete worker/parent implementations
 // ---------------------------------------------------------------------------
 
-// -- CountMin --
+// -- CountMinSketch --
 
 /// OctoSketch worker backed by a compact one-byte Count-Min sketch.
-pub struct CmOctoWorker {
-    sketch: CmWorkerSketch,
+pub struct CountMinSketchOctoWorker {
+    sketch: CountMinSketchWorker,
     threshold: OctoThreshold,
 }
 
-impl CmOctoWorker {
-    /// Creates a worker with a private threshold fixed at `CM_PROMASK`.
+impl CountMinSketchOctoWorker {
+    /// Creates a worker with a private threshold fixed at `OCTO_COUNT_MIN_DEFAULT_THRESHOLD`.
     pub fn new(rows: usize, cols: usize) -> Self {
-        Self::with_threshold(rows, cols, OctoThreshold::new(CM_PROMASK))
+        Self::with_threshold(
+            rows,
+            cols,
+            OctoThreshold::new(OCTO_COUNT_MIN_DEFAULT_THRESHOLD),
+        )
     }
 
     /// Creates a worker sharing `threshold` with its peers and the aggregator.
     pub fn with_threshold(rows: usize, cols: usize, threshold: OctoThreshold) -> Self {
         Self {
-            sketch: CmWorkerSketch::new(rows, cols),
+            sketch: CountMinSketchWorker::new(rows, cols),
             threshold,
         }
     }
 
     /// Borrows the worker's counter array.
-    pub fn sketch(&self) -> &CmWorkerSketch {
+    pub fn sketch(&self) -> &CountMinSketchWorker {
         &self.sketch
     }
 }
 
-impl OctoWorker for CmOctoWorker {
-    type Delta = CmDelta;
+impl OctoWorker for CountMinSketchOctoWorker {
+    type Delta = CountMinSketchCellDelta;
     type Payload = RowHashes;
 
     #[inline(always)]
@@ -1417,7 +1434,7 @@ impl OctoWorker for CmOctoWorker {
         F: FnMut(Self::Delta),
     {
         self.sketch
-            .insert_hashes_emit_delta(payload, self.threshold.get(), emit);
+            .update_emit_delta_with_row_hashes(payload, self.threshold.get(), emit);
     }
 
     fn flush<F>(&mut self, emit: &mut F)
@@ -1428,60 +1445,64 @@ impl OctoWorker for CmOctoWorker {
     }
 }
 
-/// OctoSketch parent wrapping a full-precision `CountMin`.
-pub struct CmOctoAggregator {
+/// OctoSketch parent wrapping a full-precision `CountMinSketch`.
+pub struct CountMinSketchOctoAggregator {
     /// Parent Count-Min sketch updated by worker deltas.
-    pub sketch: CountMin<Vector2D<i32>, RegularPath>,
+    pub sketch: CountMinSketch<Vector2D<i32>, RegularPath>,
 }
 
-impl CmOctoAggregator {
+impl CountMinSketchOctoAggregator {
     /// Creates an aggregator with a `rows` x `cols` parent sketch.
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
-            sketch: CountMin::with_dimensions(rows, cols),
+            sketch: CountMinSketch::with_dimensions(rows, cols),
         }
     }
 }
 
-impl OctoAggregator for CmOctoAggregator {
-    type Delta = CmDelta;
+impl OctoAggregator for CountMinSketchOctoAggregator {
+    type Delta = CountMinSketchCellDelta;
 
     #[inline(always)]
-    fn apply(&mut self, delta: CmDelta) {
+    fn apply(&mut self, delta: CountMinSketchCellDelta) {
         self.sketch.apply_delta(delta);
     }
 }
 
-// -- CountMin with heavy-hitter tracking (§3.2, Idea 3) --
+// -- CountMinSketch with heavy-hitter tracking (§3.2, Idea 3) --
 
 /// Count-Min worker that ships the flow key alongside each promoted counter.
-pub struct CmTopKOctoWorker {
-    sketch: CmWorkerSketch,
+pub struct CountMinSketchWithHeapOctoWorker {
+    sketch: CountMinSketchWorker,
     threshold: OctoThreshold,
 }
 
-impl CmTopKOctoWorker {
-    /// Creates a worker with a private threshold fixed at `CM_PROMASK`.
+impl CountMinSketchWithHeapOctoWorker {
+    /// Creates a worker with a private threshold fixed at `OCTO_COUNT_MIN_DEFAULT_THRESHOLD`.
     pub fn new(rows: usize, cols: usize) -> Self {
-        Self::with_threshold(rows, cols, OctoThreshold::new(CM_PROMASK))
+        Self::with_threshold(
+            rows,
+            cols,
+            OctoThreshold::new(OCTO_COUNT_MIN_DEFAULT_THRESHOLD),
+        )
     }
 
     /// Creates a worker sharing `threshold` with its peers and the aggregator.
     pub fn with_threshold(rows: usize, cols: usize, threshold: OctoThreshold) -> Self {
         Self {
-            sketch: CmWorkerSketch::new(rows, cols),
+            sketch: CountMinSketchWorker::new(rows, cols),
             threshold,
         }
     }
 
     /// Borrows the worker's counter array.
-    pub fn sketch(&self) -> &CmWorkerSketch {
+    pub fn sketch(&self) -> &CountMinSketchWorker {
         &self.sketch
     }
 }
 
-impl OctoWorker for CmTopKOctoWorker {
-    type Delta = KeyedCmDelta;
+impl OctoWorker for CountMinSketchWithHeapOctoWorker {
+    type Delta = KeyedCountMinSketchCellDelta;
     type Payload = KeyedHashes;
 
     #[inline(always)]
@@ -1489,7 +1510,7 @@ impl OctoWorker for CmTopKOctoWorker {
     where
         F: FnMut(Self::Delta),
     {
-        self.sketch.insert_hashes_emit_keyed_delta(
+        self.sketch.update_emit_keyed_delta_with_row_hashes(
             &payload.hashes,
             &payload.key,
             self.threshold.get(),
@@ -1506,28 +1527,28 @@ impl OctoWorker for CmTopKOctoWorker {
 
 /// Count-Min parent that also maintains the only heavy-hitter heap in the
 /// pipeline, rebuilt from the keys the workers ship (Algorithm 2).
-pub struct CmTopKOctoAggregator {
+pub struct CountMinSketchWithHeapOctoAggregator {
     /// Parent sketch plus heavy-hitter heap.
-    pub sketch: CMSHeap<Vector2D<i32>, RegularPath>,
+    pub sketch: CountMinSketchWithHeap<Vector2D<i32>, RegularPath>,
 }
 
-impl CmTopKOctoAggregator {
+impl CountMinSketchWithHeapOctoAggregator {
     /// Creates an aggregator tracking the `top_k` heaviest keys.
-    pub fn new(rows: usize, cols: usize, top_k: usize) -> Self {
+    pub fn new(rows: usize, cols: usize, heap_size: usize) -> Self {
         Self {
-            sketch: CMSHeap::new(rows, cols, top_k),
+            sketch: CountMinSketchWithHeap::new(rows, cols, heap_size),
         }
     }
 }
 
-impl OctoAggregator for CmTopKOctoAggregator {
-    type Delta = KeyedCmDelta;
+impl OctoAggregator for CountMinSketchWithHeapOctoAggregator {
+    type Delta = KeyedCountMinSketchCellDelta;
 
     #[inline(always)]
-    fn apply(&mut self, delta: KeyedCmDelta) {
-        self.sketch.cms_mut().apply_delta(delta.delta);
+    fn apply(&mut self, delta: KeyedCountMinSketchCellDelta) {
+        self.sketch.count_min_sketch_mut().apply_delta(delta.delta);
         let key = heap_item_to_sketch_input(&delta.key);
-        let estimate = self.sketch.cms().estimate(&key);
+        let estimate = self.sketch.count_min_sketch().estimate(&key);
         self.sketch.heap_mut().update(&key, estimate as i64);
     }
 }
@@ -1535,33 +1556,37 @@ impl OctoAggregator for CmTopKOctoAggregator {
 // -- Count Sketch --
 
 /// OctoSketch worker backed by a compact one-byte Count sketch.
-pub struct CountOctoWorker {
-    sketch: CountWorkerSketch,
+pub struct CountSketchOctoWorker {
+    sketch: CountSketchWorker,
     threshold: OctoThreshold,
 }
 
-impl CountOctoWorker {
-    /// Creates a worker with a private threshold fixed at `COUNT_PROMASK`.
+impl CountSketchOctoWorker {
+    /// Creates a worker with a private threshold fixed at `OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD`.
     pub fn new(rows: usize, cols: usize) -> Self {
-        Self::with_threshold(rows, cols, OctoThreshold::new(COUNT_PROMASK))
+        Self::with_threshold(
+            rows,
+            cols,
+            OctoThreshold::new(OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD),
+        )
     }
 
     /// Creates a worker sharing `threshold` with its peers and the aggregator.
     pub fn with_threshold(rows: usize, cols: usize, threshold: OctoThreshold) -> Self {
         Self {
-            sketch: CountWorkerSketch::new(rows, cols),
+            sketch: CountSketchWorker::new(rows, cols),
             threshold,
         }
     }
 
     /// Borrows the worker's counter array.
-    pub fn sketch(&self) -> &CountWorkerSketch {
+    pub fn sketch(&self) -> &CountSketchWorker {
         &self.sketch
     }
 }
 
-impl OctoWorker for CountOctoWorker {
-    type Delta = CountDelta;
+impl OctoWorker for CountSketchOctoWorker {
+    type Delta = CountSketchCellDelta;
     type Payload = RowHashes;
 
     #[inline(always)]
@@ -1570,7 +1595,7 @@ impl OctoWorker for CountOctoWorker {
         F: FnMut(Self::Delta),
     {
         self.sketch
-            .insert_hashes_emit_delta(payload, self.threshold.get(), emit);
+            .update_emit_delta_with_row_hashes(payload, self.threshold.get(), emit);
     }
 
     fn flush<F>(&mut self, emit: &mut F)
@@ -1581,26 +1606,26 @@ impl OctoWorker for CountOctoWorker {
     }
 }
 
-/// OctoSketch parent wrapping a full-precision `Count`.
-pub struct CountOctoAggregator {
+/// OctoSketch parent wrapping a full-precision `CountSketch`.
+pub struct CountSketchOctoAggregator {
     /// Parent Count Sketch updated by worker deltas.
-    pub sketch: Count<Vector2D<i32>, RegularPath>,
+    pub sketch: CountSketch<Vector2D<i32>, RegularPath>,
 }
 
-impl CountOctoAggregator {
+impl CountSketchOctoAggregator {
     /// Creates an aggregator with a `rows` x `cols` parent sketch.
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
-            sketch: Count::with_dimensions(rows, cols),
+            sketch: CountSketch::with_dimensions(rows, cols),
         }
     }
 }
 
-impl OctoAggregator for CountOctoAggregator {
-    type Delta = CountDelta;
+impl OctoAggregator for CountSketchOctoAggregator {
+    type Delta = CountSketchCellDelta;
 
     #[inline(always)]
-    fn apply(&mut self, delta: CountDelta) {
+    fn apply(&mut self, delta: CountSketchCellDelta) {
         self.sketch.apply_delta(delta);
     }
 }
@@ -1608,28 +1633,32 @@ impl OctoAggregator for CountOctoAggregator {
 // -- Count Sketch with heavy-hitter tracking --
 
 /// Count-sketch worker that ships the flow key alongside each promoted counter.
-pub struct CountTopKOctoWorker {
-    sketch: CountWorkerSketch,
+pub struct CountSketchWithHeapOctoWorker {
+    sketch: CountSketchWorker,
     threshold: OctoThreshold,
 }
 
-impl CountTopKOctoWorker {
-    /// Creates a worker with a private threshold fixed at `COUNT_PROMASK`.
+impl CountSketchWithHeapOctoWorker {
+    /// Creates a worker with a private threshold fixed at `OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD`.
     pub fn new(rows: usize, cols: usize) -> Self {
-        Self::with_threshold(rows, cols, OctoThreshold::new(COUNT_PROMASK))
+        Self::with_threshold(
+            rows,
+            cols,
+            OctoThreshold::new(OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD),
+        )
     }
 
     /// Creates a worker sharing `threshold` with its peers and the aggregator.
     pub fn with_threshold(rows: usize, cols: usize, threshold: OctoThreshold) -> Self {
         Self {
-            sketch: CountWorkerSketch::new(rows, cols),
+            sketch: CountSketchWorker::new(rows, cols),
             threshold,
         }
     }
 }
 
-impl OctoWorker for CountTopKOctoWorker {
-    type Delta = KeyedCountDelta;
+impl OctoWorker for CountSketchWithHeapOctoWorker {
+    type Delta = KeyedCountSketchCellDelta;
     type Payload = KeyedHashes;
 
     #[inline(always)]
@@ -1637,7 +1666,7 @@ impl OctoWorker for CountTopKOctoWorker {
     where
         F: FnMut(Self::Delta),
     {
-        self.sketch.insert_hashes_emit_keyed_delta(
+        self.sketch.update_emit_keyed_delta_with_row_hashes(
             &payload.hashes,
             &payload.key,
             self.threshold.get(),
@@ -1645,33 +1674,33 @@ impl OctoWorker for CountTopKOctoWorker {
         );
     }
 
-    // No flush, for the same reason as CmTopKOctoWorker: a key the aggregator
+    // No flush, for the same reason as CountMinSketchWithHeapOctoWorker: a key the aggregator
     // has never been sent is absent from the heap, not merely undercounted.
 }
 
 /// Count-sketch parent holding the pipeline's only heavy-hitter heap.
-pub struct CountTopKOctoAggregator {
+pub struct CountSketchWithHeapOctoAggregator {
     /// Parent sketch plus heavy-hitter heap.
-    pub sketch: CSHeap<Vector2D<i32>, RegularPath>,
+    pub sketch: CountSketchWithHeap<Vector2D<i32>, RegularPath>,
 }
 
-impl CountTopKOctoAggregator {
+impl CountSketchWithHeapOctoAggregator {
     /// Creates an aggregator tracking the `top_k` heaviest keys.
-    pub fn new(rows: usize, cols: usize, top_k: usize) -> Self {
+    pub fn new(rows: usize, cols: usize, heap_size: usize) -> Self {
         Self {
-            sketch: CSHeap::new(rows, cols, top_k),
+            sketch: CountSketchWithHeap::new(rows, cols, heap_size),
         }
     }
 }
 
-impl OctoAggregator for CountTopKOctoAggregator {
-    type Delta = KeyedCountDelta;
+impl OctoAggregator for CountSketchWithHeapOctoAggregator {
+    type Delta = KeyedCountSketchCellDelta;
 
     #[inline(always)]
-    fn apply(&mut self, delta: KeyedCountDelta) {
-        self.sketch.cs_mut().apply_delta(delta.delta);
+    fn apply(&mut self, delta: KeyedCountSketchCellDelta) {
+        self.sketch.count_sketch_mut().apply_delta(delta.delta);
         let key = heap_item_to_sketch_input(&delta.key);
-        let estimate = self.sketch.cs().estimate(&key);
+        let estimate = self.sketch.count_sketch().estimate(&key);
         self.sketch.heap_mut().update(&key, estimate as i64);
     }
 }
@@ -1684,17 +1713,17 @@ impl OctoAggregator for CountTopKOctoAggregator {
 /// array of counters, promote and clear at τ. Bucket indices are sparse and
 /// signed, so the counters are held in a map rather than a dense row.
 #[derive(Clone, Debug)]
-pub struct DdWorkerSketch {
+pub struct DdSketchWorker {
     /// An empty sketch kept only for its logarithmic bucket mapping.
-    mapping: DDSketch,
-    counters: HashMap<(crate::octo_delta::DdStore, i32), u8>,
+    mapping: DdSketch,
+    counters: HashMap<(crate::octo_delta::DdSign, i32), u8>,
 }
 
-impl DdWorkerSketch {
+impl DdSketchWorker {
     /// Creates a worker over the bucket space of a DDSketch with this `alpha`.
     pub fn new(alpha: f64) -> Self {
         Self {
-            mapping: DDSketch::new(alpha),
+            mapping: DdSketch::new(alpha),
             counters: HashMap::new(),
         }
     }
@@ -1705,7 +1734,7 @@ impl DdWorkerSketch {
     }
 
     /// Counts still held back from the aggregator, by bucket index.
-    pub fn residual(&self) -> &HashMap<(crate::octo_delta::DdStore, i32), u8> {
+    pub fn residual(&self) -> &HashMap<(crate::octo_delta::DdSign, i32), u8> {
         &self.counters
     }
 
@@ -1723,13 +1752,13 @@ impl DdWorkerSketch {
     /// Until this runs, a bucket under the threshold is missing from the parent
     /// entirely - so `count`, `min`, `max`, `sum` and the extreme quantiles are
     /// wrong without bound, not within alpha. Flush before reading those.
-    pub fn flush(&mut self, emit: &mut impl FnMut(DdDelta)) {
+    pub fn flush(&mut self, emit: &mut impl FnMut(DdSketchBucketDelta)) {
         for ((store, index), count) in self.counters.drain() {
             if count != 0 {
-                emit(DdDelta {
-                    store,
+                emit(DdSketchBucketDelta {
+                    sign: store,
                     index,
-                    value: count as u64,
+                    count: count as u64,
                 });
             }
         }
@@ -1739,18 +1768,23 @@ impl DdWorkerSketch {
     ///
     /// Values the parent sketch would itself reject - non-finite or
     /// outside the indexable range - are dropped here too.
-    pub fn add_emit_delta(&mut self, value: f64, threshold: u32, emit: &mut impl FnMut(DdDelta)) {
+    pub fn add_emit_delta(
+        &mut self,
+        value: f64,
+        threshold: u32,
+        emit: &mut impl FnMut(DdSketchBucketDelta),
+    ) {
         let Some((store, index)) = self.mapping.signed_bucket_for(value) else {
             return;
         };
-        let threshold = threshold.clamp(1, MAX_PROMASK) as u8;
+        let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD) as u8;
         let counter = self.counters.entry((store, index)).or_insert(0);
         *counter += 1;
         if *counter >= threshold {
-            emit(DdDelta {
-                store,
+            emit(DdSketchBucketDelta {
+                sign: store,
                 index,
-                value: *counter as u64,
+                count: *counter as u64,
             });
             self.counters.remove(&(store, index));
         }
@@ -1759,27 +1793,27 @@ impl DdWorkerSketch {
 
 /// OctoSketch worker backed by a compact DDSketch bucket store.
 pub struct DdOctoWorker {
-    sketch: DdWorkerSketch,
+    sketch: DdSketchWorker,
     threshold: OctoThreshold,
 }
 
 impl DdOctoWorker {
-    /// Creates a worker with a private threshold fixed at `DD_PROMASK`.
+    /// Creates a worker with a private threshold fixed at `OCTO_DDSKETCH_DEFAULT_THRESHOLD`.
     pub fn new(alpha: f64) -> Self {
-        Self::with_threshold(alpha, OctoThreshold::new(DD_PROMASK))
+        Self::with_threshold(alpha, OctoThreshold::new(OCTO_DDSKETCH_DEFAULT_THRESHOLD))
     }
 
     /// Creates a worker sharing `threshold` with its peers and the aggregator.
     pub fn with_threshold(alpha: f64, threshold: OctoThreshold) -> Self {
         Self {
-            sketch: DdWorkerSketch::new(alpha),
+            sketch: DdSketchWorker::new(alpha),
             threshold,
         }
     }
 }
 
 impl OctoWorker for DdOctoWorker {
-    type Delta = DdDelta;
+    type Delta = DdSketchBucketDelta;
     /// `None` for an input DDSketch cannot index; the conversion happens at
     /// preparation so a non-numeric key never crosses a thread.
     type Payload = Option<f64>;
@@ -1804,26 +1838,26 @@ impl OctoWorker for DdOctoWorker {
     }
 }
 
-/// OctoSketch parent wrapping a full-precision `DDSketch`.
+/// OctoSketch parent wrapping a full-precision `DdSketch`.
 pub struct DdOctoAggregator {
     /// Parent quantile sketch updated by worker deltas.
-    pub sketch: DDSketch,
+    pub sketch: DdSketch,
 }
 
 impl DdOctoAggregator {
     /// Creates an aggregator with the given relative accuracy.
     pub fn new(alpha: f64) -> Self {
         Self {
-            sketch: DDSketch::new(alpha),
+            sketch: DdSketch::new(alpha),
         }
     }
 }
 
 impl OctoAggregator for DdOctoAggregator {
-    type Delta = DdDelta;
+    type Delta = DdSketchBucketDelta;
 
     #[inline(always)]
-    fn apply(&mut self, delta: DdDelta) {
+    fn apply(&mut self, delta: DdSketchBucketDelta) {
         self.sketch.apply_delta(delta);
     }
 }
@@ -1854,7 +1888,7 @@ impl HllOctoWorker {
     /// Creates a HyperLogLog-backed Octo worker at the default threshold,
     /// which promotes every register improvement.
     pub fn new() -> Self {
-        Self::with_threshold(HLL_PROMASK)
+        Self::with_threshold(OCTO_HLL_DEFAULT_THRESHOLD)
     }
 
     /// Creates a worker that promotes a register only once the improvement in
@@ -1887,7 +1921,7 @@ impl Default for HllOctoWorker {
 }
 
 impl OctoWorker for HllOctoWorker {
-    type Delta = HllDelta;
+    type Delta = HllRegisterDelta;
     /// The single canonical-seed hash; HLL never needs the key itself.
     type Payload = u64;
 
@@ -1897,7 +1931,7 @@ impl OctoWorker for HllOctoWorker {
         F: FnMut(Self::Delta),
     {
         self.child
-            .insert_emit_delta_with_hash_and_threshold(*payload, self.threshold, emit);
+            .update_emit_delta_with_hash_and_threshold(*payload, self.threshold, emit);
     }
 
     /// Ships every non-empty register. At the default threshold of 0 nothing is
@@ -1910,9 +1944,9 @@ impl OctoWorker for HllOctoWorker {
     {
         for (pos, value) in self.child.registers_as_slice().iter().enumerate() {
             if *value != 0 {
-                emit(HllDelta {
-                    pos: pos as u32,
-                    value: *value,
+                emit(HllRegisterDelta {
+                    index: pos as u32,
+                    register_value: *value,
                 });
             }
         }
@@ -1941,10 +1975,10 @@ impl Default for HllOctoAggregator {
 }
 
 impl OctoAggregator for HllOctoAggregator {
-    type Delta = HllDelta;
+    type Delta = HllRegisterDelta;
 
     #[inline(always)]
-    fn apply(&mut self, delta: HllDelta) {
+    fn apply(&mut self, delta: HllRegisterDelta) {
         self.sketch.apply_delta(delta);
     }
 }
@@ -1971,66 +2005,66 @@ pub fn univmon_layer_threshold(base: u32, layer: usize) -> u32 {
 /// OctoSketch worker backed by one compact sketch per UnivMon layer.
 ///
 /// An insert reaches layers `0..=bottom_layer_for(key)`, exactly the set a
-/// single-threaded `UnivMon::insert` touches, because the layer selector is a
+/// single-threaded `UnivMon::update_weighted` touches, because the layer selector is a
 /// pure function of the key's hash. The worker keeps no heavy-hitter heap;
 /// that lives only in the aggregator.
 pub struct UnivMonOctoWorker {
-    layers: Vec<L2hhWorkerSketch>,
+    layer_sketches: Vec<CountSketchWithL2NormWorker>,
     threshold: OctoThreshold,
     worker_id: u32,
-    weight_total: u64,
+    total_weight: u64,
 }
 
 impl UnivMonOctoWorker {
     /// Creates a worker mirroring a `UnivMon` of these dimensions.
-    pub fn new(worker_id: usize, sketch_row: usize, sketch_col: usize, layer_size: usize) -> Self {
+    pub fn new(worker_id: usize, rows: usize, cols: usize, layers: usize) -> Self {
         Self::with_threshold(
             worker_id,
-            sketch_row,
-            sketch_col,
-            layer_size,
-            OctoThreshold::new(UNIVMON_PROMASK),
+            rows,
+            cols,
+            layers,
+            OctoThreshold::new(OCTO_UNIVMON_DEFAULT_THRESHOLD),
         )
     }
 
     /// Creates a worker sharing `threshold` with its peers and the aggregator.
     pub fn with_threshold(
         worker_id: usize,
-        sketch_row: usize,
-        sketch_col: usize,
-        layer_size: usize,
+        rows: usize,
+        cols: usize,
+        layers: usize,
         threshold: OctoThreshold,
     ) -> Self {
-        let layer_size = layer_size.max(1);
+        let layers = layers.max(1);
         Self {
-            layers: (0..layer_size)
-                .map(|layer| L2hhWorkerSketch::new(sketch_row, sketch_col, layer))
+            layer_sketches: (0..layers)
+                .map(|layer| CountSketchWithL2NormWorker::new(rows, cols, layer))
                 .collect(),
             threshold,
             worker_id: worker_id as u32,
-            weight_total: 0,
+            total_weight: 0,
         }
     }
 
     /// Bytes held across every layer's counter array.
     pub fn counter_bytes(&self) -> usize {
-        self.layers.iter().map(|l| l.counter_bytes()).sum()
+        self.layer_sketches.iter().map(|l| l.counter_bytes()).sum()
     }
 }
 
 impl OctoWorker for UnivMonOctoWorker {
-    type Delta = LayeredCountDelta;
-    type Payload = UnivMonInput;
+    type Delta = UnivMonCellDelta;
+    type Payload = KeyedLayerHashes;
 
     #[inline(always)]
     fn process<F>(&mut self, payload: &Self::Payload, emit: &mut F)
     where
         F: FnMut(Self::Delta),
     {
-        self.weight_total += 1;
+        self.total_weight += 1;
         let threshold = self.threshold.get();
-        let (worker_id, weight_total) = (self.worker_id, self.weight_total);
-        let bottom = payload.bottom.min(self.layers.len() - 1);
+        let (worker_id, total_weight) = (self.worker_id, self.total_weight);
+        let bottom = payload.bottom_layer.min(self.layer_sketches.len() - 1);
         for (layer, hashed) in payload
             .layer_hashes
             .iter()
@@ -2040,15 +2074,19 @@ impl OctoWorker for UnivMonOctoWorker {
         {
             let layer_threshold = univmon_layer_threshold(threshold, layer);
             let key = &payload.key;
-            self.layers[layer].insert_hash_emit_delta(hashed, layer_threshold, &mut |delta| {
-                emit(LayeredCountDelta {
-                    layer: layer as u32,
-                    key: key.clone(),
-                    delta,
-                    worker_id,
-                    weight_total,
-                })
-            });
+            self.layer_sketches[layer].update_emit_delta_with_hash(
+                hashed,
+                layer_threshold,
+                &mut |delta| {
+                    emit(UnivMonCellDelta {
+                        layer: layer as u32,
+                        key: key.clone(),
+                        cell: delta,
+                        worker_id,
+                        total_weight,
+                    })
+                },
+            );
         }
     }
 }
@@ -2074,20 +2112,8 @@ impl UnivMonOctoAggregator {
     ///
     /// The threshold decides whether candidate sets can ever be called
     /// complete: only a threshold of 1 delivers every insert to the heaps.
-    pub fn new(
-        heap_size: usize,
-        sketch_row: usize,
-        sketch_col: usize,
-        layer_size: usize,
-        threshold: u32,
-    ) -> Self {
-        Self::with_threshold(
-            heap_size,
-            sketch_row,
-            sketch_col,
-            layer_size,
-            OctoThreshold::new(threshold),
-        )
+    pub fn new(heap_size: usize, rows: usize, cols: usize, layers: usize, threshold: u32) -> Self {
+        Self::with_threshold(heap_size, rows, cols, layers, OctoThreshold::new(threshold))
     }
 
     /// Creates an aggregator that reads the same live threshold its workers do.
@@ -2098,15 +2124,15 @@ impl UnivMonOctoAggregator {
     /// `heavy_threshold` take its permissive branch and overcount.
     pub fn with_threshold(
         heap_size: usize,
-        sketch_row: usize,
-        sketch_col: usize,
-        layer_size: usize,
+        rows: usize,
+        cols: usize,
+        layers: usize,
         threshold: OctoThreshold,
     ) -> Self {
         let mut this = Self {
-            sketch: UnivMon::init_univmon(heap_size, sketch_row, sketch_col, layer_size),
+            sketch: UnivMon::new(heap_size, rows, cols, layers),
             fidelity_threshold: u32::MAX,
-            fidelity: vec![UnivMonDeltaFidelity::EveryInsert; layer_size],
+            fidelity: vec![UnivMonDeltaFidelity::EveryInsert; layers],
             threshold,
             worker_weights: Vec::new(),
             total_weight: 0,
@@ -2137,10 +2163,10 @@ impl UnivMonOctoAggregator {
 }
 
 impl OctoAggregator for UnivMonOctoAggregator {
-    type Delta = LayeredCountDelta;
+    type Delta = UnivMonCellDelta;
 
     #[inline(always)]
-    fn apply(&mut self, delta: LayeredCountDelta) {
+    fn apply(&mut self, delta: UnivMonCellDelta) {
         self.refresh_fidelity();
 
         let worker = delta.worker_id as usize;
@@ -2152,28 +2178,28 @@ impl OctoAggregator for UnivMonOctoAggregator {
         // totals are being folded into one slot - which would silently turn
         // the fleet total into a maximum instead of a sum.
         assert!(
-            delta.weight_total >= self.worker_weights[worker],
+            delta.total_weight >= self.worker_weights[worker],
             "worker id {worker} reported a total of {} after {}; worker ids must be distinct",
-            delta.weight_total,
+            delta.total_weight,
             self.worker_weights[worker]
         );
-        self.total_weight += delta.weight_total - self.worker_weights[worker];
-        self.worker_weights[worker] = delta.weight_total;
+        self.total_weight += delta.total_weight - self.worker_weights[worker];
+        self.worker_weights[worker] = delta.total_weight;
 
         let fidelity = self.fidelity[delta.layer as usize];
-        self.sketch.apply_layered_delta(&delta, fidelity);
+        self.sketch.apply_delta(&delta, fidelity);
         self.sketch.set_total_weight(self.total_weight as usize);
     }
 }
 
 // -- CocoSketch --
 
-/// Renders an input as the `String` flow key `Coco` and `Elastic` are defined
+/// Renders an input as the `String` flow key `CocoSketch` and `ElasticSketch` are defined
 /// over. Bytes render as lowercase hex, so distinct byte strings stay distinct.
 ///
 /// Both sketches key on a `String`, so a plan has to settle on one rendering:
-/// this is what the aggregator will hold, and what `Coco::estimate_key` or
-/// `Elastic::query` must be asked for.
+/// this is what the aggregator will hold, and what `CocoSketch::estimate` or
+/// `ElasticSketch::estimate` must be asked for.
 pub fn flow_key_string(input: &DataInput<'_>) -> String {
     use std::fmt::Write as _;
 
@@ -2183,13 +2209,13 @@ pub fn flow_key_string(input: &DataInput<'_>) -> String {
         DataInput::I32(v) => v.to_string(),
         DataInput::I64(v) => v.to_string(),
         DataInput::I128(v) => v.to_string(),
-        DataInput::ISIZE(v) => v.to_string(),
+        DataInput::Isize(v) => v.to_string(),
         DataInput::U8(v) => v.to_string(),
         DataInput::U16(v) => v.to_string(),
         DataInput::U32(v) => v.to_string(),
         DataInput::U64(v) => v.to_string(),
         DataInput::U128(v) => v.to_string(),
-        DataInput::USIZE(v) => v.to_string(),
+        DataInput::Usize(v) => v.to_string(),
         DataInput::F32(v) => v.to_string(),
         DataInput::F64(v) => v.to_string(),
         DataInput::Str(s) => (*s).to_string(),
@@ -2206,20 +2232,20 @@ pub fn flow_key_string(input: &DataInput<'_>) -> String {
 
 /// OctoSketch worker backed by a compact CocoSketch table.
 pub struct CocoOctoWorker {
-    sketch: CocoWorkerSketch,
+    sketch: CocoSketchWorker,
     threshold: OctoThreshold,
 }
 
 impl CocoOctoWorker {
-    /// Creates a worker with a private threshold fixed at `COCO_PROMASK`.
+    /// Creates a worker with a private threshold fixed at `OCTO_COCO_DEFAULT_THRESHOLD`.
     pub fn new(w: usize, d: usize) -> Self {
-        Self::with_threshold(w, d, OctoThreshold::new(COCO_PROMASK))
+        Self::with_threshold(w, d, OctoThreshold::new(OCTO_COCO_DEFAULT_THRESHOLD))
     }
 
     /// Creates a worker sharing `threshold` with its peers and the aggregator.
     pub fn with_threshold(w: usize, d: usize, threshold: OctoThreshold) -> Self {
         Self {
-            sketch: CocoWorkerSketch::new(w, d),
+            sketch: CocoSketchWorker::new(w, d),
             threshold,
         }
     }
@@ -2232,13 +2258,13 @@ impl CocoOctoWorker {
         seed: u64,
     ) -> Self {
         Self {
-            sketch: CocoWorkerSketch::with_seed(w, d, seed),
+            sketch: CocoSketchWorker::with_seed(w, d, seed),
             threshold,
         }
     }
 
     /// Borrows the worker's table.
-    pub fn sketch(&self) -> &CocoWorkerSketch {
+    pub fn sketch(&self) -> &CocoSketchWorker {
         &self.sketch
     }
 }
@@ -2254,7 +2280,7 @@ impl OctoWorker for CocoOctoWorker {
         F: FnMut(Self::Delta),
     {
         self.sketch
-            .insert_emit_delta(payload, self.threshold.get(), emit);
+            .update_emit_delta(payload, self.threshold.get(), emit);
     }
 
     /// Ships every bucket still holding a partial count. Unlike the `*TopK*`
@@ -2268,29 +2294,29 @@ impl OctoWorker for CocoOctoWorker {
     }
 }
 
-/// OctoSketch parent wrapping a full-precision `Coco`.
+/// OctoSketch parent wrapping a full-precision `CocoSketch`.
 ///
 /// §4.4: each `<key, counter>` message is replayed through the parent's own
-/// insertion logic, which for CocoSketch is the weighted `Coco::insert` - the
+/// insertion logic, which for CocoSketch is the weighted `CocoSketch::update_weighted` - the
 /// aggregator picks its own victim bucket and runs its own election, so a key
 /// the worker held lands wherever the *parent's* table would have put it.
 pub struct CocoOctoAggregator {
     /// Parent CocoSketch updated by worker deltas.
-    pub sketch: Coco,
+    pub sketch: CocoSketch,
 }
 
 impl CocoOctoAggregator {
     /// Creates an aggregator with a `d` x `w` parent table.
     pub fn new(w: usize, d: usize) -> Self {
         Self {
-            sketch: Coco::init_with_size(w, d),
+            sketch: CocoSketch::init_with_size(w, d),
         }
     }
 
     /// As [`Self::new`], with the parent table drawing from `seed`.
     pub fn with_seed(w: usize, d: usize, seed: u64) -> Self {
         Self {
-            sketch: Coco::init_with_size_and_seed(w, d, seed),
+            sketch: CocoSketch::init_with_size_and_seed(w, d, seed),
         }
     }
 }
@@ -2300,7 +2326,7 @@ impl OctoAggregator for CocoOctoAggregator {
 
     #[inline(always)]
     fn apply(&mut self, delta: CocoDelta) {
-        self.sketch.insert(&delta.key, delta.value);
+        self.sketch.update_weighted(&delta.key, delta.count);
     }
 }
 
@@ -2308,18 +2334,18 @@ impl OctoAggregator for CocoOctoAggregator {
 
 /// OctoSketch worker backed by a compact Elastic sketch, both halves.
 pub struct ElasticOctoWorker {
-    sketch: ElasticWorkerSketch,
+    sketch: ElasticSketchWorker,
     threshold: OctoThreshold,
 }
 
 impl ElasticOctoWorker {
-    /// Creates a worker with a private threshold fixed at `ELASTIC_PROMASK`.
+    /// Creates a worker with a private threshold fixed at `OCTO_ELASTIC_DEFAULT_THRESHOLD`.
     pub fn new(bucket_count: usize, light_rows: usize, light_cols: usize) -> Self {
         Self::with_threshold(
             bucket_count,
             light_rows,
             light_cols,
-            OctoThreshold::new(ELASTIC_PROMASK),
+            OctoThreshold::new(OCTO_ELASTIC_DEFAULT_THRESHOLD),
         )
     }
 
@@ -2331,13 +2357,13 @@ impl ElasticOctoWorker {
         threshold: OctoThreshold,
     ) -> Self {
         Self {
-            sketch: ElasticWorkerSketch::new(bucket_count, light_rows, light_cols),
+            sketch: ElasticSketchWorker::new(bucket_count, light_rows, light_cols),
             threshold,
         }
     }
 
     /// Borrows the worker's heavy and light parts.
-    pub fn sketch(&self) -> &ElasticWorkerSketch {
+    pub fn sketch(&self) -> &ElasticSketchWorker {
         &self.sketch
     }
 }
@@ -2355,7 +2381,7 @@ impl OctoWorker for ElasticOctoWorker {
         F: FnMut(Self::Delta),
     {
         self.sketch
-            .insert_emit_delta(payload, self.threshold.get(), emit);
+            .update_emit_delta(payload, self.threshold.get(), emit);
     }
 
     /// Ships both halves: residual votes with their resident flow, and every
@@ -2368,18 +2394,18 @@ impl OctoWorker for ElasticOctoWorker {
     }
 }
 
-/// OctoSketch parent wrapping a full-precision `Elastic`.
+/// OctoSketch parent wrapping a full-precision `ElasticSketch`.
 ///
 /// Appendix C splits the two halves: a heavy message is replayed through the
-/// parent's own insertion logic as `Elastic::merge_heavy`, so the arrival
+/// parent's own insertion logic as `ElasticSketch::merge_heavy`, so the arrival
 /// contests the *parent's* bucket and may evict a different flow than it did on
 /// the worker; a light message is an ordinary Count-Min cell delta and is added
 /// to the light layer as-is. A worker's evicted resident arrives keyed and goes
-/// through `Elastic::absorb_evicted`, which is where the parent learns that a
+/// through `ElasticSketch::absorb_evicted`, which is where the parent learns that a
 /// flow it still holds has mass coming through the light layer.
 pub struct ElasticOctoAggregator {
     /// Parent Elastic sketch updated by worker deltas.
-    pub sketch: Elastic,
+    pub sketch: ElasticSketch,
 }
 
 impl ElasticOctoAggregator {
@@ -2387,7 +2413,7 @@ impl ElasticOctoAggregator {
     /// `light_rows` by `light_cols` light layer.
     pub fn new(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self {
         Self {
-            sketch: Elastic::init_with_dimensions(bucket_count, light_rows, light_cols),
+            sketch: ElasticSketch::with_heavy_and_light(bucket_count, light_rows, light_cols),
         }
     }
 }
@@ -2400,9 +2426,9 @@ impl OctoAggregator for ElasticOctoAggregator {
         match delta {
             ElasticDelta::Heavy {
                 key,
-                value,
+                votes,
                 eviction,
-            } => self.sketch.merge_heavy(key, value as i32, eviction),
+            } => self.sketch.merge_heavy(key, votes as i32, eviction),
             ElasticDelta::Evicted { key, votes } => self.sketch.absorb_evicted(key, votes as i32),
             ElasticDelta::Light(delta) => self.sketch.light.apply_delta(delta),
         }
@@ -2413,33 +2439,33 @@ impl OctoAggregator for ElasticOctoAggregator {
 // Plans: geometry plus the preparation that strips the borrow
 // ---------------------------------------------------------------------------
 
-/// Builds `CmOctoWorker`s and prepares their per-row hashes.
+/// Builds `CountMinSketchOctoWorker`s and prepares their per-row hashes.
 #[derive(Clone, Debug)]
-pub struct CmOctoPlan {
+pub struct CountMinSketchOctoPlan {
     rows: usize,
     cols: usize,
     threshold: OctoThreshold,
 }
 
-/// Builds `CountOctoWorker`s and prepares their per-row hashes.
+/// Builds `CountSketchOctoWorker`s and prepares their per-row hashes.
 #[derive(Clone, Debug)]
-pub struct CountOctoPlan {
+pub struct CountSketchOctoPlan {
     rows: usize,
     cols: usize,
     threshold: OctoThreshold,
 }
 
-/// Builds `CmTopKOctoWorker`s; payloads carry the key as well as the hashes.
+/// Builds `CountMinSketchWithHeapOctoWorker`s; payloads carry the key as well as the hashes.
 #[derive(Clone, Debug)]
-pub struct CmTopKOctoPlan {
+pub struct CountMinSketchWithHeapOctoPlan {
     rows: usize,
     cols: usize,
     threshold: OctoThreshold,
 }
 
-/// Builds `CountTopKOctoWorker`s; payloads carry the key as well as the hashes.
+/// Builds `CountSketchWithHeapOctoWorker`s; payloads carry the key as well as the hashes.
 #[derive(Clone, Debug)]
-pub struct CountTopKOctoPlan {
+pub struct CountSketchWithHeapOctoPlan {
     rows: usize,
     cols: usize,
     threshold: OctoThreshold,
@@ -2494,36 +2520,36 @@ macro_rules! counter_plan {
     };
 }
 
-impl CmOctoPlan {
+impl CountMinSketchOctoPlan {
     /// Builds the parent this plan's workers feed.
     ///
     /// Worker and parent geometry are two independent arguments to `run_octo`,
     /// and a mismatch is silent: deltas name rows the parent has, the rows
     /// beyond them stay zero, and Count-Min's min-over-rows estimate is zero
     /// for every key. Building the parent from the plan removes the chance.
-    pub fn aggregator(&self) -> CmOctoAggregator {
-        CmOctoAggregator::new(self.rows, self.cols)
+    pub fn aggregator(&self) -> CountMinSketchOctoAggregator {
+        CountMinSketchOctoAggregator::new(self.rows, self.cols)
     }
 }
 
-impl CountOctoPlan {
-    /// Builds the parent this plan's workers feed. See `CmOctoPlan::aggregator`.
-    pub fn aggregator(&self) -> CountOctoAggregator {
-        CountOctoAggregator::new(self.rows, self.cols)
+impl CountSketchOctoPlan {
+    /// Builds the parent this plan's workers feed. See `CountMinSketchOctoPlan::aggregator`.
+    pub fn aggregator(&self) -> CountSketchOctoAggregator {
+        CountSketchOctoAggregator::new(self.rows, self.cols)
     }
 }
 
-impl CmTopKOctoPlan {
+impl CountMinSketchWithHeapOctoPlan {
     /// Builds the parent this plan's workers feed, tracking `top_k` keys.
-    pub fn aggregator(&self, top_k: usize) -> CmTopKOctoAggregator {
-        CmTopKOctoAggregator::new(self.rows, self.cols, top_k)
+    pub fn aggregator(&self, heap_size: usize) -> CountMinSketchWithHeapOctoAggregator {
+        CountMinSketchWithHeapOctoAggregator::new(self.rows, self.cols, heap_size)
     }
 }
 
-impl CountTopKOctoPlan {
+impl CountSketchWithHeapOctoPlan {
     /// Builds the parent this plan's workers feed, tracking `top_k` keys.
-    pub fn aggregator(&self, top_k: usize) -> CountTopKOctoAggregator {
-        CountTopKOctoAggregator::new(self.rows, self.cols, top_k)
+    pub fn aggregator(&self, heap_size: usize) -> CountSketchWithHeapOctoAggregator {
+        CountSketchWithHeapOctoAggregator::new(self.rows, self.cols, heap_size)
     }
 }
 
@@ -2554,60 +2580,80 @@ impl UnivMonOctoPlan {
     }
 }
 
-counter_plan!(CmOctoPlan, CmOctoWorker, CM_PROMASK);
-counter_plan!(CountOctoPlan, CountOctoWorker, COUNT_PROMASK);
-counter_plan!(CmTopKOctoPlan, CmTopKOctoWorker, CM_PROMASK);
-counter_plan!(CountTopKOctoPlan, CountTopKOctoWorker, COUNT_PROMASK);
+counter_plan!(
+    CountMinSketchOctoPlan,
+    CountMinSketchOctoWorker,
+    OCTO_COUNT_MIN_DEFAULT_THRESHOLD
+);
+counter_plan!(
+    CountSketchOctoPlan,
+    CountSketchOctoWorker,
+    OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD
+);
+counter_plan!(
+    CountMinSketchWithHeapOctoPlan,
+    CountMinSketchWithHeapOctoWorker,
+    OCTO_COUNT_MIN_DEFAULT_THRESHOLD
+);
+counter_plan!(
+    CountSketchWithHeapOctoPlan,
+    CountSketchWithHeapOctoWorker,
+    OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD
+);
 
-impl OctoPlan for CmOctoPlan {
-    type Worker = CmOctoWorker;
+impl OctoPlan for CountMinSketchOctoPlan {
+    type Worker = CountMinSketchOctoWorker;
 
     fn worker(&self, _worker_id: usize) -> Self::Worker {
-        CmOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
+        CountMinSketchOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
     }
 
     fn prepare(&self, input: &DataInput<'_>) -> RowHashes {
-        CmWorkerSketch::hashes(self.rows, input)
+        CountMinSketchWorker::hashes(self.rows, input)
     }
 }
 
-impl OctoPlan for CountOctoPlan {
-    type Worker = CountOctoWorker;
+impl OctoPlan for CountSketchOctoPlan {
+    type Worker = CountSketchOctoWorker;
 
     fn worker(&self, _worker_id: usize) -> Self::Worker {
-        CountOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
+        CountSketchOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
     }
 
     fn prepare(&self, input: &DataInput<'_>) -> RowHashes {
-        CmWorkerSketch::hashes(self.rows, input)
+        CountMinSketchWorker::hashes(self.rows, input)
     }
 }
 
-impl OctoPlan for CmTopKOctoPlan {
-    type Worker = CmTopKOctoWorker;
+impl OctoPlan for CountMinSketchWithHeapOctoPlan {
+    type Worker = CountMinSketchWithHeapOctoWorker;
 
     fn worker(&self, _worker_id: usize) -> Self::Worker {
-        CmTopKOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
+        CountMinSketchWithHeapOctoWorker::with_threshold(
+            self.rows,
+            self.cols,
+            self.threshold.clone(),
+        )
     }
 
     fn prepare(&self, input: &DataInput<'_>) -> KeyedHashes {
         KeyedHashes {
-            hashes: CmWorkerSketch::hashes(self.rows, input),
+            hashes: CountMinSketchWorker::hashes(self.rows, input),
             key: input_to_owned(input),
         }
     }
 }
 
-impl OctoPlan for CountTopKOctoPlan {
-    type Worker = CountTopKOctoWorker;
+impl OctoPlan for CountSketchWithHeapOctoPlan {
+    type Worker = CountSketchWithHeapOctoWorker;
 
     fn worker(&self, _worker_id: usize) -> Self::Worker {
-        CountTopKOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
+        CountSketchWithHeapOctoWorker::with_threshold(self.rows, self.cols, self.threshold.clone())
     }
 
     fn prepare(&self, input: &DataInput<'_>) -> KeyedHashes {
         KeyedHashes {
-            hashes: CmWorkerSketch::hashes(self.rows, input),
+            hashes: CountMinSketchWorker::hashes(self.rows, input),
             key: input_to_owned(input),
         }
     }
@@ -2617,7 +2663,7 @@ impl HllOctoPlan {
     /// Creates a plan at the default threshold, which promotes every register
     /// improvement and leaves the parent exact.
     pub fn new() -> Self {
-        Self::with_threshold(HLL_PROMASK)
+        Self::with_threshold(OCTO_HLL_DEFAULT_THRESHOLD)
     }
 
     /// Creates a plan at a custom threshold exponent.
@@ -2650,7 +2696,7 @@ impl OctoPlan for HllOctoPlan {
 impl DdOctoPlan {
     /// Creates a plan at the DDSketch default threshold.
     pub fn new(alpha: f64) -> Self {
-        Self::with_threshold(alpha, OctoThreshold::new(DD_PROMASK))
+        Self::with_threshold(alpha, OctoThreshold::new(OCTO_DDSKETCH_DEFAULT_THRESHOLD))
     }
 
     /// Creates a plan whose workers share `threshold`.
@@ -2693,7 +2739,7 @@ pub struct CocoOctoPlan {
 impl CocoOctoPlan {
     /// Creates a plan at the CocoSketch default threshold.
     pub fn new(w: usize, d: usize) -> Self {
-        Self::with_threshold(w, d, OctoThreshold::new(COCO_PROMASK))
+        Self::with_threshold(w, d, OctoThreshold::new(OCTO_COCO_DEFAULT_THRESHOLD))
     }
 
     /// Creates a plan whose workers share `threshold`.
@@ -2709,7 +2755,7 @@ impl CocoOctoPlan {
     /// As [`Self::new`], with every worker and the aggregator drawing from its
     /// own generator derived from `seed` and its worker id.
     pub fn with_seed(w: usize, d: usize, seed: u64) -> Self {
-        Self::with_threshold_and_seed(w, d, OctoThreshold::new(COCO_PROMASK), seed)
+        Self::with_threshold_and_seed(w, d, OctoThreshold::new(OCTO_COCO_DEFAULT_THRESHOLD), seed)
     }
 
     /// As [`Self::with_threshold`], seeded as [`Self::with_seed`].
@@ -2732,7 +2778,7 @@ impl CocoOctoPlan {
         &self.threshold
     }
 
-    /// Builds the parent this plan's workers feed. See `CmOctoPlan::aggregator`.
+    /// Builds the parent this plan's workers feed. See `CountMinSketchOctoPlan::aggregator`.
     pub fn aggregator(&self) -> CocoOctoAggregator {
         match self.seed {
             Some(seed) => CocoOctoAggregator::with_seed(self.w, self.d, derive_seed(seed, 0)),
@@ -2784,7 +2830,7 @@ impl ElasticOctoPlan {
             bucket_count,
             light_rows,
             light_cols,
-            OctoThreshold::new(ELASTIC_PROMASK),
+            OctoThreshold::new(OCTO_ELASTIC_DEFAULT_THRESHOLD),
         )
     }
 
@@ -2838,7 +2884,12 @@ impl OctoPlan for ElasticOctoPlan {
 impl UnivMonOctoPlan {
     /// Creates a plan at the UnivMon default threshold.
     pub fn new(rows: usize, cols: usize, layers: usize) -> Self {
-        Self::with_threshold(rows, cols, layers, OctoThreshold::new(UNIVMON_PROMASK))
+        Self::with_threshold(
+            rows,
+            cols,
+            layers,
+            OctoThreshold::new(OCTO_UNIVMON_DEFAULT_THRESHOLD),
+        )
     }
 
     /// Creates a plan whose workers share `threshold`.
@@ -2875,12 +2926,15 @@ impl OctoPlan for UnivMonOctoPlan {
         )
     }
 
-    fn prepare(&self, input: &DataInput<'_>) -> UnivMonInput {
+    fn prepare(&self, input: &DataInput<'_>) -> KeyedLayerHashes {
         // Only the layers this key actually reaches get hashed. Layer depth is
         // geometric, so that is nearly always one or two.
-        let bottom = bottom_layer_for_hash(hash64_seeded(BOTTOM_LAYER_FINDER, input), self.layers);
-        UnivMonInput {
-            bottom,
+        let bottom = UnivMon::bottom_layer_for_hash(
+            hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, input),
+            self.layers,
+        );
+        KeyedLayerHashes {
+            bottom_layer: bottom,
             layer_hashes: (0..=bottom).map(|l| hash128_seeded(l, input)).collect(),
             key: input_to_owned(input),
         }
@@ -2910,7 +2964,7 @@ where
 {
     let mut runtime = OctoRuntime::new(config, plan, parent_factory);
     for input in inputs {
-        runtime.insert(input.clone());
+        runtime.update(input.clone());
     }
     runtime.finish()
 }
@@ -2921,19 +2975,23 @@ mod worker_tests {
 
     #[test]
     fn compact_worker_clears_the_counter_it_promotes() {
-        let mut worker = CmWorkerSketch::new(3, 64);
+        let mut worker = CountMinSketchWorker::new(3, 64);
         let key = DataInput::U64(42);
-        let mut deltas: Vec<CmDelta> = Vec::new();
+        let mut deltas: Vec<CountMinSketchCellDelta> = Vec::new();
 
-        for _ in 0..(CM_PROMASK - 1) {
-            worker.insert_emit_delta(&key, CM_PROMASK, &mut |d| deltas.push(d));
+        for _ in 0..(OCTO_COUNT_MIN_DEFAULT_THRESHOLD - 1) {
+            worker.update_emit_delta(&key, OCTO_COUNT_MIN_DEFAULT_THRESHOLD, &mut |d| {
+                deltas.push(d)
+            });
         }
         assert!(deltas.is_empty(), "should not promote before the threshold");
 
-        worker.insert_emit_delta(&key, CM_PROMASK, &mut |d| deltas.push(d));
+        worker.update_emit_delta(&key, OCTO_COUNT_MIN_DEFAULT_THRESHOLD, &mut |d| {
+            deltas.push(d)
+        });
         assert_eq!(deltas.len(), 3, "one promotion per row");
         for d in &deltas {
-            assert_eq!(d.value, CM_PROMASK);
+            assert_eq!(d.count, OCTO_COUNT_MIN_DEFAULT_THRESHOLD);
         }
         assert!(
             worker.residual().iter().all(|&c| c == 0),
@@ -2944,18 +3002,18 @@ mod worker_tests {
     #[test]
     fn compact_worker_uses_a_quarter_of_the_counter_memory() {
         let (rows, cols) = (3usize, 4096usize);
-        let compact = CmWorkerSketch::new(rows, cols).counter_bytes();
+        let compact = CountMinSketchWorker::new(rows, cols).counter_bytes();
         let full = rows * cols * std::mem::size_of::<i32>();
         assert_eq!(compact * 4, full, "one byte per counter instead of four");
     }
 
     #[test]
     fn compact_worker_honours_a_custom_threshold() {
-        let mut worker = CmWorkerSketch::new(1, 16);
+        let mut worker = CountMinSketchWorker::new(1, 16);
         let key = DataInput::U64(7);
         let mut promotions = 0usize;
         for _ in 0..100 {
-            worker.insert_emit_delta(&key, 10, &mut |_| promotions += 1);
+            worker.update_emit_delta(&key, 10, &mut |_| promotions += 1);
         }
         assert_eq!(
             promotions, 10,
@@ -2965,29 +3023,31 @@ mod worker_tests {
 
     #[test]
     fn compact_count_worker_promotes_on_magnitude_and_clears() {
-        let mut worker = CountWorkerSketch::new(3, 64);
+        let mut worker = CountSketchWorker::new(3, 64);
         let key = DataInput::U64(99);
-        let mut deltas: Vec<CountDelta> = Vec::new();
+        let mut deltas: Vec<CountSketchCellDelta> = Vec::new();
         for _ in 0..200 {
-            worker.insert_emit_delta(&key, COUNT_PROMASK, &mut |d| deltas.push(d));
+            worker.update_emit_delta(&key, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, &mut |d| {
+                deltas.push(d)
+            });
         }
         assert!(!deltas.is_empty());
         for d in &deltas {
-            assert_eq!(d.value.unsigned_abs(), COUNT_PROMASK);
+            assert_eq!(d.count.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD);
         }
         assert!(worker.residual().iter().all(|&c| c.unsigned_abs() < 31));
     }
 
     #[test]
     fn keyed_deltas_carry_the_key_that_triggered_them() {
-        let mut worker = CmWorkerSketch::new(2, 8);
+        let mut worker = CountMinSketchWorker::new(2, 8);
         let key = DataInput::Str("flow-a");
-        let mut keyed: Vec<KeyedCmDelta> = Vec::new();
-        for _ in 0..CM_PROMASK {
-            worker.insert_hashes_emit_keyed_delta(
-                &CmWorkerSketch::hashes(2, &key),
+        let mut keyed: Vec<KeyedCountMinSketchCellDelta> = Vec::new();
+        for _ in 0..OCTO_COUNT_MIN_DEFAULT_THRESHOLD {
+            worker.update_emit_keyed_delta_with_row_hashes(
+                &CountMinSketchWorker::hashes(2, &key),
                 &input_to_owned(&key),
-                CM_PROMASK,
+                OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
                 &mut |d| keyed.push(d),
             );
         }
@@ -2999,13 +3059,15 @@ mod worker_tests {
 
     #[test]
     fn dd_worker_promotes_and_clears_a_bucket() {
-        let mut worker = DdWorkerSketch::new(0.01);
-        let mut deltas: Vec<DdDelta> = Vec::new();
-        for _ in 0..CM_PROMASK {
-            worker.add_emit_delta(42.0, CM_PROMASK, &mut |d| deltas.push(d));
+        let mut worker = DdSketchWorker::new(0.01);
+        let mut deltas: Vec<DdSketchBucketDelta> = Vec::new();
+        for _ in 0..OCTO_COUNT_MIN_DEFAULT_THRESHOLD {
+            worker.add_emit_delta(42.0, OCTO_COUNT_MIN_DEFAULT_THRESHOLD, &mut |d| {
+                deltas.push(d)
+            });
         }
         assert_eq!(deltas.len(), 1, "one promotion per tau samples");
-        assert_eq!(deltas[0].value as u32, CM_PROMASK);
+        assert_eq!(deltas[0].count as u32, OCTO_COUNT_MIN_DEFAULT_THRESHOLD);
         assert!(
             worker.residual().is_empty(),
             "the promoted bucket must be cleared"
@@ -3014,7 +3076,7 @@ mod worker_tests {
 
     #[test]
     fn dd_worker_drops_what_the_parent_would_drop() {
-        let mut worker = DdWorkerSketch::new(0.01);
+        let mut worker = DdSketchWorker::new(0.01);
         let mut promoted = 0usize;
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             for _ in 0..1_000 {
@@ -3027,15 +3089,17 @@ mod worker_tests {
     #[test]
     fn dd_promotion_bounds_the_quantile_rank_error_by_what_it_holds_back() {
         let alpha = 0.01;
-        let mut worker = DdWorkerSketch::new(alpha);
-        let mut parent = DDSketch::new(alpha);
+        let mut worker = DdSketchWorker::new(alpha);
+        let mut parent = DdSketch::new(alpha);
         let mut exact: Vec<f64> = Vec::new();
 
         let n = 200_000u64;
         for i in 1..=n {
             let value = 1.0 + (i as f64 * 7.0) % 999.0;
             exact.push(value);
-            worker.add_emit_delta(value, DD_PROMASK, &mut |d| parent.apply_delta(d));
+            worker.add_emit_delta(value, OCTO_DDSKETCH_DEFAULT_THRESHOLD, &mut |d| {
+                parent.apply_delta(d)
+            });
         }
         exact.sort_by(f64::total_cmp);
 
@@ -3050,7 +3114,7 @@ mod worker_tests {
         let rank_slack = worker.held_back() as f64 / n as f64;
         assert!(
             rank_slack < 0.05,
-            "a threshold of {DD_PROMASK} held back {rank_slack:.3} of the stream"
+            "a threshold of {OCTO_DDSKETCH_DEFAULT_THRESHOLD} held back {rank_slack:.3} of the stream"
         );
 
         for q in [0.1, 0.5, 0.9, 0.99] {
@@ -3074,7 +3138,7 @@ mod worker_tests {
         let n = 20_000u64;
         let mut held = Vec::new();
         for threshold in [2u32, 8, 31] {
-            let mut worker = DdWorkerSketch::new(alpha);
+            let mut worker = DdSketchWorker::new(alpha);
             for i in 1..=n {
                 worker.add_emit_delta(1.0 + (i as f64 * 7.0) % 999.0, threshold, &mut |_| {});
             }
@@ -3089,7 +3153,7 @@ mod worker_tests {
     #[test]
     #[should_panic(expected = "exceeds the 128-bit hash budget")]
     fn a_univmon_worker_refuses_a_geometry_that_outruns_the_hash() {
-        L2hhWorkerSketch::new(13, 2048, 0);
+        CountSketchWithL2NormWorker::new(13, 2048, 0);
     }
 
     /// 11 rows x (11 column bits + 1 sign bit) = 132: the column fields of
@@ -3097,15 +3161,15 @@ mod worker_tests {
     #[test]
     #[should_panic(expected = "exceeds the 128-bit hash budget")]
     fn a_univmon_worker_refuses_column_bits_that_reach_the_sign_bits() {
-        L2hhWorkerSketch::new(11, 2048, 0);
+        CountSketchWithL2NormWorker::new(11, 2048, 0);
     }
 
     #[test]
     fn the_widest_accepted_univmon_geometry_still_addresses_distinct_rows() {
         // 10 rows x (11 column bits + 1 sign bit) = 120, inside the budget.
-        let mut worker = L2hhWorkerSketch::new(10, 2048, 0);
+        let mut worker = CountSketchWithL2NormWorker::new(10, 2048, 0);
         let mut cells: Vec<(u32, u32)> = Vec::new();
-        worker.insert_emit_delta(&DataInput::U64(7), 1, &mut |d| cells.push((d.row, d.col)));
+        worker.update_emit_delta(&DataInput::U64(7), 1, &mut |d| cells.push((d.row, d.col)));
         assert_eq!(cells.len(), 10, "every row promotes at threshold 1");
         let rows: std::collections::HashSet<u32> = cells.iter().map(|(r, _)| *r).collect();
         assert_eq!(rows.len(), 10, "each row must land on its own index");
@@ -3116,13 +3180,13 @@ mod worker_tests {
         let tau = 200u32;
         let key = DataInput::U64(9);
 
-        let mut compact = CountWorkerSketch::new(1, 64);
+        let mut compact = CountSketchWorker::new(1, 64);
         let mut compact_values: Vec<i32> = Vec::new();
-        let mut full = Count::<Vector2D<i32>, RegularPath>::with_dimensions(1, 64);
+        let mut full = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(1, 64);
         let mut full_values: Vec<i32> = Vec::new();
         for _ in 0..400 {
-            compact.insert_emit_delta(&key, tau, &mut |d| compact_values.push(d.value));
-            full.insert_emit_delta_with_threshold(&key, tau, &mut |d| full_values.push(d.value));
+            compact.update_emit_delta(&key, tau, &mut |d| compact_values.push(d.count));
+            full.update_emit_delta_with_threshold(&key, tau, &mut |d| full_values.push(d.count));
         }
 
         assert!(!compact_values.is_empty(), "tau must be reachable at all");
@@ -3131,7 +3195,7 @@ mod worker_tests {
             "the compact worker and the full sketch must promote identically"
         );
         for value in &compact_values {
-            assert_eq!(value.unsigned_abs(), MAX_PROMASK);
+            assert_eq!(value.unsigned_abs(), OCTO_MAX_PROMOTION_THRESHOLD);
         }
     }
 
@@ -3160,7 +3224,7 @@ mod worker_tests {
             let mut parent = HyperLogLog::<Classic>::default();
             let mut promoted = 0usize;
             for i in 0..truth {
-                child.insert_emit_delta_with_threshold(&DataInput::U64(i), threshold, &mut |d| {
+                child.update_emit_delta_with_threshold(&DataInput::U64(i), threshold, &mut |d| {
                     promoted += 1;
                     parent.apply_delta(d);
                 });
@@ -3170,7 +3234,7 @@ mod worker_tests {
 
         let mut reference = HyperLogLog::<Classic>::default();
         for i in 0..truth {
-            reference.insert(&DataInput::U64(i));
+            reference.update(&DataInput::U64(i));
         }
         assert_eq!(
             sweep[0].2,
@@ -3203,29 +3267,37 @@ mod worker_tests {
         // The worker's index space is bounded by its own alpha; a delta from a
         // much finer sketch names an index this store cannot hold, and growing
         // the dense array across that gap would allocate gigabytes.
-        let mut parent = DDSketch::new(0.01);
+        let mut parent = DdSketch::new(0.01);
         parent.add(&50.0);
-        let before = parent.store_counts().len();
-        parent.apply_delta(DdDelta {
-            store: Default::default(),
+        let before = parent.positive_store_counts().len();
+        parent.apply_delta(DdSketchBucketDelta {
+            sign: Default::default(),
             index: i32::MAX / 2,
-            value: 4,
+            count: 4,
         });
-        parent.apply_delta(DdDelta {
-            store: Default::default(),
+        parent.apply_delta(DdSketchBucketDelta {
+            sign: Default::default(),
             index: i32::MIN / 2,
-            value: 4,
+            count: 4,
         });
-        assert_eq!(parent.store_counts().len(), before, "store must not grow");
+        assert_eq!(
+            parent.positive_store_counts().len(),
+            before,
+            "store must not grow"
+        );
         assert_eq!(parent.get_count(), 1, "out-of-range deltas are dropped");
     }
 
     #[test]
     #[should_panic(expected = "one hash per row")]
     fn a_count_worker_refuses_hashes_built_for_a_different_geometry() {
-        let mut worker = CountWorkerSketch::new(4, 16);
-        let hashes = CmWorkerSketch::hashes(2, &DataInput::U64(1));
-        worker.insert_hashes_emit_delta(&hashes, COUNT_PROMASK, &mut |_| {});
+        let mut worker = CountSketchWorker::new(4, 16);
+        let hashes = CountMinSketchWorker::hashes(2, &DataInput::U64(1));
+        worker.update_emit_delta_with_row_hashes(
+            &hashes,
+            OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
+            &mut |_| {},
+        );
     }
 
     #[test]
@@ -3235,9 +3307,13 @@ mod worker_tests {
         // fail loudly. Silently using the rows it was given would leave the rest
         // at zero, and Count-Min's min-over-rows estimate is then zero for
         // every key.
-        let mut worker = CmWorkerSketch::new(4, 16);
-        let hashes = CmWorkerSketch::hashes(2, &DataInput::U64(1));
-        worker.insert_hashes_emit_delta(&hashes, CM_PROMASK, &mut |_| {});
+        let mut worker = CountMinSketchWorker::new(4, 16);
+        let hashes = CountMinSketchWorker::hashes(2, &DataInput::U64(1));
+        worker.update_emit_delta_with_row_hashes(
+            &hashes,
+            OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
+            &mut |_| {},
+        );
     }
 
     /// Deltas each worker emitted, and the parent table as `(key, val)` per bucket.
@@ -3254,8 +3330,8 @@ mod worker_tests {
                 parent.apply(d);
             });
         }
-        let table = (0..parent.sketch.d)
-            .flat_map(|r| (0..parent.sketch.w).map(move |c| (r, c)))
+        let table = (0..parent.sketch.rows)
+            .flat_map(|r| (0..parent.sketch.cols).map(move |c| (r, c)))
             .map(|(r, c)| {
                 let bucket = &parent.sketch.table[r][c];
                 (bucket.full_key.clone(), bucket.val)
@@ -3292,19 +3368,19 @@ mod worker_tests {
 
     #[test]
     fn coco_worker_promotes_the_key_its_bucket_holds_and_clears_it() {
-        let mut worker = CocoWorkerSketch::new(64, 2);
+        let mut worker = CocoSketchWorker::new(64, 2);
         let key = "flow::coco";
         let mut deltas: Vec<CocoDelta> = Vec::new();
 
-        for _ in 0..(COCO_PROMASK - 1) {
-            worker.insert_emit_delta(key, COCO_PROMASK, &mut |d| deltas.push(d));
+        for _ in 0..(OCTO_COCO_DEFAULT_THRESHOLD - 1) {
+            worker.update_emit_delta(key, OCTO_COCO_DEFAULT_THRESHOLD, &mut |d| deltas.push(d));
         }
         assert!(deltas.is_empty(), "should not promote before the threshold");
 
-        worker.insert_emit_delta(key, COCO_PROMASK, &mut |d| deltas.push(d));
+        worker.update_emit_delta(key, OCTO_COCO_DEFAULT_THRESHOLD, &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 1, "one bucket, one promotion");
         assert_eq!(deltas[0].key, key, "the message carries the bucket's key");
-        assert_eq!(deltas[0].value as u32, COCO_PROMASK);
+        assert_eq!(deltas[0].count as u32, OCTO_COCO_DEFAULT_THRESHOLD);
         assert!(
             worker.residual().iter().all(|&c| c == 0),
             "§4.4 clears the bucket it promotes"
@@ -3315,13 +3391,15 @@ mod worker_tests {
     fn coco_promotion_conserves_the_inserted_mass() {
         // Every insert lands in exactly one bucket, so what the parent received
         // plus what the worker still holds is the whole stream.
-        let mut worker = CocoWorkerSketch::new(16, 2);
+        let mut worker = CocoSketchWorker::new(16, 2);
         let mut parent = CocoOctoAggregator::new(16, 2);
         let inserted = 5_000u64;
         for i in 0..inserted {
-            worker.insert_emit_delta(&format!("flow::{}", i % 200), COCO_PROMASK, &mut |d| {
-                parent.apply(d)
-            });
+            worker.update_emit_delta(
+                &format!("flow::{}", i % 200),
+                OCTO_COCO_DEFAULT_THRESHOLD,
+                &mut |d| parent.apply(d),
+            );
         }
         let held: u64 = worker.residual().iter().map(|&c| c as u64).sum();
         let promoted: u64 = parent.sketch.recorded_flows().map(|(_, v)| v).sum();
@@ -3337,7 +3415,7 @@ mod worker_tests {
 
     #[test]
     fn elastic_worker_promotes_each_half_on_its_own_terms() {
-        let mut worker = ElasticWorkerSketch::new(1, 2, 64);
+        let mut worker = ElasticSketchWorker::new(1, 2, 64);
         let mut heavy = 0usize;
         let mut light = 0usize;
         let mut evicted = 0usize;
@@ -3346,7 +3424,7 @@ mod worker_tests {
         // takeover hands the loser over keyed.
         for i in 0..1_000u32 {
             let key = if i % 2 == 0 { "flow::a" } else { "flow::b" };
-            worker.insert_emit_delta(key, ELASTIC_PROMASK, &mut |d| match d {
+            worker.update_emit_delta(key, OCTO_ELASTIC_DEFAULT_THRESHOLD, &mut |d| match d {
                 ElasticDelta::Heavy { .. } => heavy += 1,
                 ElasticDelta::Evicted { .. } => evicted += 1,
                 ElasticDelta::Light(_) => light += 1,
@@ -3365,7 +3443,10 @@ mod worker_tests {
         assert_eq!(threshold_for_error(1e-9, 1_000.0, 1), 1, "never below one");
         // An accuracy target loose enough to want a threshold wider than a
         // one-byte worker counter gets the widest one that fits.
-        assert_eq!(threshold_for_error(0.001, 1_000_000.0, 1), MAX_PROMASK);
+        assert_eq!(
+            threshold_for_error(0.001, 1_000_000.0, 1),
+            OCTO_MAX_PROMOTION_THRESHOLD
+        );
     }
 
     #[test]
@@ -3379,7 +3460,7 @@ mod worker_tests {
         clone.set(u32::MAX);
         assert_eq!(
             shared.get(),
-            MAX_PROMASK,
+            OCTO_MAX_PROMOTION_THRESHOLD,
             "the ceiling is a signed one-byte worker counter"
         );
     }
@@ -3388,9 +3469,9 @@ mod worker_tests {
     fn hll_threshold_zero_promotes_every_improvement() {
         let mut child = HyperLogLog::<Classic>::default();
         let mut deltas = 0usize;
-        child.insert_emit_delta_with_threshold(&DataInput::U64(1), 0, &mut |_| deltas += 1);
+        child.update_emit_delta_with_threshold(&DataInput::U64(1), 0, &mut |_| deltas += 1);
         assert_eq!(deltas, 1);
-        child.insert_emit_delta_with_threshold(&DataInput::U64(1), 0, &mut |_| deltas += 1);
+        child.update_emit_delta_with_threshold(&DataInput::U64(1), 0, &mut |_| deltas += 1);
         assert_eq!(deltas, 1, "a duplicate cannot improve a register");
     }
 
@@ -3402,10 +3483,10 @@ mod worker_tests {
         let mut a = HyperLogLog::<Classic>::default();
         let mut b = HyperLogLog::<Classic>::default();
         for i in 0..n {
-            a.insert_emit_delta_with_threshold(&DataInput::U64(i), 0, &mut |_| {
+            a.update_emit_delta_with_threshold(&DataInput::U64(i), 0, &mut |_| {
                 promoted_at_zero += 1
             });
-            b.insert_emit_delta_with_threshold(&DataInput::U64(i), 4, &mut |_| {
+            b.update_emit_delta_with_threshold(&DataInput::U64(i), 4, &mut |_| {
                 promoted_at_four += 1
             });
         }
@@ -3436,20 +3517,24 @@ mod runtime_tests {
         let n = 100_000u64;
         let inputs: Vec<DataInput<'_>> = (0..n).map(|i| DataInput::U64(i % 1024)).collect();
 
-        let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+        let mut reference =
+            CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
 
-        let result = run_octo(&inputs, &config(4), CmOctoPlan::new(rows, cols), || {
-            CmOctoAggregator::new(rows, cols)
-        });
+        let result = run_octo(
+            &inputs,
+            &config(4),
+            CountMinSketchOctoPlan::new(rows, cols),
+            || CountMinSketchOctoAggregator::new(rows, cols),
+        );
 
         // A counter is shared by whatever flows hash into it, and each worker
         // may hold back up to tau of its own share, so the provable ceiling is
         // k*tau whatever the partition. Hash partitioning bounds the *queried
         // flow's own* held-back count at tau, not the counter's.
-        let ceiling = 4 * CM_PROMASK as i32;
+        let ceiling = 4 * OCTO_COUNT_MIN_DEFAULT_THRESHOLD as i32;
         for key_val in 0u64..1024 {
             let key = DataInput::U64(key_val);
             let deficit = reference.estimate(&key) - result.parent.sketch.estimate(&key);
@@ -3466,7 +3551,7 @@ mod runtime_tests {
         let inputs: Vec<DataInput<'_>> = (0..n).map(DataInput::U64).collect();
         let mut reference = HyperLogLog::<Classic>::default();
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
 
         let result = run_octo(
@@ -3493,7 +3578,7 @@ mod runtime_tests {
         });
         // One key, many inserts: a hash partition must pile them all on one worker.
         for _ in 0..1_000 {
-            runtime.insert(DataInput::U64(4_242));
+            runtime.update(DataInput::U64(4_242));
         }
         let loads = runtime.finish().parent.loads;
         assert_eq!(loads.iter().filter(|&&l| l > 0).count(), 1, "{loads:?}");
@@ -3511,7 +3596,7 @@ mod runtime_tests {
             loads: vec![0; workers],
         });
         for i in 0..10u64 {
-            runtime.insert(DataInput::U64(i));
+            runtime.update(DataInput::U64(i));
         }
         assert_eq!(runtime.finish().parent.loads, vec![4, 3, 3]);
     }
@@ -3596,10 +3681,10 @@ mod runtime_tests {
         let stream: Vec<u64> = (0..4_000u64).map(|i| i % 8).collect();
         let mut volumes = Vec::new();
         for tau in [4u32, 64] {
-            let mut worker = CmWorkerSketch::new(rows, cols);
+            let mut worker = CountMinSketchWorker::new(rows, cols);
             let mut promoted = 0usize;
             for key in &stream {
-                worker.insert_emit_delta(&DataInput::U64(*key), tau, &mut |_| promoted += 1);
+                worker.update_emit_delta(&DataInput::U64(*key), tau, &mut |_| promoted += 1);
             }
             volumes.push((tau, promoted));
         }
@@ -3636,7 +3721,7 @@ mod runtime_tests {
             alpha: 0.25,
             interval: Duration::ZERO,
             min_threshold: 1,
-            max_threshold: MAX_PROMASK,
+            max_threshold: OCTO_MAX_PROMOTION_THRESHOLD,
         };
         let threshold = OctoThreshold::new(31);
         adjust_against_queue_len(&settings, &threshold, 500, 8);
@@ -3654,7 +3739,7 @@ mod runtime_tests {
             alpha: 0.25,
             interval: Duration::ZERO,
             min_threshold: 4,
-            max_threshold: MAX_PROMASK,
+            max_threshold: OCTO_MAX_PROMOTION_THRESHOLD,
         };
         let threshold = OctoThreshold::new(31);
         adjust_against_queue_len(&settings, &threshold, 0, 64);
@@ -3729,8 +3814,8 @@ mod runtime_tests {
         let result = run_octo(
             &inputs,
             &cfg,
-            CmOctoPlan::with_threshold(rows, cols, threshold.clone()),
-            || CmOctoAggregator::new(rows, cols),
+            CountMinSketchOctoPlan::with_threshold(rows, cols, threshold.clone()),
+            || CountMinSketchOctoAggregator::new(rows, cols),
         );
 
         // Whether tau moves, and how far, depends on live queue occupancy, so
@@ -3742,14 +3827,16 @@ mod runtime_tests {
             (settings.min_threshold..=settings.max_threshold).contains(&settled),
             "tau {settled} left the configured band"
         );
-        let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+        let mut reference =
+            CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
         let key = DataInput::U64(0);
         let deficit = reference.estimate(&key) - result.parent.sketch.estimate(&key);
         assert!(
-            deficit >= 0 && deficit <= (cfg.num_workers as i32) * MAX_PROMASK as i32,
+            deficit >= 0
+                && deficit <= (cfg.num_workers as i32) * OCTO_MAX_PROMOTION_THRESHOLD as i32,
             "a controller run must still leave the parent within k*tau: deficit {deficit}"
         );
     }
@@ -3768,9 +3855,12 @@ mod runtime_tests {
             inputs.push(DataInput::U64(i));
         }
 
-        let result = run_octo(&inputs, &config(4), CmTopKOctoPlan::new(rows, cols), || {
-            CmTopKOctoAggregator::new(rows, cols, top_k)
-        });
+        let result = run_octo(
+            &inputs,
+            &config(4),
+            CountMinSketchWithHeapOctoPlan::new(rows, cols),
+            || CountMinSketchWithHeapOctoAggregator::new(rows, cols, top_k),
+        );
 
         let heap = result.parent.sketch.heap();
         assert!(!heap.is_empty(), "the aggregator must have built a heap");
@@ -3792,14 +3882,14 @@ mod runtime_tests {
         // Worker and parent geometry are separate arguments and a mismatch is
         // silent: every delta names a row the parent has, the rows past the
         // worker's never receive one, and min-over-rows is zero for every key.
-        // `CmOctoPlan::aggregator` is the way not to hit this; this pins the
+        // `CountMinSketchOctoPlan::aggregator` is the way not to hit this; this pins the
         // hazard so a future check has to update the test rather than pass
         // quietly.
         let inputs: Vec<DataInput<'_>> = (0..40_000u64).map(|i| DataInput::U64(i % 64)).collect();
-        let plan = CmOctoPlan::new(3, 1024);
+        let plan = CountMinSketchOctoPlan::new(3, 1024);
 
         let mismatched = run_octo(&inputs, &config(4), plan.clone(), || {
-            CmOctoAggregator::new(5, 1024)
+            CountMinSketchOctoAggregator::new(5, 1024)
         });
         assert_eq!(
             mismatched.parent.sketch.estimate(&DataInput::U64(0)),
@@ -3823,7 +3913,7 @@ mod runtime_tests {
         // are collision-free, so the geometry is checked here rather than
         // assumed.
         let (rows, cols, top_k) = (3usize, 1024usize, 32usize);
-        let tau = CM_PROMASK;
+        let tau = OCTO_COUNT_MIN_DEFAULT_THRESHOLD;
         let keys: Vec<u64> = (0..20).collect();
 
         let mut occupied: std::collections::HashSet<(usize, usize, usize)> =
@@ -3831,7 +3921,10 @@ mod runtime_tests {
         for key in &keys {
             let input = DataInput::U64(*key);
             let worker = (hash64_seeded(0, &input) % 4) as usize;
-            for (row, hashed) in CmWorkerSketch::hashes(rows, &input).iter().enumerate() {
+            for (row, hashed) in CountMinSketchWorker::hashes(rows, &input)
+                .iter()
+                .enumerate()
+            {
                 let col = ((hashed & LOWER_32_MASK) as usize) % cols;
                 assert!(
                     occupied.insert((worker, row, col)),
@@ -3848,7 +3941,7 @@ mod runtime_tests {
                     inputs.push(DataInput::U64(*key));
                 }
             }
-            let plan = CmTopKOctoPlan::new(rows, cols);
+            let plan = CountMinSketchWithHeapOctoPlan::new(rows, cols);
             run_octo(&inputs, &config(4), plan.clone(), || plan.aggregator(top_k))
                 .parent
                 .sketch
@@ -3891,8 +3984,8 @@ mod runtime_tests {
         let result = run_octo(
             &inputs,
             &config(4),
-            CountTopKOctoPlan::new(rows, cols),
-            || CountTopKOctoAggregator::new(rows, cols, top_k),
+            CountSketchWithHeapOctoPlan::new(rows, cols),
+            || CountSketchWithHeapOctoAggregator::new(rows, cols, top_k),
         );
         for hot in 0..3u64 {
             assert!(
@@ -3962,7 +4055,7 @@ mod runtime_tests {
         let result = run_octo(&inputs, &config(1), plan.clone(), || plan.aggregator(heap));
 
         let deepest = layers - 1;
-        let L2HH::COUNT(inner) = &result.parent.sketch.l2_sketch_layers[deepest];
+        let L2HH::COUNT(inner) = &result.parent.sketch.layer_sketches[deepest];
         let nonzero = (0..inner.rows())
             .flat_map(|r| (0..inner.cols()).map(move |c| (r, c)))
             .filter(|(r, c)| inner.as_storage().query_one_counter(*r, *c) != 0)
@@ -4005,20 +4098,20 @@ mod runtime_tests {
         // sending, so the aggregator's total trails by whatever arrived after
         // each worker's last promotion - never overshoots.
         assert!(
-            univmon.bucket_size <= inputs.len(),
+            univmon.total_weight <= inputs.len(),
             "reported weight {} exceeds the stream",
-            univmon.bucket_size
+            univmon.total_weight
         );
         assert!(
-            univmon.bucket_size as f64 > inputs.len() as f64 * 0.9,
+            univmon.total_weight as f64 > inputs.len() as f64 * 0.9,
             "reported weight {} trails the stream of {} by too much",
-            univmon.bucket_size,
+            univmon.total_weight,
             inputs.len()
         );
 
         for hot in 0..5u64 {
             assert!(
-                univmon.hh_layers[0].find(&DataInput::U64(hot)).is_some(),
+                univmon.layer_heaps[0].find(&DataInput::U64(hot)).is_some(),
                 "heavy hitter {hot} missing from the aggregator's layer-0 heap"
             );
         }
@@ -4034,15 +4127,19 @@ mod runtime_tests {
         let inputs: Vec<DataInput<'_>> = (0..30_000u64).map(|i| DataInput::U64(i % 1024)).collect();
         let cfg = config(4);
 
-        let batch = run_octo(&inputs, &cfg, CmOctoPlan::new(rows, cols), || {
-            CmOctoAggregator::new(rows, cols)
-        });
+        let batch = run_octo(
+            &inputs,
+            &cfg,
+            CountMinSketchOctoPlan::new(rows, cols),
+            || CountMinSketchOctoAggregator::new(rows, cols),
+        );
 
-        let mut runtime = OctoRuntime::new(&cfg, CmOctoPlan::new(rows, cols), move || {
-            CmOctoAggregator::new(rows, cols)
-        });
+        let mut runtime =
+            OctoRuntime::new(&cfg, CountMinSketchOctoPlan::new(rows, cols), move || {
+                CountMinSketchOctoAggregator::new(rows, cols)
+            });
         for input in &inputs {
-            runtime.insert(input.clone());
+            runtime.update(input.clone());
         }
         let streamed = runtime.finish();
 
@@ -4110,7 +4207,7 @@ mod runtime_tests {
 
         let half = values.len() / 2;
         for value in &values[..half] {
-            runtime.insert(DataInput::F64(*value));
+            runtime.update(DataInput::F64(*value));
         }
 
         runtime.flush();
@@ -4124,7 +4221,7 @@ mod runtime_tests {
 
         // The runtime is not sealed by a flush.
         for value in &values[half..] {
-            runtime.insert(DataInput::F64(*value));
+            runtime.update(DataInput::F64(*value));
         }
         assert_eq!(
             runtime.finish().parent.sketch.get_count(),
@@ -4174,7 +4271,7 @@ mod runtime_tests {
         let mut runtime = OctoRuntime::new(&config(2), PanicOnFlushPlan, || CountingAggregator {
             total: 0,
         });
-        runtime.insert(DataInput::U64(1));
+        runtime.update(DataInput::U64(1));
         runtime.flush();
     }
 
@@ -4185,7 +4282,7 @@ mod runtime_tests {
             DdOctoAggregator::new(alpha)
         });
         for i in 1..=5_000u64 {
-            runtime.insert(DataInput::F64(i as f64));
+            runtime.update(DataInput::F64(i as f64));
         }
         runtime.flush();
         runtime.flush();
@@ -4198,12 +4295,16 @@ mod runtime_tests {
         // the point of query, where before the parent was low by under tau.
         let (rows, cols) = (3usize, 1024usize);
         let inputs: Vec<DataInput<'_>> = (0..40_000u64).map(|i| DataInput::U64(i % 512)).collect();
-        let got = run_octo(&inputs, &config(4), CmOctoPlan::new(rows, cols), || {
-            CmOctoAggregator::new(rows, cols)
-        });
-        let mut reference = CountMin::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+        let got = run_octo(
+            &inputs,
+            &config(4),
+            CountMinSketchOctoPlan::new(rows, cols),
+            || CountMinSketchOctoAggregator::new(rows, cols),
+        );
+        let mut reference =
+            CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
         for input in &inputs {
-            reference.insert(input);
+            reference.update(input);
         }
         for row in 0..rows {
             for col in 0..cols {
@@ -4229,7 +4330,7 @@ mod runtime_tests {
     fn octo_runtime_insert_after_close_panics() {
         let mut runtime = OctoRuntime::new(&config(2), HllOctoPlan::new(), HllOctoAggregator::new);
         runtime.close();
-        runtime.insert(DataInput::U64(1));
+        runtime.update(DataInput::U64(1));
     }
 
     #[test]
@@ -4247,7 +4348,7 @@ mod runtime_tests {
         assert_eq!(reader.with_parent(|p| p.total), 0, "nothing inserted yet");
 
         for i in 0..n {
-            runtime.insert(DataInput::U64(i));
+            runtime.update(DataInput::U64(i));
         }
 
         // Poll rather than sleep-and-hope: the point is that the handle reaches
@@ -4282,7 +4383,7 @@ mod runtime_tests {
         let mut runtime =
             OctoRuntime::new(&config(4), CountingPlan, || CountingAggregator { total: 0 });
         for i in 0..n {
-            runtime.insert(DataInput::U64(i + 42));
+            runtime.update(DataInput::U64(i + 42));
         }
         runtime.close();
         assert_eq!(runtime.finish().parent.total, n);
@@ -4350,7 +4451,7 @@ mod runtime_tests {
         let mut inserted = 0u64;
         for round in 0..30_000u64 {
             for i in 0..(1 + round % 7) {
-                runtime.insert(DataInput::U64(i));
+                runtime.update(DataInput::U64(i));
                 inserted += 1;
             }
             runtime.flush();
@@ -4436,15 +4537,15 @@ mod univmon_tests {
     const LAYERS: usize = 6;
 
     fn layer_counters(sketch: &UnivMon, layer: usize) -> Vec<i64> {
-        let L2HH::COUNT(inner) = &sketch.l2_sketch_layers[layer];
+        let L2HH::COUNT(inner) = &sketch.layer_sketches[layer];
         (0..inner.rows())
             .flat_map(|r| (0..inner.cols()).map(move |c| (r, c)))
             .map(|(r, c)| inner.as_storage().query_one_counter(r, c))
             .collect()
     }
 
-    fn heap_contents(sketch: &UnivMon, layer: usize) -> Vec<(HeapItem, i64)> {
-        let mut items: Vec<(HeapItem, i64)> = sketch.hh_layers[layer]
+    fn heap_contents(sketch: &UnivMon, layer: usize) -> Vec<(OwnedDataInput, i64)> {
+        let mut items: Vec<(OwnedDataInput, i64)> = sketch.layer_heaps[layer]
             .heap()
             .iter()
             .map(|i| (i.key.clone(), i.count))
@@ -4472,11 +4573,13 @@ mod univmon_tests {
 
     #[test]
     fn a_worker_picks_the_same_layers_as_a_single_threaded_insert() {
-        let reference = UnivMon::init_univmon(HEAP, ROWS, COLS, LAYERS);
+        let reference = UnivMon::new(HEAP, ROWS, COLS, LAYERS);
         for key in 0..5_000u64 {
             let input = DataInput::U64(key);
-            let from_hash =
-                bottom_layer_for_hash(hash64_seeded(BOTTOM_LAYER_FINDER, &input), LAYERS);
+            let from_hash = UnivMon::bottom_layer_for_hash(
+                hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &input),
+                LAYERS,
+            );
             assert_eq!(
                 from_hash,
                 reference.bottom_layer_for(&input),
@@ -4493,9 +4596,9 @@ mod univmon_tests {
         // the state a single-threaded insert loop would.
         let inputs = stream(20_000);
 
-        let mut reference = UnivMon::init_univmon(HEAP, ROWS, COLS, LAYERS);
+        let mut reference = UnivMon::new(HEAP, ROWS, COLS, LAYERS);
         for input in &inputs {
-            reference.insert(input, 1);
+            reference.update_weighted(input, 1);
         }
 
         let preparer = UnivMonOctoPlan::with_threshold(ROWS, COLS, LAYERS, OctoThreshold::new(1));
@@ -4511,7 +4614,7 @@ mod univmon_tests {
         }
         let octo = &aggregator.sketch;
 
-        assert_eq!(octo.bucket_size, reference.bucket_size, "total weight");
+        assert_eq!(octo.total_weight, reference.total_weight, "total weight");
         assert_eq!(
             octo.candidates_complete(),
             reference.candidates_complete(),
@@ -4524,8 +4627,8 @@ mod univmon_tests {
                 "layer {layer} counters"
             );
             assert_eq!(
-                octo.l2_sketch_layers[layer].get_l2(),
-                reference.l2_sketch_layers[layer].get_l2(),
+                octo.layer_sketches[layer].l2(),
+                reference.layer_sketches[layer].l2(),
                 "layer {layer} L2"
             );
             assert_eq!(
@@ -4535,8 +4638,8 @@ mod univmon_tests {
             );
         }
         assert_eq!(
-            octo.calc_g_sum(|x| x, false),
-            reference.calc_g_sum(|x| x, false),
+            octo.estimate_g_sum(|x| x, false),
+            reference.estimate_g_sum(|x| x, false),
             "g-sum query"
         );
     }
@@ -4546,9 +4649,9 @@ mod univmon_tests {
         let inputs = stream(30_000);
         let threshold = 31u32;
 
-        let mut reference = UnivMon::init_univmon(HEAP, ROWS, COLS, LAYERS);
+        let mut reference = UnivMon::new(HEAP, ROWS, COLS, LAYERS);
         for input in &inputs {
-            reference.insert(input, 1);
+            reference.update_weighted(input, 1);
         }
 
         let preparer =
@@ -4567,7 +4670,7 @@ mod univmon_tests {
         for layer in 0..LAYERS {
             let promoted = layer_counters(&aggregator.sketch, layer);
             let exact = layer_counters(&reference, layer);
-            let residual = worker.layers[layer].residual();
+            let residual = worker.layer_sketches[layer].residual();
             for (cell, ((&p, &e), &r)) in
                 promoted.iter().zip(exact.iter()).zip(residual).enumerate()
             {
@@ -4683,7 +4786,7 @@ mod univmon_tests {
     #[should_panic(expected = "worker ids must be distinct")]
     fn workers_sharing_an_id_are_refused_rather_than_summed_wrongly() {
         // Two workers in one slot would make the fleet total a maximum instead
-        // of a sum, and calc_l1 would report about N/k.
+        // of a sum, and estimate_l1 would report about N/k.
         let threshold = OctoThreshold::new(1);
         let mut first = UnivMonOctoWorker::with_threshold(0, ROWS, COLS, LAYERS, threshold.clone());
         let mut second =

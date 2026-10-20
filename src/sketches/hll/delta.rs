@@ -16,12 +16,6 @@ use crate::{DefaultXxHasher, HashProfile, SketchHasher};
 use super::HyperLogLogImpl;
 use super::wire::{HllWireVariant, check_register_range, encode_metadata, validated_hll_payload};
 
-/// The delta kind_id of a variant: its state kind_id with the variant's top bit
-/// set.
-fn delta_kind<V: HllWireVariant>() -> [u8; 2] {
-    [V::WIRE_KIND_ID[0], V::WIRE_KIND_ID[1] | 0x80]
-}
-
 /// A change to a [`HyperLogLogImpl`] state: each value of `registers` is a new
 /// value for the register its position names in `indices`. Indices are strictly
 /// ascending and below `2^precision`; each value is non-zero and at most the
@@ -69,24 +63,24 @@ where
     }
 
     /// Serializes the delta into an ASAPv1 MessagePack envelope.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata = encode_metadata::<Registers, H>(self.admission_rate)?;
         let payload = rmp_serde::to_vec(&HllDeltaPayload {
             indices: self.indices.clone(),
             registers: self.registers.clone(),
         })?;
         Ok(envelope::encode(
-            &delta_kind::<Variant>(),
+            Variant::WIRE_DELTA_KIND_ID,
             &metadata,
             &payload,
         ))
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (payload, admission_rate) = validated_hll_payload::<H>(
             bytes,
-            &delta_kind::<Variant>(),
+            Variant::WIRE_DELTA_KIND_ID,
             Registers::PRECISION as u32,
         )?;
         let p: HllDeltaPayload = envelope::decode_block(payload)?;
@@ -120,31 +114,31 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 mod tests {
     use super::*;
     use crate::sketches::hll::Classic;
-    use crate::structures::fixed_structure::{HllBucketListP12, HllBucketListP14};
+    use crate::structures::fixed_structure::{HllRegistersP12, HllRegistersP14};
 
-    type Delta = HyperLogLogDelta<Classic, HllBucketListP14>;
+    type Delta = HyperLogLogDelta<Classic, HllRegistersP14>;
 
     /// A P14 Classic delta envelope around the given indices and registers.
     fn delta_bytes(indices: &[u64], registers: &[u8]) -> Vec<u8> {
-        let metadata = encode_metadata::<HllBucketListP14, DefaultXxHasher>(1.0).unwrap();
+        let metadata = encode_metadata::<HllRegistersP14, DefaultXxHasher>(1.0).unwrap();
         let payload = rmp_serde::to_vec(&HllDeltaPayload {
             indices: indices.to_vec(),
             registers: registers.to_vec(),
         })
         .unwrap();
-        envelope::encode(&delta_kind::<Classic>(), &metadata, &payload)
+        envelope::encode(Classic::WIRE_DELTA_KIND_ID, &metadata, &payload)
     }
 
     #[test]
     fn decode_rejects_each_payload_rule() {
-        assert!(Delta::deserialize_from_bytes(&delta_bytes(&[0, 16383], &[1, 51])).is_ok());
+        assert!(Delta::from_asapv1(&delta_bytes(&[0, 16383], &[1, 51])).is_ok());
         let rows: [(&str, &[u64], &[u8]); 2] = [
             ("index 2^precision", &[16384], &[1]),
             ("register past the maximum rank", &[0], &[52]),
         ];
         for (label, indices, registers) in rows {
             assert!(
-                Delta::deserialize_from_bytes(&delta_bytes(indices, registers)).is_err(),
+                Delta::from_asapv1(&delta_bytes(indices, registers)).is_err(),
                 "{label}"
             );
         }
@@ -153,9 +147,7 @@ mod tests {
     #[test]
     fn decode_pins_the_precision() {
         let delta = delta_bytes(&[0], &[1]);
-        assert!(Delta::deserialize_from_bytes(&delta).is_ok());
-        assert!(
-            HyperLogLogDelta::<Classic, HllBucketListP12>::deserialize_from_bytes(&delta).is_err()
-        );
+        assert!(Delta::from_asapv1(&delta).is_ok());
+        assert!(HyperLogLogDelta::<Classic, HllRegistersP12>::from_asapv1(&delta).is_err());
     }
 }

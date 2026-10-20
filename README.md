@@ -10,22 +10,22 @@ A Rust library for **streaming data sketches** — compact data structures that 
 ## Why asap_sketchlib
 
 - **Fast.** Up to 8–14× higher insertion throughput than comparable libraries on frequency sketches, 2–3× on cardinality sketches, and 2–4× on quantile sketches. Rust-native with no language-boundary overhead. See [benchmarks](#performance).
-- **High coverage.** Supports frequency, cardinality, quantile, distribution, heavy-hitter, and set-membership sketches (`CountMin`, `Count`, `HyperLogLog`, `KLL`, `DDSketch`, `SpaceSaving`, `Bloom`). Also includes algorithms not found in other libraries: `UnivMon` for estimating a broad class of streaming statistics (L1/L2 norms, entropy) in a single pass, `Hydra` for answering sketch queries over arbitrary subpopulations without per-group sketches, and `NitroBatch` for accelerating sketch updates through batching. Unique sketch frameworks for sliding windows (`ExponentialHistogram`) and subpopulation queries (`Hydra`).
-- **Easy to use.** Most sketches provide a unified API style, while some (such as `KLL`) use `update`/`quantile`; the crate also offers typed inputs via `DataInput`, pluggable hashing via `SketchHasher`, and multi-sketch composition with shared hashing (`HashSketchEnsemble`).
+- **High coverage.** Supports frequency, cardinality, quantile, distribution, heavy-hitter, and set-membership sketches (`CountMinSketch`, `CountSketch`, `HyperLogLog`, `Kll`, `DdSketch`, `SpaceSaving`, `Bloom`). Also includes algorithms not found in other libraries: `UnivMon` for estimating a broad class of streaming statistics (L1/L2 norms, entropy) in a single pass, `Hydra` for answering sketch queries over arbitrary subpopulations without per-group sketches, and `NitroBatch` for accelerating sketch updates through batching. Unique sketch frameworks for sliding windows (`ExponentialHistogram`) and subpopulation queries (`Hydra`).
+- **Easy to use.** Most sketches provide a unified API style, while some (such as `Kll`) use `update`/`quantile`; the crate also offers typed inputs via `DataInput`, pluggable hashing via `SketchHasher`, and multi-sketch composition with shared hashing (`HashSketchEnsemble`).
 
 ## Supported Sketches
 
 | Goal | Sketch | When to pick it | What it does | Polars equivalent |
 | --- | --- | --- | --- | --- |
-| Frequency estimation | `CountMin`, `Count` | Fast approximate counts for high-volume keys | Estimates how often each key appears in a stream | `df.group_by("key").agg(pl.len())` |
-| Heavy hitters / frequent items | `SpaceSaving`, `CMSHeap`, `CSHeap`, `CMSSpaceSaving`, `CSSpaceSaving` | The top-k keys and their counts under a fixed memory budget | Tracks the most frequent keys of a stream, each with a per-key error bound | `df["key"].value_counts().top_k(10, by="count")` |
+| Frequency estimation | `CountMinSketch`, `CountSketch` | Fast approximate counts for high-volume keys | Estimates how often each key appears in a stream | `df.group_by("key").agg(pl.len())` |
+| Heavy hitters / frequent items | `SpaceSaving`, `CountMinSketchWithHeap`, `CountSketchWithHeap`, `CountMinSketchWithSpaceSaving`, `CountSketchWithSpaceSaving` | The top-k keys and their counts under a fixed memory budget | Tracks the most frequent keys of a stream, each with a per-key error bound | `df["key"].value_counts().top_k(10, by="count")` |
 | Approximate set membership | `Bloom` | Cheap "have I seen this key?" checks at a chosen false-positive rate | Answers membership with no false negatives and a bounded false-positive rate | `df["key"].is_in(seen)` — exact, but stores every key |
-| Cardinality estimation | `HyperLogLog`, `HyperLogLogHIP` | Approximate distinct counts with bounded memory | Estimates the number of unique elements | `df["col"].n_unique()` |
-| Quantiles / distribution | `KLL`, `DDSketch`, `UnivMonQ` (experimental) | Percentiles alone, or percentiles sharing state with universal frequency metrics | Approximates arbitrary quantiles (e.g. p50, p99) of a value distribution | `df["col"].quantile(0.99)` |
+| Cardinality estimation | `HyperLogLog`, `HyperLogLogHip` | Approximate distinct counts with bounded memory | Estimates the number of unique elements | `df["col"].n_unique()` |
+| Quantiles / distribution | `Kll`, `DdSketch`, `UnivMonQ` (experimental) | Percentiles alone, or percentiles sharing state with universal frequency metrics | Approximates arbitrary quantiles (e.g. p50, p99) of a value distribution | `df["col"].quantile(0.99)` |
 | Subpopulation queries | `Hydra` | Filtered sketch queries | Answers sketch queries over arbitrary subpopulations without maintaining per-group sketches | No direct equivalent — requires per-group aggregation |
 | Universal monitoring | `UnivMon` | G-sum queries (L1/L2 norms, cardinality, entropy) | Estimates a broad class of streaming statistics in a single pass | No direct equivalent — requires custom multi-pass pipelines |
 | Universal monitoring + quantiles | `UnivMonQ` (experimental) | One mergeable structure for frequencies, F0/F2/compatible g-sums, entropy, heavy hitters, ranks, and quantiles | Extends a terminal-stratum UnivMon core with an adaptively assisted occurrence sample | No direct equivalent — requires multiple aggregations |
-| Sliding-window frequency | `MicroCM` (experimental) | Per-key counts over the last W items or W time units, in fixed memory | Keeps `T+2` narrow counters and one shared zoom exponent per cell, rescaling instead of widening | `df.filter(pl.col("ts") > cutoff).group_by("key").agg(pl.len())` — exact, but stores the window |
+| Sliding-window frequency | `MicroCm` (experimental) | Per-key counts over the last W items or W time units, in fixed memory | Keeps `T+2` narrow counters and one shared zoom exponent per cell, rescaling instead of widening | `df.filter(pl.col("ts") > cutoff).group_by("key").agg(pl.len())` — exact, but stores the window |
 | Grouped distinct counts | `CountMinHll` (experimental) | Distinct values per key, without a sketch per key | A Count-Min grid whose cells are HyperLogLogs, in one contiguous register plane | `df.group_by("key").agg(pl.col("value").n_unique())` |
 | Update acceleration | `NitroBatch` | Batch-accelerated sketch updates | Speeds up sketch insertions by batching updates | No direct equivalent |
 
@@ -58,16 +58,16 @@ asap_sketchlib = { git = "https://github.com/ProjectASAP/asap_sketchlib", tag = 
 ### Count distinct users with HyperLogLog
 
 ```rust
-use asap_sketchlib::{ErtlMLE, HyperLogLog, DataInput};
+use asap_sketchlib::{Ertl, HyperLogLog, DataInput};
 
 // HyperLogLog estimates the number of distinct items in a stream using fixed memory.
-// ErtlMLE is one of the HLL variants we offer — it tends to be more accurate than
+// Ertl is one of the HLL variants we offer — it tends to be more accurate than
 // the `Classic` variant, especially at very low or very high cardinalities.
-let mut hll = HyperLogLog::<ErtlMLE>::default();
+let mut hll = HyperLogLog::<Ertl>::default();
 
 // Insert some user IDs — HLL handles distinct counting and deduplicates items.
 for user_id in [101, 202, 303, 101, 404, 202, 505, 101] {
-    hll.insert(&DataInput::U64(user_id));
+    hll.update(&DataInput::U64(user_id));
 }
 
 let unique_users = hll.estimate();
@@ -77,7 +77,7 @@ println!("estimated unique users: {unique_users}"); // ≈ 5
 ### Estimate frequency of items with Count-Min Sketch
 
 ```rust
-use asap_sketchlib::{CountMin, FastPath, Vector2D, DataInput};
+use asap_sketchlib::{CountMinSketch, FastPath, Vector2D, DataInput};
 
 // Count-Min Sketch estimates how often each item appears in a stream.
 // It may over-count but never under-counts.
@@ -85,7 +85,7 @@ use asap_sketchlib::{CountMin, FastPath, Vector2D, DataInput};
 // Vector2D<i32> is the backing storage (a 2D array of 32-bit counters).
 // FastPath uses a single hash with bit-masking to pick row indices — faster
 // than the default RegularPath which hashes once per row.
-let mut cms = CountMin::<Vector2D<i32>, FastPath>::with_dimensions(3, 2048);
+let mut cms = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 2048);
 
 // Simulate an event stream with known frequencies.
 let events = [
@@ -96,7 +96,7 @@ let events = [
 ];
 for &(event, count) in &events {
     for _ in 0..count {
-        cms.insert(&DataInput::Str(event));
+        cms.update(&DataInput::Str(event));
     }
 }
 
@@ -110,11 +110,11 @@ for &(event, true_count) in &events {
 ### Track latency percentiles with KLL
 
 ```rust
-use asap_sketchlib::KLL;
+use asap_sketchlib::Kll;
 
-// KLL is a quantile sketch — it tracks the distribution of values so you can
+// Kll is a quantile sketch — it tracks the distribution of values so you can
 // ask questions like "what is the median?" without storing every data point.
-let mut sketch = KLL::<f64>::default();
+let mut sketch = Kll::<f64>::default();
 
 // Simulate 1000 latency samples in milliseconds
 for i in 0..1000 {
@@ -146,7 +146,7 @@ for value in [8.0, 3.0, 5.0, 5.0, 10.0] {
 
 let query = sketch.prepare_queries();
 println!("p50 ≈ {:?}", query.quantile(0.5));
-println!("distinct ≈ {}", query.estimate_distinct());
+println!("distinct ≈ {}", query.estimate_cardinality());
 println!("F2 ≈ {}", query.estimate_f2());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
@@ -154,16 +154,16 @@ println!("F2 ≈ {}", query.estimate_f2());
 ### Merge multiple sketch instances
 
 ```rust
-use asap_sketchlib::{ErtlMLE, HyperLogLog, DataInput};
+use asap_sketchlib::{Ertl, HyperLogLog, DataInput};
 
 // Sketches are mergeable — you can build one per node and combine them later
 // to get a global answer without shipping raw data.
-let mut node_a = HyperLogLog::<ErtlMLE>::default();
-let mut node_b = HyperLogLog::<ErtlMLE>::default();
+let mut node_a = HyperLogLog::<Ertl>::default();
+let mut node_b = HyperLogLog::<Ertl>::default();
 
 // Each node sees different (and some overlapping) users
-for id in [1, 2, 3, 4, 5]  { node_a.insert(&DataInput::U64(id)); }
-for id in [4, 5, 6, 7, 8]  { node_b.insert(&DataInput::U64(id)); }
+for id in [1, 2, 3, 4, 5]  { node_a.update(&DataInput::U64(id)); }
+for id in [4, 5, 6, 7, 8]  { node_b.update(&DataInput::U64(id)); }
 
 node_a.merge(&node_b);
 println!("total unique users ≈ {}", node_a.estimate()); // ≈ 8
@@ -171,7 +171,7 @@ println!("total unique users ≈ {}", node_a.estimate()); // ≈ 8
 
 ## Choosing Between Sketches
 
-Several sketches address the same goal with different trade-offs — for example, `CountMin` vs `Count` for frequency, or `KLL` vs `DDSketch` for quantiles.
+Several sketches address the same goal with different trade-offs — for example, `CountMinSketch` vs `CountSketch` for frequency, or `Kll` vs `DdSketch` for quantiles.
 
 We are building **SketchPlan**, a profiler that analyzes a representative sample of your data and recommends the best sketch configuration (algorithm, memory budget, error tolerance) for your workload. Until SketchPlan is ready, the [APIs Index](./docs/apis.md) lists guarantees, error bounds, and caveats for each sketch to help you decide.
 

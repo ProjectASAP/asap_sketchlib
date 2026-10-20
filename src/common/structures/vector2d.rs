@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 
 use crate::{
-    DataInput, FastPathHasher, MatrixFastHash, MatrixHashType, MatrixStorage, Nitro, SketchHasher,
+    DataInput, FastPathHasher, MatrixFastHash, MatrixHash, MatrixStorage, Nitro, SketchHasher,
     compute_median_inline_f64,
 };
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
@@ -53,7 +53,7 @@ impl<T> Vector2D<T> {
     /// Creates an empty matrix with reserved capacity for `rows * cols` elements.
     /// The underlying storage is left uninitialized until `fill` or similar methods are called,
     /// allowing callers to decide when and how counters are populated.
-    pub fn init(rows: usize, cols: usize) -> Self {
+    pub fn unfilled(rows: usize, cols: usize) -> Self {
         let mask_bits = super::matrix_storage::cols_mask_bits(cols);
         let mask = super::matrix_storage::cols_mask(cols);
         Self {
@@ -93,7 +93,7 @@ impl<T> Vector2D<T> {
 
     /// Enables Nitro sampling with the provided rate.
     pub fn enable_nitro(&mut self, sampling_rate: f64) {
-        self.nitro = Nitro::init_nitro(sampling_rate);
+        self.nitro = Nitro::new(sampling_rate);
     }
 
     /// Enables Nitro sampling with a reproducible, seed-selected schedule.
@@ -101,9 +101,9 @@ impl<T> Vector2D<T> {
     /// [`Self::enable_nitro`] always starts the skip cursor at entry 0, so
     /// every sketch at a given rate admits the same subset. Seeding it is what
     /// lets an accuracy battery run over genuinely independent trials while
-    /// still reproducing exactly. See [`Nitro::init_nitro_seeded`].
+    /// still reproducing exactly. See [`Nitro::with_seed`].
     pub fn enable_nitro_with_seed(&mut self, sampling_rate: f64, seed: u64) {
-        self.nitro = Nitro::init_nitro_seeded(sampling_rate, seed);
+        self.nitro = Nitro::with_seed(sampling_rate, seed);
     }
 
     /// Disables Nitro sampling and resets the internal state.
@@ -125,7 +125,7 @@ impl<T> Vector2D<T> {
 
     #[inline(always)]
     /// Returns the current Nitro delta weight.
-    pub fn get_delta(&self) -> u64 {
+    pub fn nitro_weight(&self) -> u64 {
         self.nitro.delta
     }
 
@@ -233,7 +233,7 @@ impl<T> Vector2D<T> {
     /// get the number of bits required to cover the col size
     #[inline(always)]
     /// Returns the bit width needed to represent a column index.
-    pub fn get_mask_bits(&self) -> u32 {
+    pub fn mask_bits(&self) -> u32 {
         super::matrix_storage::cols_mask_bits(self.cols)
     }
 
@@ -241,8 +241,8 @@ impl<T> Vector2D<T> {
     /// only three case possible: 32, 64, 128
     #[inline]
     /// Returns the packed hash width needed for all rows.
-    pub fn get_required_bits(&self) -> usize {
-        let mut bits_required = self.get_mask_bits() as usize;
+    pub fn required_bits(&self) -> usize {
+        let mut bits_required = self.mask_bits() as usize;
         bits_required *= self.rows;
         bits_required = 32 << ((bits_required > 32) as u32 + (bits_required > 64) as u32);
         bits_required = bits_required.min(128);
@@ -259,21 +259,21 @@ impl<T> Vector2D<T> {
     ///
     /// Simple increment (row-independent):
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let mut sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// sketch.fast_insert(|counter, value, _| *counter += *value, 1i64, &hash);
     /// ```
     ///
     /// Row-dependent operation (e.g., Count sketch with sign bits):
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let mut sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// sketch.fast_insert(|counter, value, row| {
     ///     let sign = hash.sign_for_row(row) as i64;
     ///     *counter += sign * *value;
@@ -318,7 +318,7 @@ impl<T> Vector2D<T> {
 
     #[inline(always)]
     /// Returns the current Nitro skip counter.
-    pub fn get_nitro_skip(&mut self) -> usize {
+    pub fn nitro_skip(&mut self) -> usize {
         self.nitro.to_skip
     }
 
@@ -341,22 +341,22 @@ impl<T> Vector2D<T> {
     ///
     /// Simple min (row-independent):
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// let min = sketch.fast_query_min(&hash, |val, _, _| *val);
     /// # let _ = min;
     /// ```
     ///
     /// Row-dependent with transformation:
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// let min = sketch.fast_query_min(&hash, |val, row, _| *val - row as i64);
     /// # let _ = min;
     /// ```
@@ -390,22 +390,22 @@ impl<T> Vector2D<T> {
     ///
     /// Simple median (row-independent):
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// let median = sketch.fast_query_median(&hash, |val, _, _| *val as f64);
     /// # let _ = median;
     /// ```
     ///
     /// Row-dependent (e.g., Count sketch with sign bits):
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// let median = sketch.fast_query_median(&hash, |val, row, hash| {
     ///     let sign = hash.sign_for_row(row) as f64;
     ///     *val as f64 * sign * (row as f64 + 1.0)
@@ -438,29 +438,29 @@ impl<T> Vector2D<T> {
     ///
     /// Simple max (row-independent):
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// let max = sketch.fast_query_max(&hash, |val, _, _| *val);
     /// # let _ = max;
     /// ```
     ///
     /// Row-dependent with transformation:
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// let max = sketch.fast_query_max(&hash, |val, row, _| *val + row as i64);
     /// # let _ = max;
     /// ```
     #[inline(always)]
-    pub fn fast_query_max<F, R>(&self, hashed_val: &MatrixHashType, op: F) -> R
+    pub fn fast_query_max<F, R>(&self, hashed_val: &MatrixHash, op: F) -> R
     where
-        F: Fn(&T, usize, &MatrixHashType) -> R,
+        F: Fn(&T, usize, &MatrixHash) -> R,
         R: PartialOrd,
     {
         let c0 = self.col_for_row(hashed_val, 0);
@@ -485,11 +485,11 @@ impl<T> Vector2D<T> {
     ///
     /// With complex counter type:
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// # let query_key = ();
     /// let min = sketch.fast_query_min_with_key(&hash, &query_key, |val, _, _, _| *val);
     /// # let _ = min;
@@ -497,12 +497,12 @@ impl<T> Vector2D<T> {
     #[inline(always)]
     pub fn fast_query_min_with_key<F, Q, R>(
         &self,
-        hashed_val: &MatrixHashType,
+        hashed_val: &MatrixHash,
         query_key: &Q,
         op: F,
     ) -> R
     where
-        F: Fn(&T, &Q, usize, &MatrixHashType) -> R,
+        F: Fn(&T, &Q, usize, &MatrixHash) -> R,
         R: PartialOrd,
     {
         let c0 = self.col_for_row(hashed_val, 0);
@@ -527,11 +527,11 @@ impl<T> Vector2D<T> {
     ///
     /// With complex counter type:
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// # let query_key = ();
     /// let max = sketch.fast_query_max_with_key(&hash, &query_key, |val, _, _, _| *val);
     /// # let _ = max;
@@ -539,12 +539,12 @@ impl<T> Vector2D<T> {
     #[inline(always)]
     pub fn fast_query_max_with_key<F, Q, R>(
         &self,
-        hashed_val: &MatrixHashType,
+        hashed_val: &MatrixHash,
         query_key: &Q,
         op: F,
     ) -> R
     where
-        F: Fn(&T, &Q, usize, &MatrixHashType) -> R,
+        F: Fn(&T, &Q, usize, &MatrixHash) -> R,
         R: PartialOrd,
     {
         let c0 = self.col_for_row(hashed_val, 0);
@@ -570,11 +570,11 @@ impl<T> Vector2D<T> {
     ///
     /// With complex counter type:
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// # let query_key = ();
     /// let median =
     ///     sketch.fast_query_median_with_key(&hash, &query_key, |val, _, _, _| *val as f64);
@@ -583,12 +583,12 @@ impl<T> Vector2D<T> {
     #[inline(always)]
     pub fn fast_query_median_with_key<F, Q>(
         &self,
-        hashed_val: &MatrixHashType,
+        hashed_val: &MatrixHash,
         query_key: &Q,
         op: F,
     ) -> f64
     where
-        F: Fn(&T, &Q, usize, &MatrixHashType) -> f64,
+        F: Fn(&T, &Q, usize, &MatrixHash) -> f64,
     {
         let mut estimates = Vec::with_capacity(self.rows);
         for row in 0..self.rows {
@@ -613,11 +613,11 @@ impl<T> Vector2D<T> {
     ///
     /// Custom sum with row-dependent weights:
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// let sum = sketch.fast_query_aggregate(&hash, &(), 0.0, |acc, val, _, row, _| {
     ///     acc + (*val as f64 * (row as f64 + 1.0))
     /// });
@@ -626,11 +626,11 @@ impl<T> Vector2D<T> {
     ///
     /// Count sketch estimation (sign-based sum then median):
     /// ```no_run
-    /// use asap_sketchlib::{MatrixHashType, Vector2D};
+    /// use asap_sketchlib::{MatrixHash, Vector2D};
     /// # let rows = 2;
     /// # let cols = 8;
     /// # let sketch = Vector2D::from_fn(rows, cols, |_, _| 0i64);
-    /// # let hash = MatrixHashType::Packed128(0x1234);
+    /// # let hash = MatrixHash::Packed128(0x1234);
     /// let mut estimates = Vec::new();
     /// sketch.fast_query_aggregate(&hash, &(), &mut estimates, |acc, val, _, row, hash| {
     ///     let sign = hash.sign_for_row(row) as f64;
@@ -641,13 +641,13 @@ impl<T> Vector2D<T> {
     #[inline(always)]
     pub fn fast_query_aggregate<F, Q, R>(
         &self,
-        hashed_val: &MatrixHashType,
+        hashed_val: &MatrixHash,
         query_key: &Q,
         init: R,
         fold_fn: F,
     ) -> R
     where
-        F: Fn(R, &T, &Q, usize, &MatrixHashType) -> R,
+        F: Fn(R, &T, &Q, usize, &MatrixHash) -> R,
     {
         let mut acc = init;
         for row in 0..self.rows {
@@ -786,14 +786,14 @@ mod tests {
     // placeholder, potentially useful
     #[test]
     fn required_bits_match_expected_thresholds() {
-        let default_dims: Vector2D<u64> = Vector2D::init(3, 4096);
-        assert_eq!(default_dims.get_required_bits(), 64);
+        let default_dims: Vector2D<u64> = Vector2D::unfilled(3, 4096);
+        assert_eq!(default_dims.required_bits(), 64);
 
-        let smaller_cols: Vector2D<u64> = Vector2D::init(3, 64);
-        assert_eq!(smaller_cols.get_required_bits(), 32);
+        let smaller_cols: Vector2D<u64> = Vector2D::unfilled(3, 64);
+        assert_eq!(smaller_cols.required_bits(), 32);
 
-        let larger_shape: Vector2D<u64> = Vector2D::init(5, 1_048_576);
-        assert_eq!(larger_shape.get_required_bits(), 128);
+        let larger_shape: Vector2D<u64> = Vector2D::unfilled(5, 1_048_576);
+        assert_eq!(larger_shape.required_bits(), 128);
     }
 
     /// End-to-end coverage of `Vector2D::col_for_row` — the cached-field
@@ -832,7 +832,7 @@ mod tests {
                 m.fast_insert(
                     |c: &mut i64, _: &i64, _| *c += 1,
                     1i64,
-                    &MatrixHashType::Packed64(h),
+                    &MatrixHash::Packed64(h),
                 );
                 for row in 0..ROWS {
                     reference[row * cols + reference_col(h, row, cols)] += 1;

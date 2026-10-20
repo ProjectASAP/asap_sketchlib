@@ -11,7 +11,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
-use crate::sketches::countsketch_topk::CSHeap;
+use crate::sketches::countsketch_heap::CountSketchWithHeap as NativeCountSketchWithHeap;
 use crate::{DataInput, RegularPath, Vector2D};
 
 /// Wire-format heap item (key, value) used by the dispatch helpers below.
@@ -22,11 +22,11 @@ pub struct WireHeapItem {
 
 /// Concrete Count-Sketch-with-Heap type backing the wire-format
 /// `CountSketchWithHeap`.
-pub type SketchlibCSHeap = CSHeap<Vector2D<i64>, RegularPath>;
+pub type SketchlibCSHeap = NativeCountSketchWithHeap<Vector2D<i64>, RegularPath>;
 
 /// Creates a fresh CSHeap with the given dimensions and heap capacity.
 pub fn new_sketchlib_cs_heap(row_num: usize, col_num: usize, heap_size: usize) -> SketchlibCSHeap {
-    CSHeap::new(row_num, col_num, heap_size)
+    NativeCountSketchWithHeap::new(row_num, col_num, heap_size)
 }
 
 /// Builds a CSHeap from an existing sketch matrix and optional heap
@@ -46,7 +46,7 @@ pub fn sketchlib_cs_heap_from_matrix_and_heap(
             .unwrap_or(0.0)
             .round() as i64
     });
-    let mut cs_heap = CSHeap::from_storage(matrix, heap_size);
+    let mut cs_heap = NativeCountSketchWithHeap::from_storage(matrix, heap_size);
 
     for item in topk_heap {
         let count = item.value.round() as i64;
@@ -61,7 +61,7 @@ pub fn sketchlib_cs_heap_from_matrix_and_heap(
 
 /// Converts a CSHeap's storage into a `Vec<Vec<f64>>` matrix.
 pub fn matrix_from_sketchlib_cs_heap(cs_heap: &SketchlibCSHeap) -> Vec<Vec<f64>> {
-    let storage = cs_heap.cs().as_storage();
+    let storage = cs_heap.count_sketch().as_storage();
     let rows = storage.rows();
     let cols = storage.cols();
     let mut sketch = vec![vec![0.0; cols]; rows];
@@ -77,7 +77,7 @@ pub fn matrix_from_sketchlib_cs_heap(cs_heap: &SketchlibCSHeap) -> Vec<Vec<f64>>
     sketch
 }
 
-/// Converts sketchlib HHHeap items to wire-format (key, value) pairs.
+/// Converts sketchlib TopKHeap items to wire-format (key, value) pairs.
 pub fn heap_to_wire(cs_heap: &SketchlibCSHeap) -> Vec<WireHeapItem> {
     cs_heap
         .heap()
@@ -85,7 +85,7 @@ pub fn heap_to_wire(cs_heap: &SketchlibCSHeap) -> Vec<WireHeapItem> {
         .iter()
         .map(|hh_item| {
             let key = match &hh_item.key {
-                crate::HeapItem::String(s) => s.clone(),
+                crate::OwnedDataInput::String(s) => s.clone(),
                 other => format!("{other:?}"),
             };
             WireHeapItem {
@@ -102,7 +102,7 @@ pub fn sketchlib_cs_heap_update(cs_heap: &mut SketchlibCSHeap, key: &str, value:
     if many <= 0 {
         return;
     }
-    cs_heap.insert_many(&DataInput::String(key.to_owned()), many);
+    cs_heap.update_weighted(&DataInput::String(key.to_owned()), many);
 }
 
 /// Queries a CSHeap for a key's frequency estimate (median-of-signed-rows,
@@ -139,8 +139,8 @@ impl std::fmt::Debug for CountSketchWithHeap {
 
 impl Clone for CountSketchWithHeap {
     fn clone(&self) -> Self {
-        // Structural clone: `CSHeap` derives `Clone` (its `Count` +
-        // `HHHeap` fields are `Clone`), so copy the backend directly
+        // Structural clone: `NativeCountSketchWithHeap` derives `Clone` (its `CountSketch` +
+        // `TopKHeap` fields are `Clone`), so copy the backend directly
         // instead of extracting the matrix + heap to wire form and
         // rebuilding it.
         Self {

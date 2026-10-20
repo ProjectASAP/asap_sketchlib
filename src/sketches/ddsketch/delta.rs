@@ -10,22 +10,20 @@ use serde::{Deserialize, Serialize};
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::check_cells;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::DDSKETCH_DELTA;
 
 use super::wire::{check_alpha, decode_metadata, encode_metadata};
-use super::{Buckets, DDSketch, GROW_CHUNK, ddsketch_indexable_bounds};
+use super::{Buckets, DdSketch, GROW_CHUNK, ddsketch_indexable_bounds};
 
-/// DDSketch delta kind_id: the state's `0x05 0x00` with the variant's top bit
-/// set.
-const DD_DELTA_KIND: &[u8] = &[0x05, 0x80];
-
-/// A change to a [`DDSketch`] state of relative accuracy `alpha`: each count of
+/// A change to a [`DdSketch`] state of relative accuracy `alpha`: each count of
 /// `deltas` is added to the positive-store bucket its position names in
 /// `indices`, each of `negative_deltas` to the negative-store bucket named in
 /// `negative_indices`, and `zero_count` to the zero count. Each index array is
 /// strictly ascending and inside the mapping's index range, and no count in
 /// `deltas` or `negative_deltas` is zero.
 #[derive(Clone, Debug)]
-pub struct DDSketchDelta {
+pub struct DdSketchDelta {
     alpha: f64,
     indices: Vec<i32>,
     deltas: Vec<u64>,
@@ -77,7 +75,7 @@ fn grows_within_i32(store: &Buckets, indices: &[i32]) -> bool {
     true
 }
 
-impl DDSketchDelta {
+impl DdSketchDelta {
     /// Builds a delta from the changed buckets of a sketch of relative accuracy
     /// `alpha`. Fails when `alpha` is outside `(0, 1)` or the buckets break the
     /// rules above.
@@ -113,7 +111,7 @@ impl DDSketchDelta {
     }
 
     /// Serializes the delta into an ASAPv1 MessagePack envelope.
-    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata = encode_metadata(self.alpha, self.admission_rate)?;
         let payload = rmp_serde::to_vec(&DdDeltaPayload {
             indices: self.indices.clone(),
@@ -122,16 +120,16 @@ impl DDSketchDelta {
             negative_deltas: self.negative_deltas.clone(),
             zero_count: self.zero_count,
         })?;
-        Ok(envelope::encode(DD_DELTA_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::DDSKETCH_DELTA, &metadata, &payload))
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
-    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != DD_DELTA_KIND {
+        if kind_id != kind::DDSKETCH_DELTA {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "DDSketch delta kind_id mismatch: stored {kind_id:?}, expected {DD_DELTA_KIND:?}"
+                "DDSketch delta kind_id mismatch: stored {kind_id:?}, expected {DDSKETCH_DELTA:?}"
             )));
         }
         let (alpha, admission_rate) = decode_metadata(metadata)?;
@@ -149,7 +147,7 @@ impl DDSketchDelta {
     }
 }
 
-impl DDSketch {
+impl DdSketch {
     /// Adds a delta to the sketch. Each positive bucket, then each negative
     /// one, adds its count `c` and folds the bucket representative `r` into the
     /// scalars (`sum += r * c`, saturating; `min` / `max`); a non-zero
@@ -157,7 +155,7 @@ impl DDSketch {
     /// Fails, changing nothing, when the delta's `alpha` or admission rate
     /// differs, the total sample count overflows, or a store would span past
     /// `i32`.
-    pub fn merge_delta(&mut self, delta: &DDSketchDelta) -> Result<(), String> {
+    pub fn merge_delta(&mut self, delta: &DdSketchDelta) -> Result<(), String> {
         if self.alpha != delta.alpha {
             return Err(format!(
                 "DDSketch delta: metadata mismatch: an alpha {} delta for an alpha {} sketch",
@@ -173,7 +171,7 @@ impl DDSketch {
             .chain([&delta.zero_count])
             .try_fold(self.count, |acc, &c| acc.checked_add(c))
             .ok_or_else(|| "DDSketch delta: the total sample count overflows".to_string())?;
-        if !grows_within_i32(&self.store, &delta.indices)
+        if !grows_within_i32(&self.positive_store, &delta.indices)
             || !grows_within_i32(&self.negative_store, &delta.negative_indices)
         {
             return Err("DDSketch delta: a store would span past i32".to_string());
@@ -187,7 +185,7 @@ impl DDSketch {
                 let store = if negative {
                     &mut self.negative_store
                 } else {
-                    &mut self.store
+                    &mut self.positive_store
                 };
                 store.ensure(k);
                 store.counts.as_mut_slice()[(k - store.offset) as usize] += c;
@@ -212,7 +210,7 @@ impl DDSketch {
 mod tests {
     use super::*;
     use crate::common::structures::Vector1D;
-    use crate::sketches::ddsketch::DDSketchState;
+    use crate::sketches::ddsketch::DdSketchState;
 
     const ALPHA: f64 = 0.01;
     /// `key(min_v)` and `key(max_v)` of §3.23 rule 5 at `ALPHA`.
@@ -227,13 +225,13 @@ mod tests {
         let payload =
             rmp_serde::to_vec(&(positive.0, positive.1, negative.0, negative.1, zero_count))
                 .unwrap();
-        envelope::encode(DD_DELTA_KIND, &metadata, &payload)
+        envelope::encode(kind::DDSKETCH_DELTA, &metadata, &payload)
     }
 
     #[test]
     fn decode_rejects_each_payload_rule() {
         let bounds: Cells = (&[LOWEST, HIGHEST], &[1, 1]);
-        assert!(DDSketchDelta::deserialize_from_bytes(&delta_bytes(bounds, bounds, 0)).is_ok());
+        assert!(DdSketchDelta::from_asapv1(&delta_bytes(bounds, bounds, 0)).is_ok());
         let none: Cells = (&[], &[]);
         let rows: [(&str, Cells, Cells); 3] = [
             ("index below key(min_v)", (&[LOWEST - 1], &[1]), none),
@@ -246,7 +244,7 @@ mod tests {
         ];
         for (label, positive, negative) in rows {
             assert!(
-                DDSketchDelta::deserialize_from_bytes(&delta_bytes(positive, negative, 0)).is_err(),
+                DdSketchDelta::from_asapv1(&delta_bytes(positive, negative, 0)).is_err(),
                 "{label}"
             );
         }
@@ -255,18 +253,18 @@ mod tests {
     #[test]
     fn decode_rejects_another_kind_and_new_another_alpha() {
         let mut bytes = delta_bytes((&[0], &[1]), (&[], &[]), 0);
-        assert!(DDSketchDelta::deserialize_from_bytes(&bytes).is_ok());
+        assert!(DdSketchDelta::from_asapv1(&bytes).is_ok());
         bytes[9] = 0x00;
-        assert!(DDSketchDelta::deserialize_from_bytes(&bytes).is_err());
-        assert!(DDSketchDelta::new(1.0, vec![], vec![], vec![], vec![], 1).is_err());
+        assert!(DdSketchDelta::from_asapv1(&bytes).is_err());
+        assert!(DdSketchDelta::new(1.0, vec![], vec![], vec![], vec![], 1).is_err());
     }
 
     /// A delta onto an empty sketch moves `min` / `max` to the representatives
     /// it adds, and its zero count folds in `0.0`.
     #[test]
     fn merge_delta_folds_the_scalars() {
-        let mut sketch = DDSketch::new(ALPHA);
-        let delta = DDSketchDelta::new(ALPHA, vec![10], vec![2], vec![], vec![], 0).unwrap();
+        let mut sketch = DdSketch::new(ALPHA);
+        let delta = DdSketchDelta::new(ALPHA, vec![10], vec![2], vec![], vec![], 0).unwrap();
         sketch.merge_delta(&delta).unwrap();
         let r = (1.0 + ALPHA) * ((1.0 + ALPHA) / (1.0 - ALPHA)).powf(10.0);
         assert_eq!(
@@ -274,7 +272,7 @@ mod tests {
             (Some(r), Some(r), 2.0 * r)
         );
 
-        let zeros = DDSketchDelta::new(ALPHA, vec![], vec![], vec![], vec![], 3).unwrap();
+        let zeros = DdSketchDelta::new(ALPHA, vec![], vec![], vec![], vec![], 3).unwrap();
         sketch.merge_delta(&zeros).unwrap();
         assert_eq!(
             (sketch.min(), sketch.zero_count(), sketch.get_count()),
@@ -284,25 +282,25 @@ mod tests {
 
     #[test]
     fn merge_delta_rejects_without_changing_the_state() {
-        let mut sketch = DDSketch::new(ALPHA);
+        let mut sketch = DdSketch::new(ALPHA);
         sketch.add(&3.0f64);
         let next_alpha = f64::from_bits(ALPHA.to_bits() + 1);
-        let other = DDSketchDelta::new(next_alpha, vec![0], vec![1], vec![], vec![], 0).unwrap();
+        let other = DdSketchDelta::new(next_alpha, vec![0], vec![1], vec![], vec![], 0).unwrap();
         assert!(sketch.merge_delta(&other).is_err());
         assert_eq!(sketch.get_count(), 1);
 
-        sketch.store.counts = Vector1D::from_vec(vec![u64::MAX - 1]);
-        sketch.store.offset = 55;
+        sketch.positive_store.counts = Vector1D::from_vec(vec![u64::MAX - 1]);
+        sketch.positive_store.offset = 55;
         sketch.count = u64::MAX - 1;
-        let before = sketch.serialize_to_bytes().unwrap();
+        let before = sketch.to_asapv1().unwrap();
         let rows = [
-            DDSketchDelta::new(ALPHA, vec![0], vec![1], vec![5], vec![1], 0),
-            DDSketchDelta::new(ALPHA, vec![], vec![], vec![], vec![], 2),
+            DdSketchDelta::new(ALPHA, vec![0], vec![1], vec![5], vec![1], 0),
+            DdSketchDelta::new(ALPHA, vec![], vec![], vec![], vec![], 2),
         ];
         for delta in rows {
             assert!(sketch.merge_delta(&delta.unwrap()).is_err());
             assert_eq!(sketch.get_count(), u64::MAX - 1);
-            assert_eq!(sketch.serialize_to_bytes().unwrap(), before);
+            assert_eq!(sketch.to_asapv1().unwrap(), before);
         }
     }
 
@@ -310,9 +308,9 @@ mod tests {
     /// overflowing the index arithmetic.
     #[test]
     fn merge_delta_rejects_a_store_span_past_i32() {
-        let mut sketch = DDSketch::try_from(DDSketchState {
+        let mut sketch = DdSketch::try_from(DdSketchState {
             alpha: ALPHA,
-            store: Buckets {
+            positive_store: Buckets {
                 counts: Vector1D::from_vec(vec![1]),
                 offset: i32::MAX - 1,
             },
@@ -324,9 +322,9 @@ mod tests {
             admission_rate: 1.0,
         })
         .unwrap();
-        let before = sketch.serialize_to_bytes().unwrap();
-        let delta = DDSketchDelta::new(ALPHA, vec![-10], vec![1], vec![], vec![], 0).unwrap();
+        let before = sketch.to_asapv1().unwrap();
+        let delta = DdSketchDelta::new(ALPHA, vec![-10], vec![1], vec![], vec![], 0).unwrap();
         assert!(sketch.merge_delta(&delta).is_err());
-        assert_eq!(sketch.serialize_to_bytes().unwrap(), before);
+        assert_eq!(sketch.to_asapv1().unwrap(), before);
     }
 }

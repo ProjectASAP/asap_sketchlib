@@ -52,9 +52,9 @@ DDSketch representative that violated the advertised α bound at bucket edges.
 None of these were caught by the existing unit tests.
 
 Tightening the bounds to the ones each family actually promises surfaced more:
-a missing `ELASTIC` arm in `EHSketchList::merge` that silently discarded every
+a missing `ELASTIC` arm in `EhBucketSketch::merge` that silently discarded every
 bucket merge in an exponential histogram, HLL Classic's accuracy cliff at the
-linear-counting switchover, and a structural coupling in `EHUnivOptimized` that
+linear-counting switchover, and a structural coupling in `ExponentialHistogramUnivMon` that
 makes its sketch-tier cardinality unrecoverable.
 
 ## Architecture
@@ -70,12 +70,12 @@ tests/
 ├── e2e_cardinality.rs
 ├── e2e_quantiles.rs
 ├── e2e_matrix_instances.rs  # every (storage, path) instance of the matrix families
-├── e2e_numeric_types.rs     # every NumericalValue type through KLL / DDSketch
-├── e2e_windows.rs           # every EHSketchList variant + TumblingWindow payloads
+├── e2e_numeric_types.rs     # every NumericalValue type through Kll / DdSketch
+├── e2e_windows.rs           # every EhBucketSketch variant + TumblingWindow payloads
 ├── e2e_composition.rs       # HashSketchEnsemble, NitroBatch, UnivMonQ config, portable facade
 ├── e2e_frameworks.rs        # Hydra and UnivMon composition
 ├── e2e_octo.rs              # …the OctoSketch promotion protocol
-├── e2e_heavy_hitters.rs     # …Space-Saving, CocoSketch and Elastic
+├── e2e_heavy_hitters.rs     # …Space-Saving, CocoSketch and ElasticSketch
 ├── e2e_membership.rs        # …the Bloom filter's membership guarantees
 ├── e2e_experimental.rs      # …the remaining feature-gated sketches
 └── bug_verification.rs      # regression tests for fixed defects
@@ -142,7 +142,7 @@ Keeping these apart is deliberate. There is no shared
 promise the same thing: a correct KLL can return a value 100× off on a
 heavy-tailed stream and still be within its rank guarantee, and a correct
 DDSketch has no rank guarantee at all. For the same reason the two DDSketch
-implementations do not share a truth helper: `DDSketch::get_value_at_quantile`
+implementations do not share a truth helper: `DdSketch::get_value_at_quantile`
 answers `sorted[ceil(q·n) − 1]` while the portable `DdSketch::quantile` answers
 `sorted[floor(q·(n−1))]`, so `DdRankConvention` carries the choice and each is
 scored on the question it actually answers.
@@ -236,7 +236,7 @@ struct MyAdapter(MyHeavyHitter);
 
 impl FrequencyOps<i64> for MyAdapter {
     fn ingest(&mut self, key: &i64) {
-        self.0.insert(&DataInput::I64(*key));
+        self.0.update(&DataInput::I64(*key));
     }
     fn estimate(&self, key: &i64) -> f64 {
         self.0.estimate(&DataInput::I64(*key)) as f64
@@ -245,7 +245,7 @@ impl FrequencyOps<i64> for MyAdapter {
 
 impl SignedFrequencyOps<i64> for MyAdapter {
     fn ingest_weighted(&mut self, key: &i64, weight: i64) {
-        self.0.insert_many(&DataInput::I64(*key), weight);
+        self.0.update_weighted(&DataInput::I64(*key), weight);
     }
 }
 ```
@@ -325,10 +325,10 @@ error against its bound.
 
 - No assertion depends on unseeded randomness — no `rand::rng()`, no
   wall-clock seeding, no implicit RNG inside a constructor. An unseeded
-  sketch appears only where the assertion holds for every draw. `KLL::init_kll_with_seed`,
-  `KLLDynamic::init_kll_with_seed`, `KllSketch::with_seed`,
+  sketch appears only where the assertion holds for every draw. `Kll::with_k_and_seed`,
+  `KllDynamic::with_k_and_seed`, `KllSketch::with_seed`,
   `NitroBatch::with_target_and_seed`, `UniformSampling::with_seed`,
-  `Coco::init_with_size_and_seed` and `CocoOctoPlan::with_seed` exist for this.
+  `CocoSketch::init_with_size_and_seed` and `CocoOctoPlan::with_seed` exist for this.
 - An estimator whose guarantee is unbiasedness gets no per-key band: its
   accuracy is the mean over independent seeds, within standard errors of the
   truth (`specs::assert_unbiased_mean`).
