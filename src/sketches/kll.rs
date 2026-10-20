@@ -26,7 +26,7 @@ pub(crate) use wire::{
 const MAX_LEVELS: usize = 61;
 
 const CAPACITY_CACHE_LEN: usize = 20;
-const MAX_K: usize = 26_602;
+pub(crate) const MAX_K: usize = 26_602;
 const CAPACITY_DECAY: f64 = 2.0 / 3.0;
 const DEFAULT_K: i32 = 200;
 

@@ -54,8 +54,7 @@ all merged shards.
 ## Update
 
 ```rust
-fn update(&mut self, value: &f64)
-fn add<T: NumericalValue>(&mut self, value: &T)
+fn update<T: NumericalValue>(&mut self, value: &T)
 fn update_data_input(&mut self, value: &DataInput) -> Result<(), &'static str>
 fn clear(&mut self)
 ```
@@ -270,10 +269,10 @@ let mut left = UnivMonQ::with_source_id(config, 10)?;
 let mut right = UnivMonQ::with_source_id(config, 20)?;
 
 for value in 0..50_000 {
-    left.add(&value);
+    left.update(&value);
 }
 for value in 50_000..100_000 {
-    right.add(&value);
+    right.update(&value);
 }
 left.merge(&right)?;
 

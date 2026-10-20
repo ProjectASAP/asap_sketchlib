@@ -9,12 +9,12 @@
 
 use std::collections::HashMap;
 
+use crate::common::heap::DEFAULT_HEAP_SIZE;
 use crate::common::input::{heap_item_to_sketch_input, input_to_owned};
 use crate::sketch_framework::univmon_two_tier::UnivMonPool;
 use crate::{DataInput, OwnedDataInput, UnivMon};
 
 const MASS_EPSILON: f64 = 1e-9;
-const DEFAULT_HEAP_SIZE: usize = 32;
 const DEFAULT_ROWS: usize = 5;
 const DEFAULT_COLS: usize = 2048;
 const DEFAULT_LAYERS: usize = 8;

@@ -19,7 +19,7 @@ pub use delta::CountMinSketchWithHeapDelta;
 /// The heap count type of a `CountMinSketchWithHeap` over storage `S`.
 type HeapCountOf<S> = <<S as MatrixStorage>::Counter as HeapCounter>::HeapCount;
 
-const DEFAULT_HEAP_SIZE: usize = 32;
+use crate::common::heap::DEFAULT_HEAP_SIZE;
 
 /// A Count-Min Sketch paired with a top-k heavy-hitter heap.
 ///

@@ -23,7 +23,8 @@
 //!
 //! This implementation is part of the `asap_sketchlib` library.
 
-use crate::common::heap::TopKHeap;
+use crate::common::Vector1D;
+use crate::common::heap::{DEFAULT_HEAP_SIZE, TopKHeap};
 use crate::common::{
     DataInput, OwnedDataInput, SEED_LIST, UNIVMON_BOTTOM_LAYER_SEED_INDEX, hash64_seeded,
     hash64_seeded_owned, heap_item_to_sketch_input,
@@ -38,7 +39,6 @@ pub(crate) mod wire;
 
 const DEFAULT_ROWS: usize = 5;
 const DEFAULT_COLS: usize = 2048;
-const DEFAULT_HEAP_SIZE: usize = 32;
 const DEFAULT_LAYERS: usize = 8;
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -308,8 +308,8 @@ impl UnivMon {
         }
     }
 
-    /// Computes a g-sum estimate using the heuristic recurrence.
-    pub fn calc_g_sum_heuristic<F>(&self, g: F, heavy_only: bool) -> f64
+    /// Computes a g-sum estimate with the UnivMon recurrence.
+    pub fn estimate_g_sum<F>(&self, g: F, heavy_only: bool) -> f64
     where
         F: Fn(f64) -> f64,
     {
@@ -448,14 +448,6 @@ impl UnivMon {
         } else {
             (l2 / (self.heap_size as f64).sqrt()) as i64
         }
-    }
-
-    /// Computes a g-sum estimate.
-    pub fn estimate_g_sum<F>(&self, g: F, heavy_only: bool) -> f64
-    where
-        F: Fn(f64) -> f64,
-    {
-        self.calc_g_sum_heuristic(g, heavy_only)
     }
 
     /// Returns the exact L1 norm for the supported non-negative update stream.

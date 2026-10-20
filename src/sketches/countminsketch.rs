@@ -29,12 +29,8 @@ mod wire;
 pub use delta::CountMinSketchDelta;
 pub(crate) use wire::{CmsWireCounter, CmsWireMode};
 
-const DEFAULT_ROWS: usize = 3;
-const DEFAULT_COLS: usize = 4096;
-/// Recommended row count for quick-start examples.
-pub const QUICKSTART_ROWS: usize = 5;
-/// Recommended column count for quick-start examples.
-pub const QUICKSTART_COLS: usize = 2048;
+use crate::common::structures::fixed_structure::{DEFAULT_COLS, DEFAULT_ROWS};
+pub use crate::common::structures::fixed_structure::{QUICKSTART_COLS, QUICKSTART_ROWS};
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 /// A Count-Min Sketch for estimating item frequencies in a data stream.

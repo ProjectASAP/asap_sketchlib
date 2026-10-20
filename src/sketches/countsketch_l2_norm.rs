@@ -14,8 +14,7 @@ use crate::{
 
 pub(crate) mod wire;
 
-const DEFAULT_ROWS: usize = 3;
-const DEFAULT_COLS: usize = 4096;
+use crate::common::structures::fixed_structure::{DEFAULT_COLS, DEFAULT_ROWS};
 
 /// Count Sketch augmented with per-row L2 norm tracking for heavy-hitter detection.
 #[derive(Serialize, Deserialize, Clone, Debug)]

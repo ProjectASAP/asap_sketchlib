@@ -303,6 +303,13 @@ signals a backwards-compatible change.
   as an empty window like any other, and that window takes a place in
   `max_windows`.
 
+- **Duplicates are merged** (breaking). `UnivMonQ::add` and `update` are one
+  generic `update<T: NumericalValue>(&T)`; `UnivMon::calc_g_sum_heuristic` is
+  gone and `estimate_g_sum` is the one g-sum. `QUICKSTART_ROWS` /
+  `QUICKSTART_COLS` and the default 3 x 4096 geometry are defined once in
+  `common::structures::fixed_structure`, and the default heap size (32) and
+  KLL's largest `k` once each.
+
 ### Removed
 
 - **Dead and duplicate APIs** (breaking). `Kll::wire_k` (use `k()`);

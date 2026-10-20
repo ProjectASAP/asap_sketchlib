@@ -207,7 +207,7 @@ fn main() {
         let mut sketch = UnivMonQ::new(q_base).unwrap();
         let start = Instant::now();
         for &value in &values {
-            sketch.add(&black_box(value));
+            sketch.update(&black_box(value));
         }
         q_base_times.push(start.elapsed());
         black_box(sketch.count());
@@ -215,7 +215,7 @@ fn main() {
         let mut sketch = UnivMonQ::new(q_ordered).unwrap();
         let start = Instant::now();
         for &value in &values {
-            sketch.add(&black_box(value));
+            sketch.update(&black_box(value));
         }
         q_ordered_times.push(start.elapsed());
         black_box(sketch.count());
@@ -223,7 +223,7 @@ fn main() {
         let mut sketch = UnivMonQ::new(q_memory_matched).unwrap();
         let start = Instant::now();
         for &value in &values {
-            sketch.add(&black_box(value));
+            sketch.update(&black_box(value));
         }
         q_memory_matched_times.push(start.elapsed());
         black_box(sketch.count());
@@ -245,9 +245,9 @@ fn main() {
         let input = DataInput::U64(value);
         regular.update_weighted(&input, 1);
         fast.update_weighted_terminal(&input, 1);
-        q_base_sketch.add(&value);
-        q_ordered_sketch.add(&value);
-        q_memory_matched_sketch.add(&value);
+        q_base_sketch.update(&value);
+        q_ordered_sketch.update(&value);
+        q_memory_matched_sketch.update(&value);
     }
 
     let regular_wire = regular.to_asapv1().unwrap().len();
@@ -668,10 +668,10 @@ fn main() {
     let mut left = UnivMonQ::new(q_ordered).unwrap();
     let mut right = UnivMonQ::new(q_ordered).unwrap();
     for &value in &values[..midpoint] {
-        left.add(&value);
+        left.update(&value);
     }
     for &value in &values[midpoint..] {
-        right.add(&value);
+        right.update(&value);
     }
     let mut q_merge_times = Vec::with_capacity(MERGE_REPEATS);
     for _ in 0..MERGE_REPEATS {

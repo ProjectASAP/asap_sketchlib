@@ -840,15 +840,9 @@ impl<H: SketchHasher> UnivMonQ<H> {
         self.source_id
     }
 
-    /// Adds one numeric value.
+    /// Adds one numeric value, projected to `f64`.
     #[inline(always)]
-    pub fn update(&mut self, value: &f64) {
-        self.update_value(*value);
-    }
-
-    /// Adds any Sketchlib numeric primitive after projection to `f64`.
-    #[inline(always)]
-    pub fn add<T: NumericalValue>(&mut self, value: &T) {
+    pub fn update<T: NumericalValue>(&mut self, value: &T) {
         self.update_value(value.to_f64());
     }
 
@@ -1892,13 +1886,13 @@ mod tests {
             .find(|value| sketch.sample_level(float_to_ordered(*value as f64)) == terminal)
             .unwrap();
         for _ in 0..200 {
-            sketch.add(&target);
+            sketch.update(&target);
         }
 
         let mut distinct_tail = 0_usize;
         for value in 1_u64.. {
             if value != target && sketch.sample_level(float_to_ordered(value as f64)) == terminal {
-                sketch.add(&value);
+                sketch.update(&value);
                 distinct_tail += 1;
                 if distinct_tail == 50_000 {
                     break;
@@ -2248,7 +2242,7 @@ mod tests {
         fn shard(source_id: u64, offset: u64) -> UnivMonQ {
             let mut sketch = UnivMonQ::with_source_id(tiny_config(), source_id).unwrap();
             for index in 0..1_000_u64 {
-                sketch.add(&((index.wrapping_mul(17) + offset) % 991));
+                sketch.update(&((index.wrapping_mul(17) + offset) % 991));
             }
             sketch
         }

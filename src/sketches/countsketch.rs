@@ -23,8 +23,7 @@ mod wire;
 pub use delta::CountSketchDelta;
 pub(crate) use wire::{CsWireCounter, CsWireMode};
 
-const DEFAULT_ROWS: usize = 3;
-const DEFAULT_COLS: usize = 4096;
+use crate::common::structures::fixed_structure::{DEFAULT_COLS, DEFAULT_ROWS};
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
 /// A frequency-estimation sketch using random sign projections (Count Sketch).

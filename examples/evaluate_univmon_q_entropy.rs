@@ -307,7 +307,7 @@ fn build_shards(data: &[usize], config: UnivMonQConfig, seed: u64) -> Vec<UnivMo
             let end = (shard + 1) * data.len() / SHARDS;
             let mut sketch = UnivMonQ::with_source_id(config, seed ^ (shard as u64 + 1)).unwrap();
             for &value in &data[start..end] {
-                sketch.add(&value);
+                sketch.update(&value);
             }
             sketch
         })

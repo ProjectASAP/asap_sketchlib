@@ -196,7 +196,7 @@ fn timed_q(data: &[i64], config: UnivMonQConfig) -> (UnivMonQ, Duration) {
         let mut sketch = UnivMonQ::new(config).unwrap();
         let start = Instant::now();
         for value in data {
-            sketch.add(value);
+            sketch.update(value);
         }
         times.push(start.elapsed());
         retained = Some(sketch);
@@ -224,10 +224,10 @@ fn merged_q(data: &[i64], config: UnivMonQConfig) -> (UnivMonQ, Duration) {
     let mut left = UnivMonQ::new(config).unwrap();
     let mut right = UnivMonQ::new(config).unwrap();
     for value in &data[..midpoint] {
-        left.add(value);
+        left.update(value);
     }
     for value in &data[midpoint..] {
-        right.add(value);
+        right.update(value);
     }
     let mut times = Vec::with_capacity(MERGE_REPEATS);
     for _ in 0..MERGE_REPEATS {

@@ -18,12 +18,11 @@ use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
 
-use super::kll::{Coin, merge_sorted_runs, randomly_halve_up};
+use super::kll::{Coin, MAX_K, merge_sorted_runs, randomly_halve_up};
 
 mod wire;
 
 const CAPACITY_CACHE_LEN: usize = 20;
-const MAX_K: usize = 26_602;
 const CAPACITY_DECAY: f64 = 2.0 / 3.0;
 const DEFAULT_K: i32 = 200;
 

@@ -6,7 +6,8 @@
 //!   "mouse" layers for the long tail, matching the PromSketch design.
 
 use crate::UnivMon;
-use crate::common::heap::TopKHeap;
+use crate::common::Vector1D;
+use crate::common::heap::{DEFAULT_HEAP_SIZE, TopKHeap};
 use crate::common::{
     DataInput, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, hash64_seeded, hash64_seeded_owned,
     heap_item_to_sketch_input,
@@ -94,7 +95,6 @@ const DEFAULT_ELEPHANT_ROWS: usize = 3;
 const DEFAULT_ELEPHANT_COLS: usize = 2048;
 const DEFAULT_MOUSE_ROWS: usize = 3;
 const DEFAULT_MOUSE_COLS: usize = 512;
-const DEFAULT_PYRAMID_HEAP: usize = 32;
 const DEFAULT_LAYERS: usize = 16;
 
 /// Pyramid-structured UnivMon with two-tier sketch dimensions.
@@ -215,7 +215,7 @@ impl UnivMonTwoTier {
     /// Creates a pyramid using built-in default dimensions.
     pub fn with_defaults() -> Self {
         Self::new(
-            DEFAULT_PYRAMID_HEAP,
+            DEFAULT_HEAP_SIZE,
             DEFAULT_ELEPHANT_LAYERS,
             DEFAULT_ELEPHANT_ROWS,
             DEFAULT_ELEPHANT_COLS,

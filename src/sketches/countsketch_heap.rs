@@ -80,7 +80,7 @@ impl CountSketchHeapCounter for f64 {
     }
 }
 
-const DEFAULT_HEAP_SIZE: usize = 32;
+use crate::common::heap::DEFAULT_HEAP_SIZE;
 
 /// A Count Sketch paired with a top-k heavy-hitter heap.
 ///

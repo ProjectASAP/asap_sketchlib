@@ -1780,11 +1780,6 @@ fn univmon_generic_g_sum_reproduces_every_named_estimator() {
         "the entropy estimator is the x*log2(x) g-sum rearranged",
     );
     assert_eq!(
-        um.estimate_g_sum(|x| x * x, false),
-        um.calc_g_sum_heuristic(|x| x * x, false),
-        "the public g-sum must be the heuristic it delegates to"
-    );
-    assert_eq!(
         um.estimate_g_sum(|_| 0.0, false),
         0.0,
         "the zero function must sum to zero"

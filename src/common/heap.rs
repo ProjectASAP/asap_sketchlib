@@ -15,6 +15,9 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 
+/// Default heap capacity of the top-k sketches and UnivMon layers.
+pub(crate) const DEFAULT_HEAP_SIZE: usize = 32;
+
 /// The count an [`HeapEntry`] carries: `i64`, or `f64` ranked by
 /// [`f64::total_cmp`].
 pub trait HeapCount: Copy + fmt::Display + Serialize + DeserializeOwned {
