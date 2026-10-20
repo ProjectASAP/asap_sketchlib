@@ -328,7 +328,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "dimensions must be non-zero")]
-    fn init_rejects_zero_depth() {
+    fn unfilled_rejects_zero_bucket_len() {
         let _: Vector3D<u8> = Vector3D::unfilled(2, 4, 0);
     }
 
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "overflows usize")]
-    fn init_rejects_dimensions_whose_product_overflows() {
+    fn unfilled_rejects_dimensions_whose_product_overflows() {
         // Each dimension is legal on its own; the product is not. Without the
         // check `Vec::with_capacity` receives the wrapped product and the
         // container reports a shape its storage cannot hold.

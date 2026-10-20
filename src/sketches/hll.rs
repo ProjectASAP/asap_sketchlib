@@ -548,7 +548,7 @@ mod tests {
     const P12_ERROR_TOLERANCE: f64 = 0.03;
 
     #[test]
-    fn hll_child_insert_emits_on_improvement() {
+    fn hll_child_update_emits_on_improvement() {
         let mut child = HyperLogLog::<Classic>::default();
         let mut deltas: Vec<HllRegisterDelta> = Vec::new();
 

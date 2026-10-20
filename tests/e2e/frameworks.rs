@@ -1277,7 +1277,7 @@ fn hydra_univmon_head_subpopulation_metrics() {
         if l1 != exact.total() as f64 {
             failures.push(format!("{key:?}: L1 {l1} != exact {}", exact.total()));
         }
-        // Bands from `univmon_weighted_metrics_and_fast_insert_parity`.
+        // Bands from `univmon_weighted_metrics_and_update_weighted_terminal_parity`.
         for (label, est, want, tol) in [
             (
                 "L2",
@@ -1482,7 +1482,7 @@ fn hydra_shard_merge_preserves_answers_for_every_counter() {
 // ----------------------------------------------------------------- UnivMon
 
 #[test]
-fn univmon_weighted_metrics_and_fast_insert_parity() {
+fn univmon_weighted_metrics_and_update_weighted_terminal_parity() {
     let build = || UnivMon::new(32, 5, 2048, 8);
     let mut um = build();
     let mut fast = build();
@@ -1533,7 +1533,7 @@ fn univmon_weighted_metrics_and_fast_insert_parity() {
 }
 
 #[test]
-fn univmon_pyramid_weighted_metrics() {
+fn univmon_two_tier_weighted_metrics() {
     let mut up = UnivMonTwoTier::with_defaults();
     let mut truth = common::FreqTruth::default();
     let stream = zipf_u64(15_000, 800, 1.3, 4004);
@@ -1699,7 +1699,7 @@ fn hydra_query_frequency_is_the_frequency_query_it_wraps() {
 }
 
 #[test]
-fn hydra_query_quantile_is_the_cumulative_query_it_wraps() {
+fn hydra_query_cdf_is_the_cumulative_query_it_wraps() {
     let mut hydra = Hydra::with_schema(
         4,
         512,

@@ -1710,7 +1710,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_update_equivalent_to_loop_and_empty_is_noop() {
+    fn update_batch_equivalent_to_loop_and_empty_is_noop() {
         // Empty must be no-op and keep cache/coin.
         let mut sk = Kll::<f64>::with_seed(200, 8, 42);
         for &v in &[1.0, 2.0, 3.0] {

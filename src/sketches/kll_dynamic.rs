@@ -971,7 +971,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_update_equivalent_to_loop() {
+    fn update_batch_equivalent_to_loop() {
         let vals = sample_uniform_f64(0.0, 1000.0, 10_000, 0xCAFE_1234);
         let mut a = KllDynamic::<f64>::with_k(200);
         let mut b = KllDynamic::<f64>::with_k(200);

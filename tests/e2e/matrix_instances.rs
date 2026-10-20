@@ -609,7 +609,7 @@ macro_rules! heap_matrix_test {
 //   (`i64`, or `f64` for an `f64` counter). `i128` has no `Into<i64>`, so those
 //   instances construct but have no `update`, `estimate` or `merge` at all.
 //   They are enumerated and pinned as inert by
-//   `cmsheap_inert_instances_construct_and_report_their_geometry`.
+//   `count_min_sketch_with_heap_inert_instances_construct_and_report_their_geometry`.
 // - `CountSketchWithHeap`'s insert path is bounded on `S::Counter: CountSketchHeapCounter`,
 //   which `i128` *does* satisfy. All six `i128` instances are fully
 //   operational and are covered below; the previous revision of this file and
@@ -687,7 +687,7 @@ heap_matrix_test!(
 /// `i128` would change the heap wire payload for every family that shares it.
 /// This test fails if any of that silently changes.
 #[test]
-fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
+fn count_sketch_with_heap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
     macro_rules! probe {
         ($storage:ty, $path:ty, $ctor:expr) => {{
             let label = concat!(
@@ -830,7 +830,7 @@ fn heap_count(items: &[asap_sketchlib::HeapEntry], key: &DataInput) -> Option<i6
 /// the constructors is a breaking change to a type that composes generically.
 /// `CountSketchWithHeap` already covers `i128` end to end for callers who need it.
 #[test]
-fn cmsheap_inert_instances_construct_and_report_their_geometry() {
+fn count_min_sketch_with_heap_inert_instances_construct_and_report_their_geometry() {
     macro_rules! inert {
         ($storage:ty, $path:ty, $ctor:expr, $rows:expr, $cols:expr) => {{
             let label = concat!(
@@ -1372,7 +1372,7 @@ fn countmin_precomputed_hash_entry_points_match_the_value_entry_points() {
 }
 
 #[test]
-fn countmin_weighted_batch_entry_points_match_a_loop_of_single_inserts() {
+fn countmin_weighted_batch_entry_points_match_a_loop_of_single_updates() {
     const ROWS: usize = 4;
     const COLS: usize = 2_048;
     let (stream, truth) = stream_and_truth();

@@ -136,7 +136,7 @@ fn set_aggregator_round_trip() {
 }
 
 #[test]
-fn delta_result_round_trip() {
+fn set_aggregator_delta_round_trip() {
     let mut added = HashSet::new();
     added.insert("a".to_string());
     let mut removed = HashSet::new();

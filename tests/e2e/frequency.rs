@@ -558,7 +558,7 @@ fn countsketch_error_stays_rank_independent_within_the_documented_empirical_band
 /// CountSketchWithL2Norm is a Count Sketch carrying a running F2, so its point estimates
 /// obey the Count Sketch L2 bound and its `l2_squared` tracks the exact F2.
 #[test]
-fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
+fn count_sketch_with_l2_norm_weighted_turnstile_satisfies_the_l2_median_bound() {
     const ROWS: usize = 4;
     const COLS: usize = 2048;
     const HASH_SEED_IDX: usize = 11;
@@ -604,7 +604,7 @@ fn countl2hh_weighted_turnstile_satisfies_the_l2_median_bound() {
 // ------------------------------------------- CountMinSketchFold / CountSketchFold counts + merge
 
 #[test]
-fn fold_cms_foldcs_counts_and_hierarchical_merge() {
+fn count_min_sketch_fold_and_count_sketch_fold_counts_and_hierarchical_merge() {
     // Weighted per-key counts stay exact on sparse dims.
     let mut a = CountMinSketchFold::<DefaultXxHasher>::new(3, 2048, 0, 32);
     let mut b = CountMinSketchFold::<DefaultXxHasher>::new(3, 2048, 0, 32);

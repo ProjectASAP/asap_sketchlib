@@ -247,7 +247,7 @@ proptest! {
     // ===== Bucket invariants along the insert path =====
 
     #[test]
-    fn the_eviction_flag_is_never_cleared_by_an_insert(
+    fn the_eviction_flag_is_never_cleared_by_an_update(
         (buckets, light_rows, light_cols, stream) in crowded(300),
     ) {
         let mut sketch = E::with_heavy_and_light(buckets, light_rows, light_cols);

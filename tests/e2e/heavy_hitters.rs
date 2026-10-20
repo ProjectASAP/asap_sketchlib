@@ -444,7 +444,7 @@ fn a_weighted_arrival_matches_repeating_it_under_eviction() {
 
 /// `update_batch` is the loop it replaces, and a zero weight records nothing.
 #[test]
-fn bulk_insert_matches_repeated_inserts_and_a_zero_weight_is_inert() {
+fn update_batch_matches_repeated_updates_and_a_zero_weight_is_inert() {
     let stream = stream();
     let values: Vec<DataInput> = stream.iter().map(|key| DataInput::I64(*key)).collect();
 
@@ -1437,7 +1437,7 @@ mod partial_key_and_heavy_maintenance {
     }
 
     #[test]
-    fn elastic_insert_heavy_only_never_writes_the_light_layer() {
+    fn elastic_update_heavy_only_never_writes_the_light_layer() {
         let mut sk = ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(8, 3, 256);
         for e in 0..64 {
             for _ in 0..20 {

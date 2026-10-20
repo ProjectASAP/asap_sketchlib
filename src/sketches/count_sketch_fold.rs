@@ -443,7 +443,7 @@ mod tests {
     // -- CountSketchFold basic tests -------------------------------------------------
 
     #[test]
-    fn fold_cs_dimensions() {
+    fn count_sketch_fold_dimensions() {
         let sketch: CountSketchFold = CountSketchFold::new(3, 4096, 4, 10);
         assert_eq!(sketch.rows(), 3);
         assert_eq!(sketch.full_cols(), 4096);
@@ -452,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_cs_level_zero_is_full() {
+    fn count_sketch_fold_level_zero_is_full() {
         let sketch: CountSketchFold = CountSketchFold::unfolded(3, 1024, 10);
         assert_eq!(sketch.fold_cols(), 1024);
         assert_eq!(sketch.fold_level(), 0);
@@ -460,18 +460,18 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "full_cols must be a power of two")]
-    fn fold_cs_rejects_non_power_of_two() {
+    fn count_sketch_fold_rejects_non_power_of_two() {
         let _: CountSketchFold = CountSketchFold::new(3, 1000, 0, 10);
     }
 
     #[test]
     #[should_panic(expected = "fold_level")]
-    fn fold_cs_rejects_excessive_fold_level() {
+    fn count_sketch_fold_rejects_excessive_fold_level() {
         let _: CountSketchFold = CountSketchFold::new(3, 256, 9, 10); // 256 = 2^8, fold_level 9 is too big
     }
 
     #[test]
-    fn fold_cs_insert_query_single_key() {
+    fn count_sketch_fold_update_estimate_single_key() {
         let mut sketch: CountSketchFold = CountSketchFold::new(3, 1024, 4, 10);
         let key = DataInput::Str("hello");
         sketch.update_weighted(&key, 7);
@@ -479,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_cs_insert_accumulates() {
+    fn count_sketch_fold_update_accumulates() {
         let mut sketch: CountSketchFold = CountSketchFold::new(3, 1024, 4, 10);
         let key = DataInput::Str("hello");
         sketch.update_weighted(&key, 3);
@@ -488,14 +488,14 @@ mod tests {
     }
 
     #[test]
-    fn fold_cs_absent_key_returns_zero() {
+    fn count_sketch_fold_absent_key_returns_zero() {
         let mut sketch: CountSketchFold = CountSketchFold::new(3, 1024, 4, 10);
         sketch.update_weighted(&DataInput::Str("present"), 10);
         assert_eq!(sketch.estimate(&DataInput::Str("absent")), 0);
     }
 
     #[test]
-    fn fold_cs_multiple_keys() {
+    fn count_sketch_fold_multiple_keys() {
         let mut sketch: CountSketchFold = CountSketchFold::new(3, 4096, 4, 10);
         for i in 0..100u64 {
             sketch.update_weighted(&DataInput::U64(i), i as i64);
@@ -515,7 +515,7 @@ mod tests {
     // -- Sign application check ---------------------------------------------
 
     #[test]
-    fn fold_cs_sign_application() {
+    fn count_sketch_fold_sign_application() {
         // Verify that raw cell values include both positive and negative entries,
         // confirming sign is being applied on insert.
         let mut sketch: CountSketchFold = CountSketchFold::new(5, 1024, 4, 10);
@@ -544,7 +544,7 @@ mod tests {
     // -- Exact match with standard Count Sketch -----------------------------
 
     #[test]
-    fn fold_cs_matches_standard_cs_exact() {
+    fn count_sketch_fold_matches_standard_cs_exact() {
         let rows = 3;
         let cols = 256; // small for deterministic testing
         let fold_level = 3; // 256/8 = 32 physical columns
@@ -570,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_cs_matches_standard_cs_flat_counters() {
+    fn count_sketch_fold_matches_standard_cs_flat_counters() {
         let rows = 3;
         let cols = 256;
         let fold_level = 3;
@@ -597,7 +597,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_cs_matches_standard_cs_insert_many() {
+    fn count_sketch_fold_matches_standard_cs_update_weighted() {
         let rows = 3;
         let cols = 512;
         let fold_level = 4;
@@ -988,7 +988,7 @@ mod tests {
     // -- Error bound (statistical) ------------------------------------------
 
     #[test]
-    fn fold_cs_error_bound_zipf() {
+    fn count_sketch_fold_error_bound_zipf() {
         let rows = 3;
         let cols = 4096;
         let fold_level = 4;

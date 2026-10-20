@@ -178,7 +178,7 @@ fn the_fill_based_estimate_tracks_the_measured_rate() {
 /// Inserting a key twice sets no bit the first insert did not, so the filter's
 /// fill is a function of the distinct keys alone.
 #[test]
-fn repeated_inserts_leave_the_bits_unchanged() {
+fn repeated_updates_leave_the_bits_unchanged() {
     let mut once = Bloom::<RegularPath>::with_capacity(1_000, 0.01);
     let mut twice = Bloom::<RegularPath>::with_capacity(1_000, 0.01);
     for key in 0..1_000i64 {
@@ -681,7 +681,7 @@ fn merging_filters_of_different_slice_counts_panics() {
 
 /// `update_batch` is the loop, not a different filter.
 #[test]
-fn bulk_insert_matches_inserting_one_at_a_time() {
+fn update_batch_matches_updating_one_at_a_time() {
     let batch: Vec<DataInput> = members().into_iter().map(DataInput::I64).collect();
 
     let mut one_by_one = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);

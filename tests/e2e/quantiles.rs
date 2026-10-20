@@ -392,7 +392,7 @@ fn bulk_cases(trial: usize, n: usize) -> Vec<(&'static str, Vec<f64>)> {
 /// still legal — sketch, so what is asserted here is equality: serialized
 /// bytes, retained count, and quantile bits over `RANK_QS`.
 #[test]
-fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
+fn kll_update_batch_is_byte_identical_to_the_update_loop() {
     const N: usize = 20_000;
     for (case, (shape, values)) in bulk_cases(0, N).iter().enumerate() {
         let seed = kll_bulk_seed(case as u64);
@@ -426,7 +426,7 @@ fn kll_bulk_update_is_byte_identical_to_the_update_loop() {
 
 /// `KllDynamic` under the same equality, on its own wire form.
 #[test]
-fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
+fn kll_dynamic_update_batch_is_byte_identical_to_the_update_loop() {
     const N: usize = 10_000;
     for (case, (shape, values)) in bulk_cases(1, N).iter().enumerate() {
         let seed = kll_bulk_seed(0x0100 + case as u64);
@@ -462,7 +462,7 @@ fn kll_dynamic_bulk_update_is_byte_identical_to_the_update_loop() {
 /// byte-for-byte untouched, and a one-element `update_batch` equals a single
 /// `update`.
 #[test]
-fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
+fn kll_update_batch_on_a_degenerate_slice_matches_the_loop() {
     let seed = kll_bulk_seed(0x0200);
     let mut sk: Kll<f64> = Kll::with_k_and_seed(200, seed);
     for v in &[1.0f64, 2.0, 3.0] {
@@ -499,7 +499,7 @@ fn kll_bulk_update_on_a_degenerate_slice_matches_the_loop() {
 /// The `DataInput` batch path matches the loop, and a non-numeric element
 /// stops it at that element with the preceding prefix already applied.
 #[test]
-fn kll_bulk_update_data_input_matches_the_loop_and_stops_at_the_first_non_numeric() {
+fn kll_update_batch_data_input_matches_the_loop_and_stops_at_the_first_non_numeric() {
     let seed = kll_bulk_seed(0x0300);
     let values = normal_f64(5_000, 100.0, 20.0, 8001);
     let inputs: Vec<DataInput> = values.iter().map(|v| DataInput::F64(*v)).collect();

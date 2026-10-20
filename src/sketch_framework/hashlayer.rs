@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_and_estimate() {
+    fn test_update_and_estimate() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         let baseline = create_baseline(&data);
 
@@ -464,7 +464,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_at() {
+    fn test_update_at_indices() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
         let baseline = create_baseline(&data);
 
@@ -485,7 +485,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_with_hash_matches_insert() {
+    fn test_update_with_hash_matches_update() {
         let data = sample_zipf_u64(ZIPF_DOMAIN, ZIPF_EXPONENT, SAMPLE_SIZE, SEED);
 
         let mut layer_a = default_layer();

@@ -624,7 +624,7 @@ mod tests {
     /// escaped its slice, or a slice width that is not a power of two folding
     /// wrong, shows up here as a bit count that is not the row count.
     #[test]
-    fn a_single_insert_sets_exactly_one_bit_in_every_slice() {
+    fn a_single_update_sets_exactly_one_bit_in_every_slice() {
         for cols in [1usize, 2, 7, 64, 100, WIDE_COLS] {
             for rows in [1usize, 5, BLOOM_MAX_SLICES] {
                 let key = DataInput::Str("solo");

@@ -284,21 +284,21 @@ mod tests_count_l2_hh {
     /// hash: the deep rows' columns would reuse the shallow rows' signs.
     #[test]
     #[should_panic(expected = "hash bits")]
-    fn countl2hh_rejects_column_bits_that_reach_the_sign_bits() {
+    fn count_sketch_with_l2_norm_rejects_column_bits_that_reach_the_sign_bits() {
         let _: CountSketchWithL2Norm =
             CountSketchWithL2Norm::with_dimensions_and_seed_index(11, 2048, 0);
     }
 
     /// 10 x 2048 spends 120 bits and is accepted.
     #[test]
-    fn countl2hh_accepts_the_widest_disjoint_geometry() {
+    fn count_sketch_with_l2_norm_accepts_the_widest_disjoint_geometry() {
         let sketch: CountSketchWithL2Norm =
             CountSketchWithL2Norm::with_dimensions_and_seed_index(10, 2048, 0);
         assert_eq!((sketch.rows(), sketch.cols()), (10, 2048));
     }
 
     #[test]
-    fn countl2hh_estimates_and_l2_are_consistent() {
+    fn count_sketch_with_l2_norm_estimates_and_l2_are_consistent() {
         let mut sketch: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(3, 32);
         let key = DataInput::Str("gamma");
 
@@ -313,7 +313,7 @@ mod tests_count_l2_hh {
     }
 
     #[test]
-    fn countl2hh_merge_combines_frequency_vectors() {
+    fn count_sketch_with_l2_norm_merge_combines_frequency_vectors() {
         let mut left: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(3, 32);
         let mut right: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(3, 32);
         let key = DataInput::U32(42);
@@ -329,7 +329,7 @@ mod tests_count_l2_hh {
     }
 
     #[test]
-    fn countl2hh_round_trip_serialization() {
+    fn count_sketch_with_l2_norm_round_trip_preserves_estimate_and_l2() {
         let mut sketch: CountSketchWithL2Norm =
             CountSketchWithL2Norm::with_dimensions_and_seed_index(3, 32, 7);
         let key = DataInput::Str("serialize");

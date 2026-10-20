@@ -404,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_and_estimate() {
+    fn update_and_estimate() {
         // Verifies single-key inserts update both CMS estimate and visible frequency.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 64, 10);
         let key = DataInput::Str("hello");
@@ -487,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_many_updates_estimate_and_heap() {
+    fn update_weighted_updates_estimate_and_heap() {
         // Verifies update_weighted updates both estimate and heap entry count.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 1024, 4);
         let key = DataInput::Str("many");
@@ -498,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_insert_updates_multiple_keys() {
+    fn update_batch_updates_multiple_keys() {
         // Verifies update_batch processes streams correctly across multiple keys.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 1024, 4);
         let values = vec![
@@ -564,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_path_insert_and_estimate() {
+    fn fast_path_update_and_estimate() {
         // Verifies FastPath insert and estimate agree on repeated updates.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(3, 64, 10);
         let key = DataInput::Str("fast");
@@ -575,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_path_insert_many_and_bulk_insert() {
+    fn fast_path_update_weighted_and_update_batch() {
         // Verifies FastPath batched APIs keep estimate and heap counts in sync.
         let mut sh = CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(3, 1024, 4);
         let key = DataInput::Str("fast-many");
@@ -738,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_insert_equivalent_to_repeated_insert() {
+    fn update_batch_equivalent_to_repeated_update() {
         // Verifies update_batch yields same estimates and heap counts as repeated insert.
         let values = vec![
             DataInput::U64(1),

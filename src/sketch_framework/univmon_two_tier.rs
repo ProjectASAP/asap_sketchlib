@@ -428,7 +428,7 @@ mod tests {
     // =======================================================================
 
     #[test]
-    fn pyramid_basic_insert_and_query() {
+    fn univmon_two_tier_basic_update_and_query() {
         let mut um = UnivMonTwoTier::with_defaults();
 
         let cases: Vec<(&str, i64)> = vec![("hello", 10), ("world", 20), ("hello", 5), ("foo", 30)];
@@ -447,7 +447,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_fast_insert_matches_standard() {
+    fn univmon_two_tier_update_weighted_terminal_matches_standard() {
         // Both insert paths should produce identical sketches.
         // Retain the complete 100-key support so this tests construction
         // equivalence rather than independent candidate-sampling variance.
@@ -481,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_two_tier_dimensions() {
+    fn univmon_two_tier_dimensions() {
         // Verify elephant layers are larger than mouse layers.
         let um = UnivMonTwoTier::new(32, 4, 5, 2048, 3, 256, 8);
 
@@ -492,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_free_resets_state() {
+    fn univmon_two_tier_clear_resets_state() {
         let mut um = UnivMonTwoTier::with_defaults();
         for i in 0..100i64 {
             um.update_weighted(&DataInput::I64(i), 10);
@@ -505,7 +505,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_merge_combines_data() {
+    fn univmon_two_tier_merge_combines_data() {
         let mut one_pass = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
         let mut left = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
         let mut right = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
@@ -567,7 +567,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_accuracy_zipf() {
+    fn univmon_two_tier_accuracy_zipf() {
         use std::collections::HashMap;
 
         let mut um = UnivMonTwoTier::new(64, 8, 5, 2048, 3, 512, 16);
@@ -609,7 +609,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_fast_insert_accuracy() {
+    fn univmon_two_tier_update_weighted_terminal_accuracy() {
         use std::collections::HashMap;
 
         let mut um = UnivMonTwoTier::new(64, 8, 5, 2048, 3, 512, 16);
@@ -645,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn pyramid_memory_savings_vs_uniform() {
+    fn univmon_two_tier_memory_savings_vs_uniform() {
         // Pyramid with 16 layers should use less memory than a uniform
         // UnivMon with the same elephant dimensions at all 16 layers.
         // We verify this by comparing total sketch column counts.

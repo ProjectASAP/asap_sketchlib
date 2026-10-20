@@ -272,7 +272,7 @@ proptest! {
     // ===== A weighted arrival must match repeating it =====
 
     #[test]
-    fn count_min_weighted_matches_repeating_the_insert(
+    fn count_min_weighted_matches_repeating_the_update(
         rows in 1usize..6,
         cols in 1usize..64,
         updates in weighted(120),

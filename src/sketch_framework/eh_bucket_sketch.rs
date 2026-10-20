@@ -292,7 +292,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn insert_routes_to_countl2hh_and_univmon() {
+    fn update_routes_to_count_sketch_with_l2_norm_and_univmon() {
         let key = DataInput::I64(7);
 
         let mut count_l2hh =
@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn count_sketch_insert_and_query_round_trip() {
+    fn count_sketch_update_and_query_round_trip() {
         let mut cs = EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::default());
         let key = DataInput::I64(11);
         cs.update(&key);
@@ -326,7 +326,7 @@ mod tests {
     }
 
     #[test]
-    fn ddsketch_insert_and_quantile_query_round_trip() {
+    fn ddsketch_update_and_quantile_query_round_trip() {
         let mut dd = EhBucketSketch::DdSketch(DdSketch::new(0.01));
         dd.update(&DataInput::F64(10.0));
         dd.update(&DataInput::F64(20.0));

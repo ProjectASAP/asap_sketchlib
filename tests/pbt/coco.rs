@@ -360,7 +360,7 @@ proptest! {
     }
 
     #[test]
-    fn estimate_key_reports_the_mass_of_the_bucket_that_holds_the_key(
+    fn estimate_reports_the_mass_of_the_bucket_that_holds_the_key(
         (w, d, seed, stream) in crowded_stream(300),
     ) {
         let sketch = filled(w, d, seed, &stream);

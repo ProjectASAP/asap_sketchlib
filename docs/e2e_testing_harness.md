@@ -308,7 +308,7 @@ or, when the behaviour is a documented limitation rather than a bug, pin it
 with *both* an upper and a lower guard so that fixing it later fails the test
 and forces the documentation to be updated instead of going stale. Two tests
 in this suite do exactly that: `hll_classic_switchover_band_stays_within_the_documented_empirical_band`
-and `eh_univ_optimized_sketch_tier_cardinality_is_documented_as_unrecoverable`.
+and `exponential_histogram_univmon_sketch_tier_cardinality_is_documented_as_unrecoverable`.
 
 **Do not use a fudge factor.** `1.5 * bound` and `alpha * 1.05` are not bounds;
 the second one accepts results that break the advertised guarantee by 5%. If a

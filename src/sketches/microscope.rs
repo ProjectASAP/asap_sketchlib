@@ -912,7 +912,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "use update_at()")]
-    fn insert_refuses_a_time_based_clock() {
+    fn update_refuses_a_time_based_clock() {
         let mut sk: MicroCm = MicroCm::with_dimensions(
             1,
             16,
@@ -925,7 +925,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "use update()")]
-    fn insert_at_refuses_a_count_based_clock() {
+    fn update_at_refuses_a_count_based_clock() {
         let mut sk = sketch(1, 16, 4, 10);
         sk.update_at(&key(1), 5);
     }

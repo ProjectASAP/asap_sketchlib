@@ -322,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_then_estimate_matches_full_value_for_partial_key() {
+    fn update_then_estimate_matches_full_value_for_partial_key() {
         // cover end-to-end flow of inserting a key and querying with a substring
         let mut coco: CocoSketch = CocoSketch::with_dimensions(TEST_D, TEST_W);
         let key = "user:1234";
@@ -522,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn estimate_key_never_exceeds_the_inserted_mass() {
+    fn estimate_never_exceeds_the_inserted_mass() {
         // biased replacement is unbiased in expectation but never invents mass
         // beyond what the whole table holds
         let mut coco: CocoSketch = CocoSketch::with_dimensions(2, 8);

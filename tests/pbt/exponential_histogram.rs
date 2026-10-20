@@ -416,7 +416,7 @@ proptest! {
     }
 
     #[test]
-    fn tumbling_fold_cms_windows_merge_back_into_the_single_pass_sketch(
+    fn tumbling_count_min_sketch_fold_windows_merge_back_into_the_single_pass_sketch(
         size in 2u64..16,
         max_windows in 1usize..6,
         stream in timed_stream(200),
@@ -441,7 +441,7 @@ proptest! {
     }
 
     #[test]
-    fn tumbling_fold_cs_windows_merge_back_into_the_single_pass_sketch(
+    fn tumbling_count_sketch_fold_windows_merge_back_into_the_single_pass_sketch(
         size in 2u64..16,
         max_windows in 1usize..6,
         stream in timed_stream(200),
@@ -589,7 +589,7 @@ proptest! {
     // answers the next window gives, not through its empty state.
 
     #[test]
-    fn sketch_pool_hands_back_a_fold_cms_matching_a_fresh_one(
+    fn sketch_pool_hands_back_a_count_min_sketch_fold_matching_a_fresh_one(
         stream in timed_stream(120),
     ) {
         let (first, second) = stream.split_at(stream.len() / 2);
@@ -618,7 +618,7 @@ proptest! {
     }
 
     #[test]
-    fn sketch_pool_hands_back_a_fold_cs_matching_a_fresh_one(
+    fn sketch_pool_hands_back_a_count_sketch_fold_matching_a_fresh_one(
         stream in timed_stream(120),
     ) {
         let (first, second) = stream.split_at(stream.len() / 2);

@@ -706,7 +706,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn count_child_insert_emits_at_threshold() {
+    fn count_sketch_child_update_emits_at_threshold() {
         let mut child = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::U64(99);
         let mut deltas: Vec<CountSketchCellDelta> = Vec::new();
@@ -771,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_updates_signed_counters_per_row() {
+    fn update_writes_signed_counters_per_row() {
         let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::Str("alpha");
 
@@ -789,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_insert_produces_consistent_estimates() {
+    fn fast_path_update_produces_consistent_estimates() {
         let mut fast = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(4, 128);
 
         let keys = vec![
@@ -814,7 +814,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_produces_consistent_estimates() {
+    fn update_produces_consistent_estimates() {
         let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
 
         let keys = vec![

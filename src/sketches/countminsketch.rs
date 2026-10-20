@@ -708,7 +708,7 @@ mod tests {
     use crate::{DataInput, hash64_seeded};
 
     #[test]
-    fn countmin_insert_emit_delta_emits_at_threshold_and_resets_period() {
+    fn countmin_update_emit_delta_emits_at_threshold_and_resets_period() {
         let mut sketch = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::U64(42);
         let mut deltas: Vec<CountMinSketchCellDelta> = Vec::new();
@@ -776,7 +776,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_insert_same_estimate() {
+    fn fast_path_update_same_estimate() {
         let mut slow = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let mut fast = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 64);
 

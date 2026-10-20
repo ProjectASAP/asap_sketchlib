@@ -691,13 +691,13 @@ mod tests {
     /// Layer `UNIVMON_BOTTOM_LAYER_SEED_INDEX` would hash at the finder's own seed.
     #[test]
     #[should_panic(expected = "UNIVMON_MAX_LAYERS")]
-    fn init_univmon_rejects_a_layer_on_the_finder_seed() {
+    fn new_rejects_a_layer_on_the_bottom_layer_seed_index() {
         UnivMon::new(4, 2, 16, UNIVMON_BOTTOM_LAYER_SEED_INDEX + 1);
     }
 
     #[test]
     #[should_panic(expected = "hash bits")]
-    fn init_univmon_rejects_column_bits_that_reach_the_sign_bits() {
+    fn new_rejects_column_bits_that_reach_the_sign_bits() {
         UnivMon::new(4, 11, 2048, 2);
     }
 
@@ -769,7 +769,7 @@ mod tests {
     }
 
     #[test]
-    fn update_populates_bucket_size_and_heavy_hitters() {
+    fn update_populates_total_weight_and_heavy_hitters() {
         // processing a single hot key should record its weight in the heavy hitter layers
         let mut um = UnivMon::new(16, 3, 32, 4);
         let key = "alpha";
@@ -988,7 +988,7 @@ mod tests {
     }
 
     #[test]
-    fn univmon_bucket_size_tracked_correctly() {
+    fn univmon_total_weight_tracked_correctly() {
         // Verify that total_weight is correctly tracked with seed configuration
         let mut um = UnivMon::new(20, 3, 1024, 6);
 

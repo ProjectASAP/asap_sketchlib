@@ -1523,7 +1523,7 @@ impl OctoWorker for CountMinSketchWithHeapOctoWorker {
     // keeps no key storage, so a residual cell cannot be attributed back to a
     // key. A key that has never promoted is absent from the aggregator's heap
     // entirely and estimates zero. See
-    // `a_key_below_the_threshold_never_reaches_the_topk_aggregator`.
+    // `a_key_below_the_threshold_never_reaches_the_count_min_sketch_with_heap_aggregator`.
 }
 
 /// Count-Min parent that also maintains the only heavy-hitter heap in the
@@ -3843,7 +3843,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn the_topk_aggregator_rebuilds_the_heavy_hitter_heap_from_worker_keys() {
+    fn the_count_min_sketch_with_heap_aggregator_rebuilds_the_heavy_hitter_heap_from_worker_keys() {
         let (rows, cols, top_k) = (4usize, 2048usize, 8usize);
         let mut inputs: Vec<DataInput<'_>> = Vec::new();
         // Four unmistakable heavy hitters over a wide light tail.
@@ -3906,7 +3906,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn a_key_below_the_threshold_never_reaches_the_topk_aggregator() {
+    fn a_key_below_the_threshold_never_reaches_the_count_min_sketch_with_heap_aggregator() {
         // The keyed workers keep no key storage and so cannot flush, and the
         // aggregator only learns a key exists from a delta. A key promotes the
         // first time an increment it caused takes some row to tau on its
@@ -3970,7 +3970,7 @@ mod runtime_tests {
     }
 
     #[test]
-    fn the_count_topk_aggregator_also_tracks_heavy_hitters() {
+    fn the_count_sketch_with_heap_aggregator_also_tracks_heavy_hitters() {
         let (rows, cols, top_k) = (5usize, 2048usize, 8usize);
         let mut inputs: Vec<DataInput<'_>> = Vec::new();
         for i in 0..3u64 {
@@ -4327,7 +4327,7 @@ mod runtime_tests {
 
     #[test]
     #[should_panic(expected = "cannot update after runtime has been closed")]
-    fn octo_runtime_insert_after_close_panics() {
+    fn octo_runtime_update_after_close_panics() {
         let mut runtime = OctoRuntime::new(&config(2), HllOctoPlan::new(), HllOctoAggregator::new);
         runtime.close();
         runtime.update(DataInput::U64(1));
@@ -4571,7 +4571,7 @@ mod univmon_tests {
     }
 
     #[test]
-    fn a_worker_picks_the_same_layers_as_a_single_threaded_insert() {
+    fn a_worker_picks_the_same_layers_as_a_single_threaded_update() {
         let reference = UnivMon::new(HEAP, ROWS, COLS, LAYERS);
         for key in 0..5_000u64 {
             let input = DataInput::U64(key);

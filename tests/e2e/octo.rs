@@ -155,7 +155,7 @@ fn cm_promotion_is_lossless_modulo_the_child_residual() {
 }
 
 #[test]
-fn cm_deltas_are_well_formed_and_carry_exactly_one_promotion() {
+fn count_min_sketch_cell_deltas_are_well_formed_and_carry_exactly_one_promotion() {
     let stream = keys(20_000, 512, 9_102);
     let (_, deltas) = cm_child_run(&stream, ROWS, COLS);
 
@@ -204,7 +204,7 @@ fn cm_parent_holds_every_completed_promotion() {
 }
 
 #[test]
-fn cm_octo_estimate_trails_the_single_thread_estimate_by_under_one_promotion() {
+fn count_min_sketch_octo_estimate_trails_the_single_thread_estimate_by_under_one_promotion() {
     let stream = keys(40_000, 256, 9_104);
     let (_, deltas) = cm_child_run(&stream, ROWS, COLS);
 
@@ -272,7 +272,7 @@ fn cm_fast_path_promotes_on_the_same_schedule_as_the_regular_path() {
 }
 
 #[test]
-fn cm_delta_addressing_survives_columns_past_the_u16_ceiling() {
+fn count_min_sketch_cell_delta_addressing_survives_columns_past_the_u16_ceiling() {
     // `CountMinSketchCellDelta`'s row and col fields are u32, so a geometry wider than
     // 65_536 columns addresses every cell exactly.
     let rows = 3;
@@ -302,7 +302,7 @@ fn cm_delta_addressing_survives_columns_past_the_u16_ceiling() {
 }
 
 #[test]
-fn cm_delta_application_is_order_independent() {
+fn count_min_sketch_cell_delta_application_is_order_independent() {
     let stream = keys(15_000, 512, 9_106);
     let (_, deltas) = cm_child_run(&stream, ROWS, COLS);
 
@@ -373,7 +373,7 @@ fn cm_sharded_children_conserve_counts_against_a_single_pass() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn count_deltas_carry_exactly_the_signed_threshold() {
+fn count_sketch_cell_deltas_carry_exactly_the_signed_threshold() {
     let stream = keys(30_000, 256, 9_201);
     let (_, deltas) = cs_child_run(&stream, ROWS, COLS);
 
@@ -425,7 +425,7 @@ fn count_promotion_is_lossless_modulo_the_child_residual() {
 }
 
 #[test]
-fn count_octo_estimate_stays_within_one_residual_of_the_single_thread_estimate() {
+fn count_sketch_octo_estimate_stays_within_one_residual_of_the_single_thread_estimate() {
     let stream = keys(40_000, 256, 9_203);
     let (_, deltas) = cs_child_run(&stream, ROWS, COLS);
 
@@ -451,7 +451,7 @@ fn count_octo_estimate_stays_within_one_residual_of_the_single_thread_estimate()
 }
 
 #[test]
-fn count_fast_path_conserves_counts_like_the_regular_path() {
+fn count_sketch_fast_path_conserves_counts_like_the_regular_path() {
     let stream = keys(20_000, 256, 9_204);
 
     let mut child = CsFast::with_dimensions(ROWS, COLS);
@@ -481,7 +481,7 @@ fn count_fast_path_conserves_counts_like_the_regular_path() {
 }
 
 #[test]
-fn count_delta_application_is_order_independent() {
+fn count_sketch_cell_delta_application_is_order_independent() {
     let stream = keys(15_000, 256, 9_205);
     let (_, deltas) = cs_child_run(&stream, ROWS, COLS);
 
@@ -613,7 +613,7 @@ fn hll_promotion_is_exact_for_every_variant_and_precision() {
 }
 
 #[test]
-fn hll_deltas_are_strictly_increasing_per_register_and_never_repeat() {
+fn hll_register_deltas_are_strictly_increasing_per_register_and_never_repeat() {
     let stream: Vec<u64> = (0..30_000u64).collect();
     let (child, deltas) = hll_child_run(&stream);
 
@@ -647,7 +647,7 @@ fn hll_duplicate_keys_promote_nothing_after_the_first_improvement() {
 }
 
 #[test]
-fn hll_delta_application_is_order_independent() {
+fn hll_register_delta_application_is_order_independent() {
     let stream: Vec<u64> = (0..30_000u64).collect();
     let (_, deltas) = hll_child_run(&stream);
 
@@ -915,7 +915,7 @@ mod runtime {
     }
 
     #[test]
-    fn insert_batch_matches_element_wise_inserts() {
+    fn update_batch_matches_element_wise_updates() {
         let inputs = inputs_from(&keys(20_000, 512, 9_405));
 
         let mut one_by_one =
@@ -991,7 +991,7 @@ mod runtime {
     }
 
     #[test]
-    fn a_borrowed_key_may_be_dropped_the_moment_insert_returns() {
+    fn a_borrowed_key_may_be_dropped_the_moment_update_returns() {
         // The point of a borrowed key is that its owner does not have to
         // outlive the sketch. `update` hashes for partitioning and prepares the
         // payload on this thread, so nothing borrowed crosses to a worker and
@@ -1230,7 +1230,7 @@ mod runtime {
 
     #[test]
     #[should_panic(expected = "cannot update after runtime has been closed")]
-    fn inserting_after_close_panics() {
+    fn updating_after_close_panics() {
         let workers = 2;
         let mut runtime = OctoRuntime::new(&config(workers), SumPlan, || SumAggregator {
             per_worker: vec![0; workers],
@@ -4422,7 +4422,8 @@ mod top_k_plans {
     ///   bound, widened by exactly that same `k*τ` promotion residual and by
     ///   nothing else.
     #[test]
-    fn cm_top_k_point_estimates_trail_the_single_thread_reference_by_at_most_k_tau() {
+    fn count_min_sketch_with_heap_point_estimates_trail_the_single_thread_reference_by_at_most_k_tau()
+     {
         let stream = stream();
         let truth = truth_of(&stream);
         let reference = reference_cm(&stream);
@@ -4512,7 +4513,7 @@ mod top_k_plans {
     /// two-sided `k*τ` gap against the single-threaded reference (signed
     /// counters can be withheld in either direction).
     #[test]
-    fn count_top_k_point_estimates_satisfy_the_l2_bound_within_the_promotion_residual() {
+    fn count_sketch_with_heap_point_estimates_satisfy_the_l2_bound_within_the_promotion_residual() {
         let stream = stream();
         let truth = truth_of(&stream);
         let reference = reference_cs(&stream);
@@ -4711,7 +4712,8 @@ mod top_k_plans {
     /// aggregator at all and estimates zero — which is what makes the `k*τ`
     /// deficit above a *deficit* rather than an unbounded miss.
     #[test]
-    fn a_key_below_the_promotion_threshold_never_reaches_the_top_k_aggregator() {
+    fn a_key_below_the_promotion_threshold_never_reaches_the_count_min_sketch_with_heap_aggregator()
+    {
         let plan = CountMinSketchWithHeapOctoPlan::new(ROWS, COLS);
         let mut worker = plan.worker(0);
         let mut parent = plan.aggregator(TOP_K);

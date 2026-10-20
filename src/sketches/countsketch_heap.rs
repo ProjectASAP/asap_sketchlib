@@ -462,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_and_estimate() {
+    fn update_and_estimate() {
         // Verifies single-key inserts update both CS estimate and wrapper behavior.
         let mut sh = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(5, 256, 10);
         let key = DataInput::Str("hello");
@@ -560,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_many_updates_estimate_and_heap() {
+    fn update_weighted_updates_estimate_and_heap() {
         // Verifies update_weighted updates estimate and heap count consistently.
         let mut sh = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(5, 2048, 4);
         let key = DataInput::Str("many");
@@ -572,7 +572,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_insert_updates_multiple_keys() {
+    fn update_batch_updates_multiple_keys() {
         // Verifies bulk stream ingestion updates multiple keys and heap tracking.
         let mut sh = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(5, 2048, 4);
         let values = vec![
@@ -643,7 +643,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_path_insert_and_estimate() {
+    fn fast_path_update_and_estimate() {
         // Verifies FastPath insert and estimate stay coherent for repeated keys.
         let mut sh = CountSketchWithHeap::<Vector2D<i64>, FastPath>::new(5, 256, 10);
         let key = DataInput::Str("fast");
@@ -654,7 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_path_insert_many_and_bulk_insert() {
+    fn fast_path_update_weighted_and_update_batch() {
         // Verifies FastPath batched APIs maintain estimate/heap consistency.
         let mut sh = CountSketchWithHeap::<Vector2D<i64>, FastPath>::new(5, 2048, 4);
         let key = DataInput::Str("fast-many");
@@ -818,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn bulk_insert_equivalent_to_repeated_insert() {
+    fn update_batch_equivalent_to_repeated_update() {
         // Verifies update_batch behavior matches repeated insert behavior.
         let values = vec![
             DataInput::U64(1),

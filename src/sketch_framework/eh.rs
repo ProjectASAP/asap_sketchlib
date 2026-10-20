@@ -346,7 +346,7 @@ mod tests {
     }
 
     #[test]
-    fn l2_merge_invariant_sum_l22() {
+    fn l2_merge_invariant_sum_l2_squared() {
         let mut eh = ExponentialHistogram::new(
             1,
             100,

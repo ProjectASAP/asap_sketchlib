@@ -331,7 +331,7 @@ proptest! {
     // ===== An insert reaches the members it names and no others =====
 
     #[test]
-    fn an_insert_at_reaches_the_named_members_and_leaves_the_rest_empty(
+    fn an_update_at_reaches_the_named_members_and_leaves_the_rest_empty(
         (rows, pool) in geometry(),
         members in mixed_members(3),
         picks in prop::collection::vec(0usize..8, 0..8),

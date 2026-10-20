@@ -6,7 +6,7 @@
 //!
 //! The two Nitro defects the probe found — the insert and query paths reading
 //! different hash domains, and each sampled record reaching only one row — are
-//! pinned by `full_sampling_is_exact_and_the_query_reads_the_cells_the_insert_wrote`
+//! pinned by `full_sampling_is_exact_and_the_query_reads_the_cells_the_update_wrote`
 //! in `tests/e2e/nitro.rs`, which names both failure modes on the same run
 //! that already exercises every ingestion path.
 
@@ -66,7 +66,7 @@ fn portable_ddsketch_respects_alpha_at_bucket_edges() {
 // Pre-fix behavior: 0 in release, overflow panic in debug. Post-fix: saturates.
 // ---------------------------------------------------------------------------
 #[test]
-fn countl2hh_f2_survives_beyond_i64_max() {
+fn count_sketch_with_l2_norm_f2_survives_beyond_i64_max() {
     let c = 3_000_000_000i64;
     let mut sk =
         CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions_and_seed_index(4, 2048, 7);

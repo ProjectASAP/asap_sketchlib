@@ -206,7 +206,7 @@ fn eh_count_sketch_variant_conforms_to_the_l2_model_over_the_retained_window() {
 }
 
 #[test]
-fn eh_countl2hh_variant_satisfies_the_l2_bound_over_the_retained_window() {
+fn eh_count_sketch_with_l2_norm_variant_satisfies_the_l2_bound_over_the_retained_window() {
     let (merged, truth, ctx) =
         run_keyed_variant(asap_sketchlib::EhBucketSketch::CountSketchWithL2Norm(
             CountSketchWithL2Norm::with_dimensions(ROWS, COLS),
@@ -540,7 +540,7 @@ fn eh_expires_buckets_past_the_window_and_reports_its_retained_span() {
 /// `TumblingWindow<CountSketchFold>`: window bookkeeping is exact, and the folded Count
 /// Sketch inside each window carries the L2 bound at its *folded* width.
 #[test]
-fn tumbling_fold_cs_windows_are_exact_and_answers_satisfy_the_l2_bound() {
+fn tumbling_count_sketch_fold_windows_are_exact_and_answers_satisfy_the_l2_bound() {
     const FULL_COLS: usize = 4_096;
     const FOLD_LEVEL: u32 = 2;
     const WINDOW: u64 = 500;
@@ -823,7 +823,7 @@ fn eh_uniform_sampling_variant_reports_exact_retention_bookkeeping() {
 }
 
 #[test]
-fn tumbling_fold_cms_hierarchical_merge_covers_every_observation() {
+fn tumbling_count_min_sketch_fold_hierarchical_merge_covers_every_observation() {
     const FULL_COLS: usize = 4_096;
     const FOLD_LEVEL: u32 = 2;
     const WINDOW: u64 = 500;
@@ -1011,7 +1011,7 @@ fn an_exponential_histogram_expires_against_the_window_length_it_was_last_given(
 }
 
 #[test]
-fn an_exponential_histogram_custom_bucket_update_matches_repeated_inserts() {
+fn an_exponential_histogram_custom_bucket_update_matches_repeated_updates() {
     let proto = EhBucketSketch::CountMinSketch(
         CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
     );

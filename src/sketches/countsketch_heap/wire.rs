@@ -166,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn cs_heap_round_trip_serialization() {
+    fn count_sketch_with_heap_round_trip_serialization() {
         let sketch = populated();
         let encoded = sketch.to_asapv1().expect("serialize CountSketchWithHeap");
         assert!(encoded.starts_with(b"ASAPv1"));
@@ -205,7 +205,7 @@ mod tests {
     /// Count Sketch cells are signed — the payload must carry negatives through
     /// unchanged.
     #[test]
-    fn cs_heap_negative_counters_round_trip() {
+    fn count_sketch_with_heap_negative_counters_round_trip() {
         let mut sketch = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::from_fn(2, 4, |r, c| {
                 let v = (r * 4 + c) as i64;
@@ -238,7 +238,7 @@ mod tests {
     /// The `i32` wire config round-trips, and the counter type is pinned by the
     /// target: i32 bytes must not decode into an i64 sketch or the reverse.
     #[test]
-    fn cs_heap_i32_round_trips_and_is_pinned_by_counter_type() {
+    fn count_sketch_with_heap_i32_round_trips_and_is_pinned_by_counter_type() {
         let cells = |r: usize, c: usize| {
             let v = (r * 4 + c) as i32;
             if v % 2 == 0 { v } else { -v }
@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn cs_heap_mode_in_metadata_round_trips() {
+    fn count_sketch_with_heap_mode_in_metadata_round_trips() {
         let mut sketch = CountSketchWithHeap::<Vector2D<i64>, FastPath>::new(4, 16, 8);
         sketch.update_weighted(&DataInput::U64(1), 5);
         sketch.update_weighted(&DataInput::U64(2), 3);
@@ -298,7 +298,7 @@ mod tests {
     /// CountSketchWithHeap, CountMinSketchWithHeap and the two base sketches all carry different kind_ids;
     /// a foreign envelope must not decode as a CountSketchWithHeap.
     #[test]
-    fn cs_heap_rejects_foreign_kind_ids() {
+    fn count_sketch_with_heap_rejects_foreign_kind_ids() {
         let cms_heap = crate::CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
         let cms = crate::CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
         let count = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
@@ -338,7 +338,7 @@ mod tests {
     /// `Vector2D::from_fn` derives its mask via `cols.ilog2()`, which panics on
     /// `cols == 0`.
     #[test]
-    fn cs_heap_rejects_zero_dimension_payload() {
+    fn count_sketch_with_heap_rejects_zero_dimension_payload() {
         let bytes = crafted(4, 0, 4, Vec::new());
         let problem = decode_error(&bytes);
         assert!(problem.contains("must be non-zero"), "got {problem}");
@@ -347,7 +347,7 @@ mod tests {
     /// Crafted dimensions must not drive a huge allocation: the length check
     /// runs before `Vector2D::from_fn`.
     #[test]
-    fn cs_heap_rejects_dimension_length_mismatch() {
+    fn count_sketch_with_heap_rejects_dimension_length_mismatch() {
         let bytes = crafted(MATRIX_MAX_ROWS as u32, 1 << 24, 4, vec![1, 2, 3]);
         let problem = decode_error(&bytes);
         assert!(problem.contains("!= rows*cols"), "got {problem}");
@@ -356,7 +356,7 @@ mod tests {
     /// More rows than the seed list has seeds is outside the wire-eligible
     /// subset, on both sides.
     #[test]
-    fn cs_heap_rejects_too_many_rows() {
+    fn count_sketch_with_heap_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
             CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(rows, 8, 4)
@@ -379,7 +379,7 @@ mod tests {
     /// An unpopulated matrix carries dimensions its cells do not match.
     /// Serializing it must fail rather than emit bytes the decoder refuses.
     #[test]
-    fn cs_heap_rejects_serializing_an_unfilled_matrix() {
+    fn count_sketch_with_heap_rejects_serializing_an_unfilled_matrix() {
         let sketch = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::<i64>::unfilled(2, 4),
             4,
@@ -392,7 +392,7 @@ mod tests {
 
     /// Fail closed on an unexpected metadata key.
     #[test]
-    fn cs_heap_metadata_rejects_unknown_keys() {
+    fn count_sketch_with_heap_metadata_rejects_unknown_keys() {
         #[derive(Serialize)]
         struct WithExtra {
             metadata_version: u8,
@@ -437,7 +437,7 @@ mod tests {
     /// `key_type` is required: a metadata map missing it does not decode, so the
     /// heap's key variant can never be silently defaulted.
     #[test]
-    fn cs_heap_metadata_rejects_a_missing_key_type_key() {
+    fn count_sketch_with_heap_metadata_rejects_a_missing_key_type_key() {
         #[derive(Serialize)]
         struct WithoutKeyType {
             metadata_version: u8,
@@ -477,7 +477,7 @@ mod tests {
 
     /// An `f64`-labelled envelope decodes into neither integer sketch.
     #[test]
-    fn cs_heap_rejects_f64_into_an_integer_sketch() {
+    fn count_sketch_with_heap_rejects_f64_into_an_integer_sketch() {
         let metadata = rmp_serde::to_vec_named(&heap_metadata::<DefaultXxHasher>(
             2, 4, "f64", "regular", 4, "u64",
         ))
@@ -545,7 +545,7 @@ mod tests {
     }
 
     #[test]
-    fn cs_heap_custom_hasher_profile_round_trips_and_is_self_describing() {
+    fn count_sketch_with_heap_custom_hasher_profile_round_trips_and_is_self_describing() {
         // (a) A CountSketchWithHeap built with a custom-profile hasher round-trips.
         let mut alt = CountSketchWithHeap::<Vector2D<i64>, RegularPath, AltHasher>::new(3, 8, 4);
         let mut std = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
@@ -579,7 +579,7 @@ mod tests {
     /// A `heap_size` past the metadata's `u32` field fails the encode rather than
     /// emitting a truncated capacity.
     #[test]
-    fn cs_heap_refuses_a_heap_size_the_metadata_cannot_carry() {
+    fn count_sketch_with_heap_refuses_a_heap_size_the_metadata_cannot_carry() {
         let sketch = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::from_fn(2, 4, |_, _| 0i64),
             1usize << 40,

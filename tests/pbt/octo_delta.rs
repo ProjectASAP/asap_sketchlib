@@ -507,7 +507,7 @@ proptest! {
     /// At a threshold of 0 a worker holds nothing back, so the shards need no
     /// flush and the parent is the register-wise maximum outright.
     #[test]
-    fn hll_deltas_merge_to_the_register_wise_maximum(
+    fn hll_register_deltas_merge_to_the_register_wise_maximum(
         shards in 1usize..5,
         keys in stream(400),
     ) {
@@ -545,7 +545,7 @@ proptest! {
     }
 
     #[test]
-    fn hll_delta_application_is_order_independent_and_idempotent(
+    fn hll_register_delta_application_is_order_independent_and_idempotent(
         tau in 0u8..=6,
         keys in stream(400),
         seed in any::<u64>(),
@@ -999,7 +999,7 @@ proptest! {
     // ===== The default thresholds =====
 
     #[test]
-    fn every_promask_is_the_promotion_step_of_its_own_delta_type(
+    fn every_default_threshold_is_the_promotion_step_of_its_own_delta_type(
         seed in any::<u64>(),
         key in 0u64..1024,
         n in 600usize..800,
@@ -1108,7 +1108,7 @@ proptest! {
     }
 
     #[test]
-    fn max_promask_is_the_widest_threshold_a_one_byte_counter_survives(
+    fn max_promotion_threshold_is_the_widest_a_one_byte_counter_survives(
         key in 0u64..1024,
         n in 300usize..500,
     ) {

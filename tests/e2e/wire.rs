@@ -249,7 +249,7 @@ fn an_exponential_histogram_envelope_round_trips_and_names_its_kind() {
 }
 
 #[test]
-fn an_eh_sketch_list_envelope_round_trips_and_names_its_kind() {
+fn an_eh_bucket_sketch_envelope_round_trips_and_names_its_kind() {
     let mut payload = eh_prototype();
     for k in frequency_stream().iter().take(5_000) {
         payload.update(&DataInput::U64(*k));

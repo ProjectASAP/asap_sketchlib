@@ -361,7 +361,7 @@ fn every_nitro_path_is_unbiased_inside_its_sampling_band_at_every_rate() {
 ///   one row instead of all of them, which divides every per-row counter by
 ///   the depth.
 #[test]
-fn full_sampling_is_exact_and_the_query_reads_the_cells_the_insert_wrote() {
+fn full_sampling_is_exact_and_the_query_reads_the_cells_the_update_wrote() {
     const F: usize = 5_000;
     let key = DataInput::U64(SOLO_KEY);
 
@@ -920,7 +920,7 @@ fn counters(storage: &Vector2D<i32>) -> Vec<i32> {
 }
 
 #[test]
-fn count_min_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() {
+fn count_min_at_full_nitro_sampling_writes_exactly_what_a_plain_update_writes() {
     let (stream, truth) = integration_stream();
     let mut plain = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
         INTEGRATION_ROWS,
@@ -959,7 +959,7 @@ fn count_min_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() 
 }
 
 #[test]
-fn count_min_after_disable_nitro_leaves_the_sampled_insert_path_inert() {
+fn count_min_after_disable_nitro_leaves_the_sampled_update_path_inert() {
     let (stream, _) = integration_stream();
     let mut sketch = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
         INTEGRATION_ROWS,
@@ -1039,7 +1039,7 @@ fn count_min_seeded_nitro_sampling_is_reproducible_and_admits_a_strict_subset() 
 }
 
 #[test]
-fn count_sketch_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() {
+fn count_sketch_at_full_nitro_sampling_writes_exactly_what_a_plain_update_writes() {
     let (stream, truth) = integration_stream();
     let mut plain =
         CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);

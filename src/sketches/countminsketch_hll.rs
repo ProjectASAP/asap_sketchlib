@@ -526,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_many_matches_sequential_inserts() {
+    fn update_batch_matches_sequential_updates() {
         let k = key("user_A");
         let vals: Vec<DataInput<'static>> = (0..500u64).map(val).collect();
         let pairs: Vec<(&DataInput, &DataInput)> = vals.iter().map(|v| (&k, v)).collect();

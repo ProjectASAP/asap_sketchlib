@@ -483,7 +483,7 @@ mod tests {
     // -- Clear method tests --------------------------------------------------
 
     #[test]
-    fn fold_cms_clear_resets_to_empty() {
+    fn count_min_sketch_fold_clear_resets_to_empty() {
         let mut sk: CountMinSketchFold = CountMinSketchFold::new(3, 1024, 3, 10);
         for i in 0..50u64 {
             sk.update_weighted(&DataInput::U64(i), 1);
@@ -503,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_cs_clear_resets_to_empty() {
+    fn count_sketch_fold_clear_resets_to_empty() {
         let mut sk: CountSketchFold = CountSketchFold::new(3, 1024, 3, 10);
         for i in 0..50u64 {
             sk.update_weighted(&DataInput::U64(i), 1);
@@ -749,7 +749,7 @@ mod tests {
     // -- CountMinSketchFold hierarchical merge via tumbling windows ----------------------
 
     #[test]
-    fn fold_cms_tumbling_hierarchical_merge() {
+    fn count_min_sketch_fold_tumbling_hierarchical_merge() {
         let rows = 3;
         let full_cols = 4096;
         let fold_level = 4;
@@ -885,7 +885,7 @@ mod tests {
     // -- CountSketchFold tumbling test ------------------------------------------------
 
     #[test]
-    fn fold_cs_tumbling_basic() {
+    fn count_sketch_fold_tumbling_basic() {
         let config = CountSketchFoldConfig {
             rows: 3,
             full_cols: 1024,
@@ -903,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_cs_tumbling_hierarchical_merge() {
+    fn count_sketch_fold_tumbling_hierarchical_merge() {
         let config = CountSketchFoldConfig {
             rows: 5,
             full_cols: 4096,
@@ -938,7 +938,7 @@ mod tests {
     // -- Accuracy & correctness tests ----------------------------------------
 
     #[test]
-    fn fold_cms_tumbling_accuracy_zipf() {
+    fn count_min_sketch_fold_tumbling_accuracy_zipf() {
         let rows = 3;
         let full_cols = 4096;
         let fold_level = 4;
@@ -996,7 +996,7 @@ mod tests {
         let pct = within as f64 / truth.len() as f64 * 100.0;
         let mean_abs_error = total_abs_error as f64 / truth.len() as f64;
         eprintln!(
-            "[fold_cms_tumbling_accuracy_zipf] mean_abs_error={mean_abs_error:.2}, \
+            "[count_min_sketch_fold_tumbling_accuracy_zipf] mean_abs_error={mean_abs_error:.2}, \
              max_abs_error={max_abs_error}, pct_within_bound={pct:.1}% \
              (required>{required_pct:.1}%), error_bound={error_bound:.2}"
         );
@@ -1008,7 +1008,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_cms_hierarchical_vs_flat_merge() {
+    fn count_min_sketch_fold_hierarchical_vs_flat_merge() {
         let rows = 3;
         let full_cols = 4096;
         // fold_level = 3 so hierarchical merge with 8 windows (log2(8)=3 rounds)
@@ -1079,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_cs_tumbling_accuracy_zipf() {
+    fn count_sketch_fold_tumbling_accuracy_zipf() {
         let rows = 5;
         let full_cols = 4096;
         let fold_level = 4;
@@ -1140,7 +1140,7 @@ mod tests {
         let pct = within as f64 / truth.len() as f64 * 100.0;
         let mean_abs_error = total_abs_error as f64 / truth.len() as f64;
         eprintln!(
-            "[fold_cs_tumbling_accuracy_zipf] mean_abs_error={mean_abs_error:.2}, \
+            "[count_sketch_fold_tumbling_accuracy_zipf] mean_abs_error={mean_abs_error:.2}, \
              max_abs_error={max_abs_error}, pct_within_bound={pct:.1}% \
              (required>{required_pct:.1}%), error_bound={error_bound:.2}"
         );
@@ -1532,7 +1532,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_cms_tumbling_heap_correctness() {
+    fn count_min_sketch_fold_tumbling_heap_correctness() {
         let rows = 3;
         let full_cols = 4096;
         let fold_level = 4;
@@ -1626,7 +1626,7 @@ mod tests {
         // Require at least 80% of the true top-k to be present in the heap.
         let recall_pct = found_in_heap as f64 / top_k as f64 * 100.0;
         eprintln!(
-            "[fold_cms_tumbling_heap_correctness] heap_size={}, \
+            "[count_min_sketch_fold_tumbling_heap_correctness] heap_size={}, \
              true_top_k_recall={found_in_heap}/{top_k} ({recall_pct:.0}%)",
             heap_entries.len()
         );
@@ -1639,7 +1639,7 @@ mod tests {
     // -- Gap 1: CountSketchFold query_recent accuracy ---------------------------------
 
     #[test]
-    fn fold_cs_tumbling_query_recent_accuracy() {
+    fn count_sketch_fold_tumbling_query_recent_accuracy() {
         let rows = 5;
         let full_cols = 4096;
         let fold_level = 4;
@@ -1717,7 +1717,7 @@ mod tests {
         }
         let pct = within as f64 / recent_truth.len() as f64 * 100.0;
         eprintln!(
-            "[fold_cs_tumbling_query_recent_accuracy] pct_within_bound={pct:.1}%, \
+            "[count_sketch_fold_tumbling_query_recent_accuracy] pct_within_bound={pct:.1}%, \
              error_bound={error_bound:.2}"
         );
         assert!(
@@ -1811,7 +1811,7 @@ mod tests {
     // -- Gap 3: CountSketchFold heap correctness --------------------------------------
 
     #[test]
-    fn fold_cs_tumbling_heap_correctness() {
+    fn count_sketch_fold_tumbling_heap_correctness() {
         let rows = 5;
         let full_cols = 4096;
         let fold_level = 4;
@@ -1896,7 +1896,7 @@ mod tests {
 
         let recall_pct = found_in_heap as f64 / top_k as f64 * 100.0;
         eprintln!(
-            "[fold_cs_tumbling_heap_correctness] heap_size={}, \
+            "[count_sketch_fold_tumbling_heap_correctness] heap_size={}, \
              true_top_k_recall={found_in_heap}/{top_k} ({recall_pct:.0}%)",
             heap_entries.len()
         );
@@ -1909,7 +1909,7 @@ mod tests {
     // -- Gap 4: Tumbling vs monolithic degradation ---------------------------
 
     #[test]
-    fn fold_cms_tumbling_vs_monolithic() {
+    fn count_min_sketch_fold_tumbling_vs_monolithic() {
         let rows = 3;
         let full_cols = 4096;
         let fold_level = 4;
@@ -1958,7 +1958,7 @@ mod tests {
         let tumbling_mae = tumbling_total_err as f64 / truth.len() as f64;
         let mono_mae = mono_total_err as f64 / truth.len() as f64;
         eprintln!(
-            "[fold_cms_tumbling_vs_monolithic] tumbling_mae={tumbling_mae:.2}, \
+            "[count_min_sketch_fold_tumbling_vs_monolithic] tumbling_mae={tumbling_mae:.2}, \
              mono_mae={mono_mae:.2}, ratio={:.2}",
             tumbling_mae / mono_mae.max(1.0)
         );
@@ -1969,7 +1969,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_cs_tumbling_vs_monolithic() {
+    fn count_sketch_fold_tumbling_vs_monolithic() {
         let rows = 5;
         let full_cols = 4096;
         let fold_level = 4;
@@ -2017,7 +2017,7 @@ mod tests {
         let tumbling_mae = tumbling_total_err as f64 / truth.len() as f64;
         let mono_mae = mono_total_err as f64 / truth.len() as f64;
         eprintln!(
-            "[fold_cs_tumbling_vs_monolithic] tumbling_mae={tumbling_mae:.2}, \
+            "[count_sketch_fold_tumbling_vs_monolithic] tumbling_mae={tumbling_mae:.2}, \
              mono_mae={mono_mae:.2}, ratio={:.2}",
             tumbling_mae / mono_mae.max(1.0)
         );

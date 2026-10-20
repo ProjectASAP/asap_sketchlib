@@ -707,7 +707,7 @@ fn heap_backed_frequency_sketches_pass_frequency_and_merge_conformance() {
 }
 
 #[test]
-fn count_l2hh_passes_signed_frequency_and_merge_conformance() {
+fn count_sketch_with_l2_norm_passes_signed_frequency_and_merge_conformance() {
     let stream = zipf_stream();
     let truth = stream_truth(&stream);
     let spec = conformance::FrequencySpec {

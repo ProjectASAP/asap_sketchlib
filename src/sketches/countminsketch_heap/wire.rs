@@ -162,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn cms_heap_round_trip_serialization() {
+    fn count_min_sketch_with_heap_round_trip_serialization() {
         let sketch = populated();
         let encoded = sketch
             .to_asapv1()
@@ -203,7 +203,7 @@ mod tests {
     /// The `f64` base counter is a Count-Min wire type, so a float-counter
     /// CountMinSketchWithHeap serializes as well.
     #[test]
-    fn cms_heap_f64_counters_round_trip() {
+    fn count_min_sketch_with_heap_f64_counters_round_trip() {
         let mut sketch = CountMinSketchWithHeap::<Vector2D<f64>, RegularPath>::from_storage(
             Vector2D::from_fn(2, 4, |r, c| (r * 4 + c) as f64 + 0.5),
             4,
@@ -228,7 +228,7 @@ mod tests {
     /// so a key that is not UTF-8 round trips and still answers its own
     /// `DataInput::Bytes`.
     #[test]
-    fn cms_heap_byte_keys_round_trip() {
+    fn count_min_sketch_with_heap_byte_keys_round_trip() {
         let raw: &[u8] = &[0xff, 0x00, 0xfe];
         let mut sketch = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::from_fn(2, 4, |r, c| (r * 4 + c) as i64),
@@ -252,7 +252,7 @@ mod tests {
     /// The base counter type is pinned by the target: i64 bytes must not decode
     /// into an f64 sketch or the reverse.
     #[test]
-    fn cms_heap_counter_type_is_pinned_by_the_target() {
+    fn count_min_sketch_with_heap_counter_type_is_pinned_by_the_target() {
         let wide = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::from_fn(2, 4, |r, c| (r * 4 + c) as i64),
             4,
@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn cms_heap_mode_in_metadata_round_trips() {
+    fn count_min_sketch_with_heap_mode_in_metadata_round_trips() {
         let mut sketch = CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(4, 16, 8);
         sketch.update_weighted(&DataInput::U64(1), 5);
         sketch.update_weighted(&DataInput::U64(2), 3);
@@ -300,7 +300,7 @@ mod tests {
     /// CountMinSketchWithHeap, CountSketchWithHeap and the two base sketches all carry different kind_ids;
     /// a foreign envelope must not decode as a CountMinSketchWithHeap.
     #[test]
-    fn cms_heap_rejects_foreign_kind_ids() {
+    fn count_min_sketch_with_heap_rejects_foreign_kind_ids() {
         let cs_heap = crate::CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
         let cms = crate::CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
         let count = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
@@ -340,7 +340,7 @@ mod tests {
     /// `Vector2D::from_fn` derives its mask via `cols.ilog2()`, which panics on
     /// `cols == 0`.
     #[test]
-    fn cms_heap_rejects_zero_dimension_payload() {
+    fn count_min_sketch_with_heap_rejects_zero_dimension_payload() {
         let bytes = crafted(4, 0, 4, Vec::new());
         let problem = decode_error(&bytes);
         assert!(problem.contains("must be non-zero"), "got {problem}");
@@ -349,7 +349,7 @@ mod tests {
     /// Crafted dimensions must not drive a huge allocation: the length check
     /// runs before `Vector2D::from_fn`.
     #[test]
-    fn cms_heap_rejects_dimension_length_mismatch() {
+    fn count_min_sketch_with_heap_rejects_dimension_length_mismatch() {
         let bytes = crafted(MATRIX_MAX_ROWS as u32, 1 << 24, 4, vec![1, 2, 3]);
         let problem = decode_error(&bytes);
         assert!(problem.contains("!= rows*cols"), "got {problem}");
@@ -358,7 +358,7 @@ mod tests {
     /// More rows than the seed list has seeds is outside the wire-eligible
     /// subset, on both sides.
     #[test]
-    fn cms_heap_rejects_too_many_rows() {
+    fn count_min_sketch_with_heap_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
             CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(rows, 8, 4)
@@ -381,7 +381,7 @@ mod tests {
     /// A `rows == 0` matrix satisfies the length check trivially but is refused
     /// on decode, so serializing it must fail.
     #[test]
-    fn cms_heap_rejects_serializing_zero_rows() {
+    fn count_min_sketch_with_heap_rejects_serializing_zero_rows() {
         let sketch = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(0, 4, 4);
         let problem = sketch
             .to_asapv1()
@@ -393,7 +393,7 @@ mod tests {
     /// An unpopulated matrix carries dimensions its cells do not match.
     /// Serializing it must fail rather than emit bytes the decoder refuses.
     #[test]
-    fn cms_heap_rejects_serializing_an_unfilled_matrix() {
+    fn count_min_sketch_with_heap_rejects_serializing_an_unfilled_matrix() {
         let sketch = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::<i64>::unfilled(2, 4),
             4,
@@ -406,7 +406,7 @@ mod tests {
 
     /// Fail closed on an unexpected metadata key.
     #[test]
-    fn cms_heap_metadata_rejects_unknown_keys() {
+    fn count_min_sketch_with_heap_metadata_rejects_unknown_keys() {
         #[derive(Serialize)]
         struct WithExtra {
             metadata_version: u8,
@@ -451,7 +451,7 @@ mod tests {
     /// `heap_size` is required: a metadata map missing it does not decode, so
     /// the heap capacity can never be silently defaulted.
     #[test]
-    fn cms_heap_metadata_rejects_a_missing_heap_size_key() {
+    fn count_min_sketch_with_heap_metadata_rejects_a_missing_heap_size_key() {
         #[derive(Serialize)]
         struct WithoutHeapSize {
             metadata_version: u8,
@@ -494,7 +494,7 @@ mod tests {
     /// but it names a counter this `i64` sketch does not hold, and must not
     /// decode into it.
     #[test]
-    fn cms_heap_rejects_a_foreign_counter_type_name() {
+    fn count_min_sketch_with_heap_rejects_a_foreign_counter_type_name() {
         let metadata = rmp_serde::to_vec_named(&heap_metadata::<DefaultXxHasher>(
             2, 4, "i32", "regular", 4, "u64",
         ))
@@ -558,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn cms_heap_custom_hasher_profile_round_trips_and_is_self_describing() {
+    fn count_min_sketch_with_heap_custom_hasher_profile_round_trips_and_is_self_describing() {
         // (a) A CountMinSketchWithHeap built with a custom-profile hasher round-trips.
         let mut alt = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath, AltHasher>::new(3, 8, 4);
         let mut std = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
@@ -593,7 +593,7 @@ mod tests {
     /// A `heap_size` past the metadata's `u32` field fails the encode rather than
     /// emitting a truncated capacity.
     #[test]
-    fn cms_heap_refuses_a_heap_size_the_metadata_cannot_carry() {
+    fn count_min_sketch_with_heap_refuses_a_heap_size_the_metadata_cannot_carry() {
         let sketch = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::from_storage(
             Vector2D::from_fn(2, 4, |_, _| 0i64),
             1usize << 40,
