@@ -499,8 +499,8 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
                 >= pow2_saturating(threshold)
             {
                 emit(HllRegisterDelta {
-                    pos: bucket_num as u32,
-                    value: leading_zero,
+                    index: bucket_num as u32,
+                    register_value: leading_zero,
                 });
             }
         }
@@ -527,10 +527,10 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
 
     /// Applies one externally emitted HLL delta.
     pub fn apply_delta(&mut self, delta: HllRegisterDelta) {
-        let pos = delta.pos as usize;
+        let pos = delta.index as usize;
         let regs = self.registers.as_mut_slice();
-        if delta.value > regs[pos] {
-            regs[pos] = delta.value;
+        if delta.register_value > regs[pos] {
+            regs[pos] = delta.register_value;
         }
     }
 }

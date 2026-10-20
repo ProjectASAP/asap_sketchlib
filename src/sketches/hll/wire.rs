@@ -743,16 +743,16 @@ mod tests {
 
         let mut classic = HyperLogLog::<Classic>::default();
         classic.apply_delta(HllRegisterDelta {
-            pos: 7,
-            value: P14_MAX,
+            index: 7,
+            register_value: P14_MAX,
         });
         assert!(
             classic.to_asapv1().is_ok(),
             "the bound itself must still serialize"
         );
         classic.apply_delta(HllRegisterDelta {
-            pos: 7,
-            value: P14_MAX + 1,
+            index: 7,
+            register_value: P14_MAX + 1,
         });
         let problem = classic
             .to_asapv1()
@@ -765,8 +765,8 @@ mod tests {
 
         let mut ertl = HyperLogLog::<Ertl>::default();
         ertl.apply_delta(HllRegisterDelta {
-            pos: 7,
-            value: u8::MAX,
+            index: 7,
+            register_value: u8::MAX,
         });
         assert!(
             ertl.to_asapv1().is_err(),
@@ -775,8 +775,8 @@ mod tests {
 
         let mut p12 = HyperLogLogP12::<Ertl>::default();
         p12.apply_delta(HllRegisterDelta {
-            pos: 7,
-            value: (HllRegistersP12::RANK_HASH_BITS + 2) as u8,
+            index: 7,
+            register_value: (HllRegistersP12::RANK_HASH_BITS + 2) as u8,
         });
         let problem = p12
             .to_asapv1()

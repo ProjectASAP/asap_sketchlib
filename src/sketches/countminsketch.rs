@@ -429,7 +429,7 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMinSketch<S, Regular
                 emit(CountMinSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
-                    value: current as u32,
+                    count: current as u32,
                 });
                 self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
             }
@@ -489,7 +489,7 @@ where
                 emit(CountMinSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
-                    value: current as u32,
+                    count: current as u32,
                 });
                 self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
             }
@@ -521,7 +521,7 @@ where
         self.counts.increment_by_row(
             delta.row as usize,
             delta.col as usize,
-            S::Counter::from(delta.value as i32),
+            S::Counter::from(delta.count as i32),
         );
     }
 }
@@ -737,7 +737,7 @@ mod tests {
         assert!(
             deltas
                 .iter()
-                .all(|d| d.value == OCTO_COUNT_MIN_DEFAULT_THRESHOLD)
+                .all(|d| d.count == OCTO_COUNT_MIN_DEFAULT_THRESHOLD)
         );
 
         for _ in 0..(OCTO_COUNT_MIN_DEFAULT_THRESHOLD - 1) {
@@ -754,7 +754,7 @@ mod tests {
         let delta = CountMinSketchCellDelta {
             row: 1,
             col: 5,
-            value: OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
+            count: OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
         };
         parent.apply_delta(delta);
         assert_eq!(

@@ -1413,7 +1413,7 @@ fn univmon_known(keys: [DataInput<'_>; 6]) -> UnivMon {
                 um.layer_sketches[layer].apply_delta(CountSketchCellDelta {
                     row: row as u32,
                     col: col as u32,
-                    value: value as i32,
+                    count: value as i32,
                 });
             }
         }
@@ -1540,15 +1540,15 @@ fn hydra_grid(
 ) -> Hydra {
     let mut hydra = Hydra::with_schema(rows, cols, HYDRA_SCHEMA, prototype).expect("valid schema");
     let mut cells = cells.into_iter();
-    hydra.sketches = Vector2D::from_fn(rows, cols, |_, _| cells.next().expect("one cell each"));
+    hydra.cells = Vector2D::from_fn(rows, cols, |_, _| cells.next().expect("one cell each"));
     assert!(cells.next().is_none(), "one cell per grid position");
     hydra
 }
 
 fn assert_same_grid(got: &Hydra, want: &Hydra) {
-    assert_eq!((got.row_num, got.col_num), (want.row_num, want.col_num));
+    assert_eq!((got.rows, got.cols), (want.rows, want.cols));
     assert_eq!(got.schema(), want.schema());
-    let cells = got.sketches.as_slice().iter().zip(want.sketches.as_slice());
+    let cells = got.cells.as_slice().iter().zip(want.cells.as_slice());
     for (i, (g, w)) in cells.enumerate() {
         let same = match (g, w) {
             (HydraCounter::Kll(g), HydraCounter::Kll(w)) => {
@@ -1674,7 +1674,7 @@ fn hydra_univmon_1x2_matches_golden() {
     let fresh = || UnivMon::new(2, 1, 2, 2);
     let mut um = fresh();
     for (layer, col, value) in [(0usize, 0u32, 5i32), (0, 1, -3), (1, 1, 2)] {
-        um.layer_sketches[layer].apply_delta(CountSketchCellDelta { row: 0, col, value });
+        um.layer_sketches[layer].apply_delta(CountSketchCellDelta { row: 0, col, count: value });
     }
     um.layer_heaps[0].update(&DataInput::U64(7), 5);
     um.layer_heaps[0].update(&DataInput::U64(300), 2);
@@ -1937,7 +1937,7 @@ fn univmon_optimized_l5_e2_3x8_1x4_h6_matches_golden() {
                 pyramid.layer_sketches[layer].apply_delta(CountSketchCellDelta {
                     row: row as u32,
                     col: col as u32,
-                    value,
+                    count: value,
                 });
             }
         }

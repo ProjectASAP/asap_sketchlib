@@ -1210,7 +1210,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     /// deltas reports the same `l2` as one fed the raw stream.
     pub fn apply_delta(&mut self, delta: CountSketchCellDelta) {
         let (row, col) = (delta.row as usize, delta.col as usize);
-        let new_value = self.counts.query_one_counter(row, col) + delta.value as i64;
+        let new_value = self.counts.query_one_counter(row, col) + delta.count as i64;
         self.write_counter(row, col, new_value);
     }
 

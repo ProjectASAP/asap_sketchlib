@@ -30,17 +30,17 @@ The paper's three ideas map onto this module as:
 Defined in `src/sketches/octo_delta.rs`.
 
 ```rust
-pub struct CountMinSketchCellDelta    { pub row: u32, pub col: u32, pub value: u32 }
-pub struct CountSketchCellDelta { pub row: u32, pub col: u32, pub value: i32 }
-pub struct HllRegisterDelta   { pub pos: u32, pub value: u8 }
-pub struct DdSketchBucketDelta    { pub index: i32, pub value: u64 }
+pub struct CountMinSketchCellDelta    { pub row: u32, pub col: u32, pub count: u32 }
+pub struct CountSketchCellDelta { pub row: u32, pub col: u32, pub count: i32 }
+pub struct HllRegisterDelta   { pub index: u32, pub register_value: u8 }
+pub struct DdSketchBucketDelta    { pub index: i32, pub count: u64 }
 
 pub struct KeyedCountMinSketchCellDelta    { pub key: OwnedDataInput, pub delta: CountMinSketchCellDelta }
 pub struct KeyedCountSketchCellDelta { pub key: OwnedDataInput, pub delta: CountSketchCellDelta }
 
-pub struct CocoDelta { pub key: String, pub value: u64 }
+pub struct CocoDelta { pub key: String, pub count: u64 }
 pub enum ElasticDelta {
-    Heavy { key: String, value: u32, eviction: bool },
+    Heavy { key: String, votes: u32, eviction: bool },
     Evicted { key: String, votes: u32 },
     Light(CountMinSketchCellDelta),
 }
@@ -191,7 +191,7 @@ fn apply_delta(&mut self, delta: HllRegisterDelta)
 ```
 
 `apply_delta` applies a max-update: the parent register is set to
-`max(current, delta.value)`.
+`max(current, delta.register_value)`.
 
 ## DDSketch Delta API
 

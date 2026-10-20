@@ -349,10 +349,10 @@ impl DdSketch {
     /// stay exact with respect to the bucket store.
     pub fn apply_delta(&mut self, delta: DdSketchBucketDelta) {
         if delta.sign == DdSign::Zero {
-            self.apply_zero_delta(delta.value);
+            self.apply_zero_delta(delta.count);
             return;
         }
-        if delta.value == 0 {
+        if delta.count == 0 {
             return;
         }
         // `merge` checks that the two sketches share an alpha; a delta carries
@@ -373,7 +373,7 @@ impl DdSketch {
         };
         store.ensure(delta.index);
         let slot = (delta.index - store.offset) as usize;
-        store.counts.as_mut_slice()[slot] += delta.value;
+        store.counts.as_mut_slice()[slot] += delta.count;
 
         let representative = self.bin_representative(delta.index)
             * if delta.sign == DdSign::Negative {
@@ -381,8 +381,8 @@ impl DdSketch {
             } else {
                 1.0
             };
-        self.count += delta.value;
-        self.add_to_sum(representative * delta.value as f64);
+        self.count += delta.count;
+        self.add_to_sum(representative * delta.count as f64);
         if representative < self.min {
             self.min = representative;
         }

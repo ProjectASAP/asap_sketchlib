@@ -131,7 +131,7 @@ fn borrow(record: &[String]) -> Vec<&str> {
 /// One cell's exact write count, read through the Count-Min it holds.
 fn cell(hydra: &Hydra, row: usize, col: usize) -> i64 {
     hydra
-        .sketches
+        .cells
         .get(row, col)
         .expect("a cell inside the declared grid")
         .query(&HydraQuery::Frequency(payload()))

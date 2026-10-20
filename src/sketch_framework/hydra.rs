@@ -188,11 +188,11 @@ impl KeySchema {
 /// Sketch grid for subpopulation queries.
 pub struct Hydra {
     /// Number of rows in the sketch grid.
-    pub row_num: usize,
+    pub rows: usize,
     /// Number of columns in the sketch grid.
-    pub col_num: usize,
+    pub cols: usize,
     /// Backing grid of per-cell sketches.
-    pub sketches: Vector2D<HydraCounter>,
+    pub cells: Vector2D<HydraCounter>,
     /// Prototype sketch cloned for new cells.
     pub prototype: HydraCounter,
     /// Key columns. Private because changing it would invalidate every subkey
@@ -206,10 +206,10 @@ impl Hydra {
     /// Every [`update`](Hydra::update) supplies one value per column,
     /// positionally; every query constrains a subset of those columns.
     pub fn with_schema<S, I>(
-        r: usize,
-        c: usize,
+        rows: usize,
+        cols: usize,
         schema: I,
-        sketch_type: HydraCounter,
+        prototype: HydraCounter,
     ) -> Result<Self, String>
     where
         S: Into<String>,
@@ -218,13 +218,13 @@ impl Hydra {
         let labels: Vec<String> = schema.into_iter().map(Into::into).collect();
         let schema = KeySchema::try_from(labels)?;
         let mut h = Hydra {
-            row_num: r,
-            col_num: c,
-            sketches: Vector2D::init(r, c),
-            prototype: sketch_type.clone(),
+            rows,
+            cols,
+            cells: Vector2D::init(rows, cols),
+            prototype: prototype.clone(),
             schema,
         };
-        h.sketches.fill(sketch_type);
+        h.cells.fill(prototype);
         Ok(h)
     }
 
@@ -256,11 +256,11 @@ impl Hydra {
             // Use Str(&str) variant to avoid cloning the buffer
             let hash = hash_for_matrix_seeded(
                 HYDRA_SEED_INDEX,
-                self.row_num,
-                self.col_num,
+                self.rows,
+                self.cols,
                 &DataInput::Str(&buffer),
             );
-            self.sketches
+            self.cells
                 .fast_insert(|a, b, _| a.update(b, count), value, &hash);
         }
         Ok(())
@@ -268,7 +268,7 @@ impl Hydra {
 
     /// Merge another Hydra sketch into this one.
     pub fn merge(&mut self, other: &Hydra) -> Result<(), String> {
-        if self.row_num != other.row_num || self.col_num != other.col_num {
+        if self.rows != other.rows || self.cols != other.cols {
             return Err("Hydra dimension mismatch while merging".to_string());
         }
         if std::mem::discriminant(&self.prototype) != std::mem::discriminant(&other.prototype) {
@@ -284,8 +284,8 @@ impl Hydra {
                 other.schema.labels()
             ));
         }
-        let self_cells = self.sketches.as_mut_slice();
-        let other_cells = other.sketches.as_slice();
+        let self_cells = self.cells.as_mut_slice();
+        let other_cells = other.cells.as_slice();
         if self_cells.len() != other_cells.len() {
             return Err("Hydra storage length mismatch while merging".to_string());
         }
@@ -315,12 +315,12 @@ impl Hydra {
         self.schema.encode_subkey_into(&values, mask, &mut buffer);
         let hashed_val = hash_for_matrix_seeded(
             HYDRA_SEED_INDEX,
-            self.row_num,
-            self.col_num,
+            self.rows,
+            self.cols,
             &DataInput::Str(&buffer),
         );
         Ok(self
-            .sketches
+            .cells
             .fast_query_median_with_key(&hashed_val, query, |counter, q, _, _| {
                 counter.query(q).unwrap_or(0.0)
             }))
@@ -488,10 +488,10 @@ mod tests {
 
         let decoded = Hydra::from_asapv1(&data).expect("deserialize Hydra from an ASAPv1 envelope");
 
-        assert_eq!(hydra.row_num, decoded.row_num);
-        assert_eq!(hydra.col_num, decoded.col_num);
-        assert_eq!(hydra.sketches.rows(), decoded.sketches.rows());
-        assert_eq!(hydra.sketches.cols(), decoded.sketches.cols());
+        assert_eq!(hydra.rows, decoded.rows);
+        assert_eq!(hydra.cols, decoded.cols);
+        assert_eq!(hydra.cells.rows(), decoded.cells.rows());
+        assert_eq!(hydra.cells.cols(), decoded.cells.cols());
         // The key schema is part of the payload: without it the decoded sketch
         // could not reproduce a single subkey.
         assert_eq!(hydra.schema(), decoded.schema());

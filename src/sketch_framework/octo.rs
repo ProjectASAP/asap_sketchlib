@@ -232,7 +232,7 @@ impl CountMinSketchWorker {
                 emit(CountMinSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
-                    value: *cell as u32,
+                    count: *cell as u32,
                 });
                 *cell = 0;
             }
@@ -248,7 +248,7 @@ impl CountMinSketchWorker {
                     emit(CountMinSketchCellDelta {
                         row: row as u32,
                         col: col as u32,
-                        value: *cell as u32,
+                        count: *cell as u32,
                     });
                     *cell = 0;
                 }
@@ -356,7 +356,7 @@ impl CountSketchWorker {
                 emit(CountSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
-                    value: *cell as i32,
+                    count: *cell as i32,
                 });
                 *cell = 0;
             }
@@ -372,7 +372,7 @@ impl CountSketchWorker {
                     emit(CountSketchCellDelta {
                         row: row as u32,
                         col: col as u32,
-                        value: *cell as i32,
+                        count: *cell as i32,
                     });
                     *cell = 0;
                 }
@@ -458,7 +458,7 @@ impl CountSketchWithL2NormWorker {
                     emit(CountSketchCellDelta {
                         row: row as u32,
                         col: col as u32,
-                        value: *cell as i32,
+                        count: *cell as i32,
                     });
                     *cell = 0;
                 }
@@ -500,7 +500,7 @@ impl CountSketchWithL2NormWorker {
                 emit(CountSketchCellDelta {
                     row: row as u32,
                     col: col as u32,
-                    value: *cell as i32,
+                    count: *cell as i32,
                 });
                 *cell = 0;
             }
@@ -593,7 +593,7 @@ impl CocoSketchWorker {
                 if self.counters[cell] >= threshold {
                     emit(CocoDelta {
                         key: key.to_string(),
-                        value: self.counters[cell] as u64,
+                        count: self.counters[cell] as u64,
                     });
                     self.counters[cell] = 0;
                 }
@@ -626,7 +626,7 @@ impl CocoSketchWorker {
             if let Some(resident) = self.keys[victim].clone() {
                 emit(CocoDelta {
                     key: resident,
-                    value: self.counters[victim] as u64,
+                    count: self.counters[victim] as u64,
                 });
             }
             self.counters[victim] = 0;
@@ -643,7 +643,7 @@ impl CocoSketchWorker {
             if let Some(resident) = self.keys[cell].clone() {
                 emit(CocoDelta {
                     key: resident,
-                    value: self.counters[cell] as u64,
+                    count: self.counters[cell] as u64,
                 });
             }
             self.counters[cell] = 0;
@@ -763,7 +763,7 @@ impl ElasticSketchWorker {
             if let Some(resident) = bucket.flow_id.clone() {
                 emit(ElasticDelta::Heavy {
                     key: resident,
-                    value: bucket.vote_pos as u32,
+                    votes: bucket.vote_pos as u32,
                     eviction: bucket.eviction,
                 });
             }
@@ -793,7 +793,7 @@ impl ElasticSketchWorker {
         if let Some(resident) = bucket.flow_id.clone() {
             emit(ElasticDelta::Heavy {
                 key: resident,
-                value: bucket.vote_pos as u32,
+                votes: bucket.vote_pos as u32,
                 eviction: bucket.eviction,
             });
         }
@@ -1757,7 +1757,7 @@ impl DdSketchWorker {
                 emit(DdSketchBucketDelta {
                     sign: store,
                     index,
-                    value: count as u64,
+                    count: count as u64,
                 });
             }
         }
@@ -1783,7 +1783,7 @@ impl DdSketchWorker {
             emit(DdSketchBucketDelta {
                 sign: store,
                 index,
-                value: *counter as u64,
+                count: *counter as u64,
             });
             self.counters.remove(&(store, index));
         }
@@ -1944,8 +1944,8 @@ impl OctoWorker for HllOctoWorker {
         for (pos, value) in self.child.registers_as_slice().iter().enumerate() {
             if *value != 0 {
                 emit(HllRegisterDelta {
-                    pos: pos as u32,
-                    value: *value,
+                    index: pos as u32,
+                    register_value: *value,
                 });
             }
         }
@@ -2321,7 +2321,7 @@ impl OctoAggregator for CocoOctoAggregator {
 
     #[inline(always)]
     fn apply(&mut self, delta: CocoDelta) {
-        self.sketch.update_weighted(&delta.key, delta.value);
+        self.sketch.update_weighted(&delta.key, delta.count);
     }
 }
 
@@ -2421,9 +2421,9 @@ impl OctoAggregator for ElasticOctoAggregator {
         match delta {
             ElasticDelta::Heavy {
                 key,
-                value,
+                votes,
                 eviction,
-            } => self.sketch.merge_heavy(key, value as i32, eviction),
+            } => self.sketch.merge_heavy(key, votes as i32, eviction),
             ElasticDelta::Evicted { key, votes } => self.sketch.absorb_evicted(key, votes as i32),
             ElasticDelta::Light(delta) => self.sketch.light.apply_delta(delta),
         }
@@ -2986,7 +2986,7 @@ mod worker_tests {
         });
         assert_eq!(deltas.len(), 3, "one promotion per row");
         for d in &deltas {
-            assert_eq!(d.value, OCTO_COUNT_MIN_DEFAULT_THRESHOLD);
+            assert_eq!(d.count, OCTO_COUNT_MIN_DEFAULT_THRESHOLD);
         }
         assert!(
             worker.residual().iter().all(|&c| c == 0),
@@ -3028,7 +3028,7 @@ mod worker_tests {
         }
         assert!(!deltas.is_empty());
         for d in &deltas {
-            assert_eq!(d.value.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD);
+            assert_eq!(d.count.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD);
         }
         assert!(worker.residual().iter().all(|&c| c.unsigned_abs() < 31));
     }
@@ -3062,7 +3062,7 @@ mod worker_tests {
             });
         }
         assert_eq!(deltas.len(), 1, "one promotion per tau samples");
-        assert_eq!(deltas[0].value as u32, OCTO_COUNT_MIN_DEFAULT_THRESHOLD);
+        assert_eq!(deltas[0].count as u32, OCTO_COUNT_MIN_DEFAULT_THRESHOLD);
         assert!(
             worker.residual().is_empty(),
             "the promoted bucket must be cleared"
@@ -3180,8 +3180,8 @@ mod worker_tests {
         let mut full = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(1, 64);
         let mut full_values: Vec<i32> = Vec::new();
         for _ in 0..400 {
-            compact.update_emit_delta(&key, tau, &mut |d| compact_values.push(d.value));
-            full.update_emit_delta_with_threshold(&key, tau, &mut |d| full_values.push(d.value));
+            compact.update_emit_delta(&key, tau, &mut |d| compact_values.push(d.count));
+            full.update_emit_delta_with_threshold(&key, tau, &mut |d| full_values.push(d.count));
         }
 
         assert!(!compact_values.is_empty(), "tau must be reachable at all");
@@ -3268,12 +3268,12 @@ mod worker_tests {
         parent.apply_delta(DdSketchBucketDelta {
             sign: Default::default(),
             index: i32::MAX / 2,
-            value: 4,
+            count: 4,
         });
         parent.apply_delta(DdSketchBucketDelta {
             sign: Default::default(),
             index: i32::MIN / 2,
-            value: 4,
+            count: 4,
         });
         assert_eq!(
             parent.positive_store_counts().len(),
@@ -3375,7 +3375,7 @@ mod worker_tests {
         worker.update_emit_delta(key, OCTO_COCO_DEFAULT_THRESHOLD, &mut |d| deltas.push(d));
         assert_eq!(deltas.len(), 1, "one bucket, one promotion");
         assert_eq!(deltas[0].key, key, "the message carries the bucket's key");
-        assert_eq!(deltas[0].value as u32, OCTO_COCO_DEFAULT_THRESHOLD);
+        assert_eq!(deltas[0].count as u32, OCTO_COCO_DEFAULT_THRESHOLD);
         assert!(
             worker.residual().iter().all(|&c| c == 0),
             "§4.4 clears the bucket it promotes"

@@ -69,7 +69,7 @@ pub struct CountMinSketchCellDelta {
     /// Column index of the updated cell.
     pub col: u32,
     /// Accumulated delta for the cell.
-    pub value: u32,
+    pub count: u32,
 }
 
 /// Delta emitted by a Count sketch child worker.
@@ -81,7 +81,7 @@ pub struct CountSketchCellDelta {
     /// Column index of the updated cell.
     pub col: u32,
     /// Signed accumulated delta for the cell.
-    pub value: i32,
+    pub count: i32,
 }
 
 /// Delta emitted by an HLL child worker.
@@ -89,9 +89,9 @@ pub struct CountSketchCellDelta {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HllRegisterDelta {
     /// Register position to update.
-    pub pos: u32,
+    pub index: u32,
     /// New register value.
-    pub value: u8,
+    pub register_value: u8,
 }
 
 /// Store selected by a DDSketch delta; logarithmic indices alone do not encode sign.
@@ -110,7 +110,7 @@ pub struct DdSketchBucketDelta {
     /// Absolute bucket index, as used by `DdSketch::positive_store_offset`.
     pub index: i32,
     /// Accumulated count for the bucket.
-    pub value: u64,
+    pub count: u64,
 }
 
 /// A `CountMinSketchCellDelta` carrying the flow key that produced it.
@@ -147,7 +147,7 @@ pub struct CocoDelta {
     /// Key the promoted bucket holds.
     pub key: String,
     /// Mass attributed to that key since the bucket last promoted.
-    pub value: u64,
+    pub count: u64,
 }
 
 /// Delta emitted by an Elastic sketch child worker.
@@ -169,7 +169,7 @@ pub enum ElasticDelta {
         /// Flow the promoted bucket holds.
         key: String,
         /// Votes recorded for it since the bucket last promoted.
-        value: u32,
+        votes: u32,
         /// Whether the worker's bucket holds this flow by eviction, so part of
         /// the flow's mass may sit in a light layer.
         eviction: bool,

@@ -370,7 +370,7 @@ mod tests {
             assert!(grid(plain.clone()).to_asapv1().is_ok());
             assert!(grid(sampled.clone()).to_asapv1().is_err());
             let mut one_cell = grid(plain);
-            one_cell.sketches.as_mut_slice()[1] = sampled;
+            one_cell.cells.as_mut_slice()[1] = sampled;
             assert!(one_cell.to_asapv1().is_err());
         }
 

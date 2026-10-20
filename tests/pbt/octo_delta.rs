@@ -589,7 +589,7 @@ proptest! {
             worker.update_emit_delta(&flow(*k), tau, &mut |delta| deltas.push(delta));
         }
 
-        let promoted: u64 = deltas.iter().map(|delta| delta.value).sum();
+        let promoted: u64 = deltas.iter().map(|delta| delta.count).sum();
         let held: u64 = worker.residual().iter().map(|c| u64::from(*c)).sum();
         prop_assert_eq!(
             promoted + held, keys.len() as u64,
@@ -598,7 +598,7 @@ proptest! {
 
         let seen: HashSet<String> = keys.iter().map(|k| flow(*k)).collect();
         for delta in &deltas {
-            prop_assert_eq!(delta.value, u64::from(tau), "a promotion carried {}", delta.value);
+            prop_assert_eq!(delta.count, u64::from(tau), "a promotion carried {}", delta.count);
             prop_assert!(seen.contains(&delta.key), "promoted key {} never arrived", delta.key);
         }
         for (i, held) in worker.residual().iter().enumerate() {
@@ -691,7 +691,7 @@ proptest! {
                 &promoted[0].key, &arrival,
                 "the promotion named {} rather than the arriving {}", promoted[0].key, arrival
             );
-            prop_assert_eq!(promoted[0].value, 1);
+            prop_assert_eq!(promoted[0].count, 1);
         }
         prop_assert!(worker.residual().iter().all(|c| *c == 0));
     }
@@ -718,9 +718,9 @@ proptest! {
         let (mut heavy, mut evicted, mut light) = (0u64, 0u64, 0u64);
         for delta in &deltas {
             match delta {
-                ElasticDelta::Heavy { value, .. } => heavy += u64::from(*value),
+                ElasticDelta::Heavy { votes, .. } => heavy += u64::from(*votes),
                 ElasticDelta::Evicted { votes, .. } => evicted += u64::from(*votes),
-                ElasticDelta::Light(cell) => light += cell.value as u64,
+                ElasticDelta::Light(cell) => light += cell.count as u64,
             }
         }
         prop_assert_eq!(
@@ -736,8 +736,8 @@ proptest! {
         let seen: HashSet<String> = keys.iter().map(|k| flow(*k)).collect();
         for delta in &deltas[..promoted_during_inserts] {
             match delta {
-                ElasticDelta::Heavy { key, value, .. } => {
-                    prop_assert_eq!(*value, tau, "a heavy promotion carried {}", value);
+                ElasticDelta::Heavy { key, votes, .. } => {
+                    prop_assert_eq!(*votes, tau, "a heavy promotion carried {}", votes);
                     prop_assert!(seen.contains(key), "promoted key {} never arrived", key);
                 }
                 ElasticDelta::Evicted { key, votes } => {
@@ -745,7 +745,7 @@ proptest! {
                     prop_assert!(seen.contains(key), "evicted key {} never arrived", key);
                 }
                 ElasticDelta::Light(cell) => {
-                    prop_assert_eq!(cell.value, tau, "a light promotion carried {}", cell.value);
+                    prop_assert_eq!(cell.count, tau, "a light promotion carried {}", cell.count);
                 }
             }
         }
@@ -882,9 +882,9 @@ proptest! {
                 "layer {}'s threshold is not tau halved {} times", layer, layer
             );
             prop_assert_eq!(
-                d.cell.value.unsigned_abs(),
+                d.cell.count.unsigned_abs(),
                 (tau >> layer).max(1),
-                "layer {} promoted {} rather than its own threshold", layer, d.cell.value
+                "layer {} promoted {} rather than its own threshold", layer, d.cell.count
             );
             prop_assert_eq!(d.worker_id as usize, worker_id);
             prop_assert_eq!(
@@ -979,7 +979,7 @@ proptest! {
         }
 
         for d in &deltas {
-            prop_assert_eq!(d.delta.value.unsigned_abs(), tau, "a promotion carried {}", d.delta.value);
+            prop_assert_eq!(d.delta.count.unsigned_abs(), tau, "a promotion carried {}", d.delta.count);
         }
         let seen: HashSet<u64> = keys.iter().copied().collect();
         prop_assert_eq!(
@@ -1019,7 +1019,7 @@ proptest! {
         }
         prop_assert!(!cm_deltas.is_empty(), "CM_PROMASK promoted nothing over {} inserts", n);
         for d in &cm_deltas {
-            prop_assert_eq!(d.value, OCTO_COUNT_MIN_DEFAULT_THRESHOLD, "a Count-Min promotion carried {}", d.value);
+            prop_assert_eq!(d.count, OCTO_COUNT_MIN_DEFAULT_THRESHOLD, "a Count-Min promotion carried {}", d.count);
         }
 
         let mut cs = CountSketchWorker::new(4, 16);
@@ -1029,7 +1029,7 @@ proptest! {
         }
         prop_assert!(!cs_deltas.is_empty(), "COUNT_PROMASK promoted nothing over {} inserts", n);
         for d in &cs_deltas {
-            prop_assert_eq!(d.value.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, "a Count promotion carried {}", d.value);
+            prop_assert_eq!(d.count.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, "a Count promotion carried {}", d.count);
         }
 
         let mut dd = DdSketchWorker::new(0.05);
@@ -1039,7 +1039,7 @@ proptest! {
         }
         prop_assert!(!dd_deltas.is_empty(), "DD_PROMASK promoted nothing over {} inserts", n);
         for d in &dd_deltas {
-            prop_assert_eq!(d.value, u64::from(OCTO_DDSKETCH_DEFAULT_THRESHOLD), "a DDSketch promotion carried {}", d.value);
+            prop_assert_eq!(d.count, u64::from(OCTO_DDSKETCH_DEFAULT_THRESHOLD), "a DDSketch promotion carried {}", d.count);
         }
 
         let mut coco = CocoSketchWorker::with_seed(8, 2, seed);
@@ -1049,7 +1049,7 @@ proptest! {
         }
         prop_assert!(!coco_deltas.is_empty(), "COCO_PROMASK promoted nothing over {} inserts", n);
         for d in &coco_deltas {
-            prop_assert_eq!(d.value, u64::from(OCTO_COCO_DEFAULT_THRESHOLD), "a Coco promotion carried {}", d.value);
+            prop_assert_eq!(d.count, u64::from(OCTO_COCO_DEFAULT_THRESHOLD), "a Coco promotion carried {}", d.count);
         }
 
         let mut elastic = ElasticSketchWorker::new(8, 2, 8);
@@ -1060,7 +1060,7 @@ proptest! {
         let heavy: Vec<u32> = elastic_deltas
             .iter()
             .filter_map(|d| match d {
-                ElasticDelta::Heavy { value, .. } => Some(*value),
+                ElasticDelta::Heavy { votes, .. } => Some(*votes),
                 _ => None,
             })
             .collect();
@@ -1080,7 +1080,7 @@ proptest! {
         let top_layer: Vec<i32> = layered
             .iter()
             .filter(|d| d.layer == 0)
-            .map(|d| d.cell.value)
+            .map(|d| d.cell.count)
             .collect();
         prop_assert!(!top_layer.is_empty(), "UNIVMON_PROMASK promoted nothing over {} inserts", n);
         for value in &top_layer {
@@ -1125,8 +1125,8 @@ proptest! {
         }
         prop_assert!(!deltas.is_empty(), "MAX_PROMASK promoted nothing over {} inserts", n);
         for d in &deltas {
-            prop_assert_eq!(d.value.unsigned_abs(), OCTO_MAX_PROMOTION_THRESHOLD, "a promotion carried {}", d.value);
-            prop_assert!(i8::try_from(d.value).is_ok(), "{} does not fit the worker's counter", d.value);
+            prop_assert_eq!(d.count.unsigned_abs(), OCTO_MAX_PROMOTION_THRESHOLD, "a promotion carried {}", d.count);
+            prop_assert!(i8::try_from(d.count).is_ok(), "{} does not fit the worker's counter", d.count);
         }
     }
 }

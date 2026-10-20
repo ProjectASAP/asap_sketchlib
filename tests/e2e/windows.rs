@@ -691,7 +691,7 @@ fn tumbling_univmon_q_windows_carry_exact_aggregates_through_rotation() {
 }
 
 /// Every payload variant that owns a mergeable sketch must have a merge arm in
-/// `EhBucketSketch::merge`. A missing arm is invisible at runtime — `EhBucket::to_merge`
+/// `EhBucketSketch::merge`. A missing arm is invisible at runtime — `EhBucket::merge`
 /// discards the `Result` — so the histogram keeps counting bucket sizes while
 /// silently dropping the merged sketch's contents, and every query afterwards
 /// reads a single bucket. `ELASTIC` shipped without its arm and lost the whole

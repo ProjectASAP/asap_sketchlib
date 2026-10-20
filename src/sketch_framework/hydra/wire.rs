@@ -509,18 +509,18 @@ impl Hydra {
 
     /// The declared grid, rejecting a geometry the storage does not match.
     fn wire_grid(&self) -> Result<HydraGrid, RmpEncodeError> {
-        let (rows, cols) = (self.sketches.rows(), self.sketches.cols());
-        if (self.row_num, self.col_num) != (rows, cols) {
+        let (rows, cols) = (self.cells.rows(), self.cells.cols());
+        if (self.rows, self.cols) != (rows, cols) {
             return Err(encode_error(format!(
                 "ASAPv1 Hydra envelope: declared grid {}x{} != the storage's {rows}x{cols}",
-                self.row_num, self.col_num
+                self.rows, self.cols
             )));
         }
         let cells = checked_cells("grid", rows, cols).map_err(encode_error)?;
-        if self.sketches.as_slice().len() != cells {
+        if self.cells.as_slice().len() != cells {
             return Err(encode_error(format!(
                 "ASAPv1 Hydra envelope: storage holds {} cells != rows*cols {cells}",
-                self.sketches.as_slice().len()
+                self.cells.as_slice().len()
             )));
         }
         Ok(HydraGrid {
@@ -536,7 +536,7 @@ impl Hydra {
         &'a self,
         cell: impl Fn(&'a HydraCounter) -> Option<T>,
     ) -> Result<Vec<T>, RmpEncodeError> {
-        let counters = self.sketches.as_slice();
+        let counters = self.cells.as_slice();
         let mut out = Vec::with_capacity(counters.len());
         for (i, counter) in counters.iter().enumerate() {
             match cell(counter) {
@@ -544,8 +544,8 @@ impl Hydra {
                 None => {
                     return Err(encode_error(format!(
                         "ASAPv1 Hydra envelope: cell ({}, {}) holds a {counter}, the grid holds a {}",
-                        i / self.col_num,
-                        i % self.col_num,
+                        i / self.cols,
+                        i % self.cols,
                         self.prototype
                     )));
                 }
@@ -569,8 +569,8 @@ impl Hydra {
             if (storage.rows(), storage.cols()) != (cell_rows, cell_cols) {
                 return Err(encode_error(format!(
                     "ASAPv1 Hydra envelope: cell ({}, {}) is {}x{} against the prototype's {cell_rows}x{cell_cols}",
-                    i / self.col_num,
-                    i % self.col_num,
+                    i / self.cols,
+                    i % self.cols,
                     storage.rows(),
                     storage.cols()
                 )));
@@ -579,8 +579,8 @@ impl Hydra {
             if cell.len() != per_cell {
                 return Err(encode_error(format!(
                     "ASAPv1 Hydra envelope: cell ({}, {}) holds {} counters != {per_cell}",
-                    i / self.col_num,
-                    i % self.col_num,
+                    i / self.cols,
+                    i % self.cols,
                     cell.len()
                 )));
             }
@@ -591,7 +591,7 @@ impl Hydra {
 
     /// Rejects a prototype or cell whose admission rate is not `1`.
     fn check_admits_all(&self) -> Result<(), RmpEncodeError> {
-        for counter in std::iter::once(&self.prototype).chain(self.sketches.as_slice()) {
+        for counter in std::iter::once(&self.prototype).chain(self.cells.as_slice()) {
             let rate = match counter {
                 HydraCounter::CountMinSketch(cm) => cm.admission_rate(),
                 HydraCounter::CountSketch(cs) => cs.admission_rate(),
@@ -712,8 +712,8 @@ impl Hydra {
             if (kll.wire_k(), kll.m()) != (k, m) {
                 return Err(encode_error(format!(
                     "ASAPv1 Hydra envelope: cell ({}, {}) has k={}, m={} against the prototype's k={k}, m={m}",
-                    i / self.col_num,
-                    i % self.col_num,
+                    i / self.cols,
+                    i % self.cols,
                     kll.wire_k(),
                     kll.m()
                 )));
@@ -789,8 +789,8 @@ impl Hydra {
             {
                 return Err(encode_error(format!(
                     "ASAPv1 Hydra envelope: cell ({}, {}) is a {}x{}x{} pyramid against the prototype's {}x{}x{}",
-                    i / self.col_num,
-                    i % self.col_num,
+                    i / self.cols,
+                    i % self.cols,
                     meta.layers,
                     meta.rows,
                     meta.cols,
@@ -807,8 +807,8 @@ impl Hydra {
                     Some(pinned) if pinned != meta.key_type => {
                         return Err(encode_error(format!(
                             "ASAPv1 Hydra envelope: cells mix key variants — key_type is {pinned}, but cell ({}, {}) holds {} keys",
-                            i / self.col_num,
-                            i % self.col_num,
+                            i / self.cols,
+                            i % self.cols,
                             meta.key_type
                         )));
                     }
@@ -844,9 +844,9 @@ impl Hydra {
             )))
         });
         Ok(Hydra {
-            row_num: rows,
-            col_num: cols,
-            sketches,
+            rows: rows,
+            cols: cols,
+            cells: sketches,
             prototype: HydraCounter::CountMinSketch(CountMinSketch::with_dimensions(
                 cell_rows, cell_cols,
             )),
@@ -867,9 +867,9 @@ impl Hydra {
             )))
         });
         Ok(Hydra {
-            row_num: rows,
-            col_num: cols,
-            sketches,
+            rows: rows,
+            cols: cols,
+            cells: sketches,
             prototype: HydraCounter::CountSketch(CountSketch::with_dimensions(cell_rows, cell_cols)),
             schema: schema_of(&meta.schema)?,
         })
@@ -954,9 +954,9 @@ impl Hydra {
             counters.next().expect("one counter per grid cell")
         });
         Ok(Hydra {
-            row_num: rows,
-            col_num: cols,
-            sketches,
+            rows: rows,
+            cols: cols,
+            cells: sketches,
             prototype: HydraCounter::Hll(HyperLogLog::<Ertl>::default()),
             schema: schema_of(&meta.schema)?,
         })
@@ -1000,9 +1000,9 @@ impl Hydra {
             counters.next().expect("one counter per grid cell")
         });
         Ok(Hydra {
-            row_num: rows,
-            col_num: cols,
-            sketches,
+            rows: rows,
+            cols: cols,
+            cells: sketches,
             prototype: HydraCounter::Kll(Kll::new(meta.cell_k as usize, meta.cell_m as usize)),
             schema: schema_of(&meta.schema)?,
         })
@@ -1070,9 +1070,9 @@ impl Hydra {
             counters.next().expect("one counter per grid cell")
         });
         Ok(Hydra {
-            row_num: rows,
-            col_num: cols,
-            sketches,
+            rows: rows,
+            cols: cols,
+            cells: sketches,
             prototype: HydraCounter::UnivMon(UnivMon::new(
                 shape.heap_size as usize,
                 shape.rows as usize,
@@ -1261,10 +1261,10 @@ mod tests {
         assert_envelope(&encoded, kind_id);
 
         let decoded = Hydra::from_asapv1(&encoded).expect("deserialize Hydra");
-        assert_eq!(decoded.row_num, hydra.row_num);
-        assert_eq!(decoded.col_num, hydra.col_num);
-        assert_eq!(decoded.sketches.rows(), hydra.sketches.rows());
-        assert_eq!(decoded.sketches.cols(), hydra.sketches.cols());
+        assert_eq!(decoded.rows, hydra.rows);
+        assert_eq!(decoded.cols, hydra.cols);
+        assert_eq!(decoded.cells.rows(), hydra.cells.rows());
+        assert_eq!(decoded.cells.cols(), hydra.cells.cols());
         assert_eq!(decoded.schema(), hydra.schema(), "schema lost");
         assert_eq!(
             answers(&decoded, probes),
@@ -1388,7 +1388,7 @@ mod tests {
     fn hydra_count_sketch_negative_cells_round_trip() {
         let hydra = cs_grid();
         let cells = |h: &Hydra| -> Vec<i32> {
-            h.sketches
+            h.cells
                 .as_slice()
                 .iter()
                 .flat_map(|counter| match counter {
@@ -1483,7 +1483,7 @@ mod tests {
     #[test]
     fn hydra_rejects_a_mixed_variant_grid() {
         let mut hydra = cm_grid();
-        hydra.sketches.as_mut_slice()[9] = HydraCounter::Hll(HyperLogLog::<Ertl>::default());
+        hydra.cells.as_mut_slice()[9] = HydraCounter::Hll(HyperLogLog::<Ertl>::default());
         let problem = hydra
             .to_asapv1()
             .expect_err("a mixed grid must not serialize")
@@ -1500,21 +1500,21 @@ mod tests {
     #[test]
     fn hydra_rejects_serializing_an_inconsistent_grid() {
         let mut declared = cm_grid();
-        declared.row_num = 4;
+        declared.rows = 4;
         assert!(
             declared.to_asapv1().is_err(),
             "a declared grid the storage does not match must not serialize"
         );
 
         let mut unfilled = cm_grid();
-        unfilled.sketches = Vector2D::init(3, 8);
+        unfilled.cells = Vector2D::init(3, 8);
         assert!(
             unfilled.to_asapv1().is_err(),
             "an unfilled grid must not serialize"
         );
 
         let mut resized = cm_grid();
-        resized.sketches.as_mut_slice()[2] =
+        resized.cells.as_mut_slice()[2] =
             HydraCounter::CountMinSketch(CountMinSketch::with_dimensions(2, 8));
         assert!(
             resized.to_asapv1().is_err(),
@@ -1542,7 +1542,7 @@ mod tests {
         let mut hydra = univmon_grid();
         let mut strings = UnivMon::new(4, 2, 16, 3);
         strings.update_weighted(&DataInput::Str("alpha"), 5);
-        hydra.sketches.as_mut_slice()[0] = HydraCounter::UnivMon(strings);
+        hydra.cells.as_mut_slice()[0] = HydraCounter::UnivMon(strings);
         let problem = hydra
             .to_asapv1()
             .expect_err("a grid mixing key variants must not serialize")

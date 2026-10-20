@@ -14,7 +14,7 @@ fans its row out into all `2^D - 1` non-empty subpopulations.
 ## Constructors
 
 ```rust
-fn with_schema<S, I>(r: usize, c: usize, schema: I, sketch_type: HydraCounter) -> Result<Self, String>
+fn with_schema<S, I>(rows: usize, cols: usize, schema: I, prototype: HydraCounter) -> Result<Self, String>
 ```
 
 ## Insert/Update

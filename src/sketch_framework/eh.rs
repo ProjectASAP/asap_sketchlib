@@ -58,7 +58,7 @@ impl EhBucket {
     /// Merges another bucket into this one. When the two sketches refuse to
     /// merge the error is returned and this bucket's size, time range and
     /// cached mass are left as they were.
-    pub fn to_merge(&mut self, other: EhBucket) -> Result<(), String> {
+    pub fn merge(&mut self, other: EhBucket) -> Result<(), String> {
         self.bucket.merge(&other.bucket)?;
         self.size += other.size;
         self.max_time = self.max_time.max(other.max_time);
@@ -203,7 +203,7 @@ impl ExponentialHistogram {
             return Ok(());
         }
         let vol_to_merge = self.payload[index + 1].clone();
-        self.payload[index].to_merge(vol_to_merge)?;
+        self.payload[index].merge(vol_to_merge)?;
         self.payload.remove(index + 1);
         Ok(())
     }

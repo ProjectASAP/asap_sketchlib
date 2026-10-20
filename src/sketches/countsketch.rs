@@ -605,7 +605,7 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountSketch<S, RegularPat
                 emit(CountSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
-                    value: current,
+                    count: current,
                 });
                 self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
             }
@@ -665,7 +665,7 @@ where
                 emit(CountSketchCellDelta {
                     row: r as u32,
                     col: col as u32,
-                    value: current,
+                    count: current,
                 });
                 self.counts.update_one_counter(r, col, |c, _| *c = 0, ());
             }
@@ -697,7 +697,7 @@ where
         self.counts.increment_by_row(
             delta.row as usize,
             delta.col as usize,
-            S::Counter::from(delta.value),
+            S::Counter::from(delta.count),
         );
     }
 }

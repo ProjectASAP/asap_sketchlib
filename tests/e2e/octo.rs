@@ -163,7 +163,7 @@ fn cm_deltas_are_well_formed_and_carry_exactly_one_promotion() {
     assert!(!deltas.is_empty(), "a 20k stream must promote something");
     for d in &deltas {
         assert_eq!(
-            d.value, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
+            d.count, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
             "CM promotes exactly the mask value"
         );
         assert!((d.row as usize) < ROWS, "row {} out of range", d.row);
@@ -245,7 +245,7 @@ fn cm_fast_path_promotes_on_the_same_schedule_as_the_regular_path() {
     let mut fast_deltas = 0usize;
     for k in &stream {
         fast_child.update_emit_delta(&DataInput::U64(*k), &mut |d| {
-            assert_eq!(d.value, OCTO_COUNT_MIN_DEFAULT_THRESHOLD);
+            assert_eq!(d.count, OCTO_COUNT_MIN_DEFAULT_THRESHOLD);
             fast_parent.apply_delta(d);
             fast_deltas += 1;
         });
@@ -381,7 +381,7 @@ fn count_deltas_carry_exactly_the_signed_threshold() {
     assert!(!deltas.is_empty(), "a 30k stream must promote something");
     for d in &deltas {
         assert_eq!(
-            d.value.unsigned_abs(),
+            d.count.unsigned_abs(),
             OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
             "Count resets on promotion, so a delta is always ±the mask"
         );
@@ -459,7 +459,7 @@ fn count_fast_path_conserves_counts_like_the_regular_path() {
     let mut parent = CsFast::with_dimensions(ROWS, COLS);
     for k in &stream {
         child.update_emit_delta(&DataInput::U64(*k), &mut |d| {
-            assert_eq!(d.value.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD);
+            assert_eq!(d.count.unsigned_abs(), OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD);
             parent.apply_delta(d);
         });
     }
@@ -621,14 +621,14 @@ fn hll_deltas_are_strictly_increasing_per_register_and_never_repeat() {
     let register_count = child.registers_as_slice().len();
     let mut best = vec![0u8; register_count];
     for d in &deltas {
-        let pos = d.pos as usize;
+        let pos = d.index as usize;
         assert!(pos < register_count, "register {pos} out of range");
         assert!(
-            d.value > best[pos],
+            d.register_value > best[pos],
             "register {pos} re-promoted a non-improving value {}",
-            d.value
+            d.register_value
         );
-        best[pos] = d.value;
+        best[pos] = d.register_value;
     }
     assert_eq!(
         best,
@@ -1423,7 +1423,7 @@ impl OctoCm {
                         self.parent.apply_delta(CountMinSketchCellDelta {
                             row: row as u32,
                             col: col as u32,
-                            value: held as u32,
+                            count: held as u32,
                         });
                         child
                             .as_storage_mut()
@@ -1519,7 +1519,7 @@ impl OctoCs {
                         self.parent.apply_delta(CountSketchCellDelta {
                             row: row as u32,
                             col: col as u32,
-                            value: held,
+                            count: held,
                         });
                         child
                             .as_storage_mut()
@@ -3268,9 +3268,9 @@ mod heavy_hitters {
         );
         for delta in &promoted {
             assert_eq!(
-                delta.value, COCO_TAU,
+                delta.count, COCO_TAU,
                 "CocoSketch promotes exactly one window of τ, got {}",
-                delta.value
+                delta.count
             );
             assert!(
                 seen.contains(&delta.key),
@@ -3334,15 +3334,15 @@ mod heavy_hitters {
         let shipped = octo.flush();
 
         assert_eq!(
-            shipped.iter().map(|d| d.value).sum::<u64>(),
+            shipped.iter().map(|d| d.count).sum::<u64>(),
             expected_residual,
             "flush must ship exactly what the workers were holding"
         );
         for delta in &shipped {
             assert!(
-                delta.value > 0 && delta.value < COCO_TAU,
+                delta.count > 0 && delta.count < COCO_TAU,
                 "a flushed bucket carries a partial count, got {}",
-                delta.value
+                delta.count
             );
         }
         assert_eq!(octo.residual(), 0, "flush must leave the workers empty");
@@ -3510,12 +3510,12 @@ mod heavy_hitters {
             match delta {
                 ElasticDelta::Heavy {
                     key,
-                    value,
+                    votes,
                     eviction,
                 } => {
                     heavy += 1;
                     flagged += usize::from(*eviction);
-                    assert_eq!(*value, ELASTIC_TAU, "a heavy bucket promotes one window");
+                    assert_eq!(*votes, ELASTIC_TAU, "a heavy bucket promotes one window");
                     assert!(seen.contains(key), "heavy delta named an unseen flow {key}");
                 }
                 ElasticDelta::Evicted { key, votes } => {
@@ -3533,7 +3533,7 @@ mod heavy_hitters {
                 ElasticDelta::Light(cell) => {
                     light += 1;
                     assert_eq!(
-                        cell.value, ELASTIC_TAU,
+                        cell.count, ELASTIC_TAU,
                         "the light half moves one at a time, so it promotes exactly τ"
                     );
                     assert!((cell.row as usize) < rows, "row {} out of range", cell.row);
@@ -3586,7 +3586,7 @@ mod heavy_hitters {
                 .flush()
                 .iter()
                 .filter_map(|d| match d {
-                    ElasticDelta::Heavy { value, .. } => Some(*value as i64),
+                    ElasticDelta::Heavy { votes, .. } => Some(*votes as i64),
                     ElasticDelta::Evicted { .. } | ElasticDelta::Light(_) => None,
                 })
                 .sum();
@@ -3617,8 +3617,8 @@ mod heavy_hitters {
         let shipped = octo.flush();
         for delta in &shipped {
             let value = match delta {
-                ElasticDelta::Heavy { value, .. } => *value,
-                ElasticDelta::Light(cell) => cell.value,
+                ElasticDelta::Heavy { votes, .. } => *votes,
+                ElasticDelta::Light(cell) => cell.count,
                 ElasticDelta::Evicted { key, .. } => {
                     panic!("a flush evicts nobody, but handed over {key}")
                 }
@@ -3874,7 +3874,7 @@ mod heavy_hitters {
             vec![
                 ElasticDelta::Heavy {
                     key: resident.clone(),
-                    value: ELASTIC_TAU,
+                    votes: ELASTIC_TAU,
                     eviction: false,
                 },
                 ElasticDelta::Evicted {
