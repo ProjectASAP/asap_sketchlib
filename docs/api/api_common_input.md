@@ -50,6 +50,7 @@ fn update_with_hash(
 ```rust
 // HydraCounter
 fn query(&self, query: &HydraQuery) -> Result<f64, String>
+fn total_mass(&self) -> Result<f64, String>
 ```
 
 ## Merge

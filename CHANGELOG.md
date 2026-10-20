@@ -12,6 +12,10 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`Hydra::query_group_total(key)`** returns a subpopulation's total mass
+  (`count by (g)`) from Count-Min cells, with an error bound, or KLL cells,
+  approximately; **`HydraCounter::total_mass()`** gives one cell's. No wire
+  change.
 - **`UnivMon::check_shape`** accepts exactly the pyramid shapes `UnivMon::new`
   builds, so a caller can refuse a configuration without catching a panic.
 - **`TupleKey` and `KeyColumn`**, a heap key of typed columns (null, bool,

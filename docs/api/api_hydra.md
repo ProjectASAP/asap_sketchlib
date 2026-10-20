@@ -29,12 +29,37 @@ fn update(&mut self, key: &[&str], value: &DataInput, count: Option<i32>) -> Res
 fn query_key(&self, key: &[Option<&str>], query: &HydraQuery) -> Result<f64, String>
 fn query_frequency(&self, key: &[Option<&str>], value: &DataInput) -> Result<f64, String>
 fn query_cdf(&self, key: &[Option<&str>], threshold: f64) -> Result<f64, String>
+fn query_group_total(&self, key: &[Option<&str>]) -> Result<f64, String>
 fn schema(&self) -> &[String]
 ```
 
 A key is positional and full width: one value per column on `update`, and on a
 query `Some(v)` to constrain a column or `None` to leave it free, with at least
 one constrained. `query_cdf` dispatches `HydraQuery::Cdf`.
+
+`query_group_total` returns a subpopulation's total mass (`count by (g)`): the
+minimum over rows of the subkey's cell `HydraCounter::total_mass()`. A Count-Min
+cell's mass is its inner row sum, exact while each `i32` counter stays below
+`2^31`; a KLL cell's is its retained weight, which is approximate once the KLL
+compacts. Other counters return an error. The total is read from existing cell
+state, so the wire format carries it unchanged.
+
+Error bound (Count-Min cells). The statement uses an ideal uniform hash model in
+which each row's column is independent of the other rows'. Let `n_Q` be the
+subpopulation's true total, `N` the total inserted mass, `D` the number of key
+columns, `w = cols` and `r = rows`. With non-negative counts a row's cell holds
+`n_Q` plus the mass of every other subkey hashed to it. A column is a hash
+slice of `ceil(log2 w)` bits taken modulo `w`, so two subkeys share a column
+with probability `q = 1/w` when `w` is a power of two and `q <= 9/(8w)`
+otherwise, and the expected excess
+is at most `q M` for the post-fan-out mass `M = N (2^D - 1)`. By Markov a row
+exceeds `n_Q + 4M/w` with probability at most `qw/4`, and the minimum exceeds it
+only if every row does:
+
+`n_Q <= estimate <= n_Q + 4 N (2^D - 1) / w` with probability at least
+`1 - (9/32)^r`, and at least `1 - (1/4)^r` when `w` is a power of two.
+
+Negative counts void the bound.
 
 ## Merge
 
