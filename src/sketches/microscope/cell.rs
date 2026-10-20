@@ -36,7 +36,6 @@
 //! per byte halves the record and is a later change; the layout type already
 //! hides every offset from callers, so it is contained here.
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cell::Cell;
 
 /// The largest value an 8-bit pixel can hold.
@@ -76,7 +75,7 @@ pub enum DeltaStrategy {
 }
 
 /// Configuration of a MicroscopeSketch cell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MicroParams {
     /// Number of sub-windows the sliding window is split into.
     pub t: usize,
@@ -107,7 +106,7 @@ impl MicroParams {
         Self::checked(t, c).unwrap_or_else(|detail| panic!("{detail}"))
     }
 
-    /// [`Self::new`] as a `Result`, for validating deserialized values.
+    /// [`Self::new`] as a `Result`.
     pub fn checked(t: usize, c: u32) -> Result<Self, String> {
         if t == 0 || t > MAX_SUB_WINDOWS {
             return Err(format!(
@@ -218,32 +217,6 @@ pub fn zoom(cell: &[u8], layout: &MicroLayout) -> u8 {
     cell[layout.zoom_at]
 }
 
-/// Checks the two invariants a cell's own bytes must satisfy, for use on
-/// deserialized records.
-///
-/// Neither is expressible in the layout, so a crafted payload can carry a
-/// record that decodes cleanly and then misbehaves on first use:
-///
-/// - `Z` above the cap makes `c^Z` overflow, which panics in a debug build
-///   and silently wraps to a nonsense unit in a release one.
-/// - a shutter at or above `c^Z` breaks the assumption that a shutter holds
-///   less than one unit, which is what bounds the carry a merge computes.
-pub fn validate(cell: &[u8], layout: &MicroLayout) -> Result<(), String> {
-    let z = cell[layout.zoom_at];
-    let cap = layout.max_zoom();
-    if z > cap {
-        return Err(format!("zoom exponent {z} exceeds the maximum {cap}"));
-    }
-    let unit = (layout.params.c as u64).pow(z as u32);
-    let s = shutter(cell, layout) as u64;
-    if s >= unit {
-        return Err(format!(
-            "shutter {s} is not below one unit (c^Z = {unit}) at zoom {z}"
-        ));
-    }
-    Ok(())
-}
-
 /// A cell's shutter.
 ///
 /// Read and written through `to_le_bytes`/`from_le_bytes` rather than a cast,
@@ -272,23 +245,10 @@ pub fn scaled_pixel(cell: &[u8], layout: &MicroLayout, n: u64) -> f64 {
 ///
 /// It advances through a `Cell`, so a `&Rounding` can be captured by a
 /// non-`mut` closure — which is what lets a cell insert run inside
-/// `Vector3D::fast_insert`, whose closure is `Fn`. The state is a plain
-/// `u64`, so a sketch holding one can serialize it or reseed on load.
+/// `Vector3D::fast_insert`, whose closure is `Fn`.
 #[derive(Clone, Debug)]
 pub struct Rounding {
     state: Cell<u64>,
-}
-
-impl Serialize for Rounding {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_u64(self.state.get())
-    }
-}
-
-impl<'de> Deserialize<'de> for Rounding {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        Ok(Self::new(u64::deserialize(deserializer)?))
-    }
 }
 
 impl Rounding {
@@ -304,7 +264,7 @@ impl Rounding {
         }
     }
 
-    /// The current state, for serialization.
+    /// The current state.
     #[inline(always)]
     pub fn state(&self) -> u64 {
         self.state.get()

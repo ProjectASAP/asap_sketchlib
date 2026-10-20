@@ -620,4 +620,28 @@ mod tests {
             "decoded filter delivered {measured}, over its predicted {predicted} (+{band})"
         );
     }
+
+    /// A known bit grid serializes to the `asapv1_golden/` bytes.
+    #[test]
+    fn known_state_matches_golden() {
+        use crate::asapv1::envelope::hex;
+        use std::marker::PhantomData;
+
+        fn bloom<Mode: BloomMode>(rows: usize, cols: usize, words: &[u64], inserted: u64) -> Bloom<Mode> {
+            Bloom {
+                bits: BitMatrix::from_words(rows, cols, words.to_vec()).expect("valid grid"),
+                inserted,
+                _mode: PhantomData,
+                _hasher: PhantomData,
+            }
+        }
+
+        let regular = bloom::<RegularPath>(3, 128, &[1, 1 << 63, 0, 0xff, u64::MAX, 0x10000], 300);
+        let golden = hex(include_str!("../../../asapv1_golden/bloom_regular_3x128.hex"));
+        assert_eq!(regular.to_asapv1().unwrap(), golden);
+
+        let fast = bloom::<FastPath>(5, 32, &[1, 0x8000_0000, 0, 0xffff_ffff, 0x10000], 9);
+        let golden = hex(include_str!("../../../asapv1_golden/bloom_fast_5x32.hex"));
+        assert_eq!(fast.to_asapv1().unwrap(), golden);
+    }
 }

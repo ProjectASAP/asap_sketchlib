@@ -1,8 +1,7 @@
-use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut, Range};
 
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Vector1D<T> {
     data: Vec<T>,
 }

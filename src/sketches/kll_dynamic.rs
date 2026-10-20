@@ -12,7 +12,6 @@
 //!   <https://arxiv.org/abs/1603.05346>
 //! - <https://www.amazon.science/publications/insert-optimized-implementation-of-streaming-data-sketches>
 
-use serde::{Deserialize, Serialize};
 
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
@@ -27,7 +26,7 @@ const CAPACITY_DECAY: f64 = 2.0 / 3.0;
 const DEFAULT_K: i32 = 200;
 
 /// One entry in the cumulative distribution, storing a value and its mass.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct DynamicCdfEntry {
     value: f64,
     normalized_rank: f64,
@@ -38,7 +37,7 @@ pub struct DynamicCdfEntry {
 /// Unlike [`Kll`](super::kll::Kll), which pre-allocates a fixed buffer and
 /// grows downward, `KllDynamic` appends items to a growable `Vector1D` and
 /// shifts elements during compaction.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct KllDynamic<T: NumericalValue = f64> {
     items: Vector1D<T>, // compactors, packed
     /// Stores the START index of each level in `items`.
@@ -52,16 +51,12 @@ pub struct KllDynamic<T: NumericalValue = f64> {
     /// a sketch replays identically across runs and `clear()` re-seeds from
     /// the same value. Not part of the wire format: it describes how the
     /// sketch was built, not what it currently holds.
-    #[serde(skip)]
     seed: Option<u64>,
     /// Cached level capacities by height (from top to bottom)
-    #[serde(skip)]
     capacity_cache: [u32; CAPACITY_CACHE_LEN],
     /// Tracks current top height so we can index into the cache quickly.
-    #[serde(skip)]
     top_height: usize,
     /// Cached capacity for level 0 to speed up hot-path updates
-    #[serde(skip)]
     level0_capacity: usize,
 }
 

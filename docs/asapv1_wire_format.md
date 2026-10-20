@@ -695,7 +695,7 @@ Rules 3 and 4 are enforced on the **encode** side too: a matrix past `MATRIX_MAX
 | 1 | `keys` | array | one key per heap entry; element type = `key_type`; homogeneous |
 | 2 | `heap_counts` | array | parallel to `keys`; `f64` when `counter_type` is `"f64"`, else `i64` |
 
-**The heap's index does not reach the wire.** `TopKHeap` is a capacity-bounded min-heap beside a digest-to-position index; `slots` and `positions` are `#[serde(skip)]` in the type itself and are rebuilt from the entries on load, so the payload carries the entries only — the same argument §3.5 makes for Space-Saving's arenas, with the same benefit: with no index on the wire, no crafted payload can point one out of bounds or into a cycle. The entry count is `len(keys)` (derived, so not stored), and the heap's array order and its `is_full` state are recomputed.
+**The heap's index does not reach the wire.** `TopKHeap` is a capacity-bounded min-heap beside a digest-to-position index; `slots` and `positions` are rebuilt from the entries on load, so the payload carries the entries only — the same argument §3.5 makes for Space-Saving's arenas, with the same benefit: with no index on the wire, no crafted payload can point one out of bounds or into a cycle. The entry count is `len(keys)` (derived, so not stored), and the heap's array order and its `is_full` state are recomputed.
 
 **Metadata vs payload.** Everything the payload's structure depends on is configuration and lives in the metadata, in this canonical order (hash-spec group first, then structural params; Go must mirror it verbatim):
 

@@ -3,7 +3,6 @@
 //! Vector2D:
 //! Vector3D:
 //! CommonHeap:
-use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 use crate::LN_ONE_MINUS_U_TABLE;
@@ -50,7 +49,7 @@ impl ToF64 for i32 {
 /// boundaries so the schedule is one continuous geometric stream.
 ///
 /// Reference: <https://dl.acm.org/doi/10.1145/3341302.3342076>.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Nitro {
     /// Whether Nitro sampling is enabled.
     pub is_nitro_mode: bool,
@@ -63,26 +62,15 @@ pub struct Nitro {
     /// Integer part of the weight one admitted slot carries.
     pub delta: u64,
     idx: usize,
-    /// Unused; retained so the serialized field order is unchanged.
+    /// Unused except as the fourth value [`Nitro::get_ctx`] reports.
     mask: usize,
     /// splitmix64 state for the stochastic-rounding draw, advanced once per
     /// admitted slot whose `1/p` is not an integer.
-    ///
-    /// Serialized (with a default for payloads written before this field
-    /// existed), because it is part of what the sketch will do next: a decoded
-    /// sketch that restarted this stream from a fixed constant would emit a
-    /// different weight sequence than the uninterrupted run.
-    #[serde(default = "default_rounding_state")]
     rounding_state: u64,
 }
 
-/// Seed the rounding stream starts from when it is not seeded explicitly, and
-/// the value a payload written before `rounding_state` existed decodes to.
+/// Seed the rounding stream starts from when it is not seeded explicitly.
 const ROUNDING_SEED: u64 = 0x2545_F491_4F6C_DD1D;
-
-fn default_rounding_state() -> u64 {
-    ROUNDING_SEED
-}
 
 /// The complete sampling state of a [`Nitro`]: everything that decides which
 /// slots it admits next and at what weight.

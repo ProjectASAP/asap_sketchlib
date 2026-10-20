@@ -70,10 +70,6 @@ past `i32`, a non-zero offset on an empty store, counts that overflow the total,
 and scalars inconsistent with that total; `to_asapv1` enforces the same
 rules, so the format never emits bytes it would refuse to read back.
 
-Independently of ASAPv1, `DdSketch` is plain `Serialize`/`Deserialize` for use
-where it is nested in another type (`EhBucketSketch`); that form skips the four
-running scalars.
-
 ## Deltas
 
 ```rust

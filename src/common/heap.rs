@@ -9,7 +9,7 @@ use crate::common::input::HeapEntry;
 use crate::common::structures::heap::PREALLOCATED_SLOTS;
 use crate::common::{CommonHeap, DigestBuildHasher, RetainLargest};
 use crate::{DataInput, OwnedDataInput, hash64_seeded, hash64_seeded_owned};
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Serialize, de::DeserializeOwned};
 use smallvec::SmallVec;
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -66,41 +66,16 @@ type Slot = SmallVec<[usize; 2]>;
 
 type Index = HashMap<u64, Slot, DigestBuildHasher>;
 
-/// Serialized form. The index is derived from the heap, so it is rebuilt on
-/// load rather than carried.
-#[derive(Deserialize)]
-#[serde(bound = "")]
-struct TopKHeapState<C: HeapCount> {
-    heap: CommonHeap<HeapEntry<C>, RetainLargest>,
-    heap_size: usize,
-}
-
 /// Bounded min-heap over [`HeapEntry`] with key lookup, retaining the `k` largest
 /// counts.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(from = "TopKHeapState<C>", bound = "")]
+#[derive(Clone, Debug)]
 pub struct TopKHeap<C: HeapCount = i64> {
     heap: CommonHeap<HeapEntry<C>, RetainLargest>,
     /// Digest of each resident, parallel to the heap array, so a sift patches
     /// the index without re-hashing the keys it moves.
-    #[serde(skip)]
     slots: Vec<u64>,
-    #[serde(skip)]
     positions: Index,
     heap_size: usize,
-}
-
-impl<C: HeapCount> From<TopKHeapState<C>> for TopKHeap<C> {
-    fn from(state: TopKHeapState<C>) -> Self {
-        let mut heap = TopKHeap {
-            heap: state.heap,
-            slots: Vec::new(),
-            positions: Index::default(),
-            heap_size: state.heap_size,
-        };
-        heap.rebuild_index();
-        heap
-    }
 }
 
 impl<C: HeapCount> TopKHeap<C> {
@@ -265,24 +240,6 @@ impl<C: HeapCount> TopKHeap<C> {
                 ..
             } = self;
             heap.replace_root_with(item, &mut |i, j| swap_entry(slots, positions, i, j));
-        }
-    }
-
-    /// Rebuilds `slots` and `positions` from the heap array.
-    fn rebuild_index(&mut self) {
-        let Self {
-            heap,
-            slots,
-            positions,
-            ..
-        } = self;
-        slots.clear();
-        positions.clear();
-        slots.reserve(heap.len());
-        for (idx, item) in heap.iter().enumerate() {
-            let slot = hash64_seeded_owned(0, &item.key);
-            slots.push(slot);
-            positions.entry(slot).or_default().push(idx);
         }
     }
 
@@ -1009,76 +966,6 @@ mod index_invariants {
         assert_eq!(heap.len(), 8);
     }
 
-    /// The index is derived, so it is rebuilt on load rather than carried. A
-    /// decoded heap answers lookups and takes further updates.
-    #[test]
-    fn a_decoded_heap_rebuilds_its_index() {
-        let mut heap = TopKHeap::new(16);
-        let mut counts: HashMap<u64, i64> = HashMap::new();
-        for key in zipfish(5_000, 256, 0xd00d) {
-            let entry = counts.entry(key).or_default();
-            *entry += 1;
-            heap.update(&DataInput::U64(key), *entry);
-        }
-
-        let bytes = rmp_serde::to_vec(&heap).expect("serialize");
-        let mut decoded: TopKHeap = rmp_serde::from_slice(&bytes).expect("deserialize");
-
-        decoded.assert_index_consistent("decoded");
-        assert_eq!(decoded.len(), heap.len());
-        assert_eq!(decoded.capacity(), heap.capacity());
-        for item in heap.heap() {
-            assert!(
-                decoded.find_owned(&item.key).is_some(),
-                "decoded heap lost {:?}",
-                item.key
-            );
-        }
-
-        let resident = heap.heap()[0].key.clone();
-        decoded.update_owned(&resident, 1_000_000);
-        decoded.assert_index_consistent("decoded then updated");
-        let idx = decoded.find_owned(&resident).expect("still resident");
-        assert_eq!(decoded.heap()[idx].count, 1_000_000);
-    }
-
-    /// The shape every sketch uses after a decode: string keys reaching the
-    /// heap as [`DataInput`] through [`TopKHeap::update`], which hashes by a
-    /// different entry point from the one `rebuild_index` uses. A rebuilt index
-    /// the update path cannot read seats a resident key a second time.
-    #[test]
-    fn a_decoded_heap_takes_string_keyed_updates() {
-        let mut heap = TopKHeap::new(8);
-        for i in 0..8u64 {
-            heap.update(&DataInput::String(format!("flow-{i}")), i as i64 + 1);
-        }
-        assert_eq!(heap.len(), 8);
-
-        let bytes = rmp_serde::to_vec(&heap).expect("serialize");
-        let mut decoded: TopKHeap = rmp_serde::from_slice(&bytes).expect("deserialize");
-
-        for i in 0..8u64 {
-            let probe = DataInput::String(format!("flow-{i}"));
-            let idx = decoded
-                .find(&probe)
-                .unwrap_or_else(|| panic!("decoded heap cannot find flow-{i}"));
-            assert_eq!(decoded.heap()[idx].count, i as i64 + 1);
-        }
-
-        decoded.update(&DataInput::String("flow-7".to_owned()), 999);
-        assert_eq!(decoded.len(), 8, "an update seated a resident key again");
-        let seated = decoded
-            .heap()
-            .iter()
-            .filter(|item| item.key == OwnedDataInput::String("flow-7".to_owned()))
-            .count();
-        assert_eq!(seated, 1, "flow-7 is seated {seated} times");
-        let idx = decoded
-            .find(&DataInput::String("flow-7".to_owned()))
-            .expect("flow-7 is resident");
-        assert_eq!(decoded.heap()[idx].count, 999);
-        decoded.assert_index_consistent("decoded then updated by data input");
-    }
 }
 
 #[cfg(test)]

@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 
 use crate::DataInput;
 
@@ -9,7 +8,7 @@ const DEFAULT_SEED: u64 = GOLDEN_GAMMA;
 const MIX_MULTIPLIER_1: u64 = 0xBF58_476D_1CE4_E5B9;
 const MIX_MULTIPLIER_2: u64 = 0x94D0_49BB_1331_11EB;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 struct SampleEntry {
     priority: u64,
     value: f64,
@@ -21,7 +20,7 @@ impl SampleEntry {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct UniformSampling {
     sample_rate: f64,
     total_seen: u64,

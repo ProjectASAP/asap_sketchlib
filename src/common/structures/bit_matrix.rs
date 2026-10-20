@@ -9,7 +9,6 @@
 use super::matrix_storage::{
     MatrixFastHash, MatrixStorage, cols_mask, cols_mask_bits, fold_to_col,
 };
-use serde::{Deserialize, Serialize};
 
 const BITS_PER_WORD: usize = u64::BITS as usize;
 
@@ -22,42 +21,6 @@ pub struct BitMatrix {
     words_per_row: usize,
     mask_bits: u32,
     mask: u128,
-}
-
-// Only the stored fields travel; `words_per_row`, `mask_bits` and `mask` are
-// functions of `cols` and are recomputed on decode.
-#[derive(Serialize)]
-#[serde(rename = "BitMatrix")]
-struct BitMatrixSer<'a> {
-    words: &'a [u64],
-    rows: usize,
-    cols: usize,
-}
-
-#[derive(Deserialize)]
-#[serde(rename = "BitMatrix")]
-struct BitMatrixDe {
-    words: Vec<u64>,
-    rows: usize,
-    cols: usize,
-}
-
-impl Serialize for BitMatrix {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        BitMatrixSer {
-            words: &self.words,
-            rows: self.rows,
-            cols: self.cols,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for BitMatrix {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let input = BitMatrixDe::deserialize(deserializer)?;
-        Self::from_words(input.rows, input.cols, input.words).map_err(serde::de::Error::custom)
-    }
 }
 
 impl BitMatrix {
@@ -469,18 +432,17 @@ mod tests {
         let _ = BitMatrix::new(0, 64);
     }
 
-    /// Only `words`, `rows` and `cols` travel; the word stride and the fold
-    /// masks are recomputed, so a decoded matrix folds hashes exactly as the
-    /// original did.
+    /// `from_words` takes only `words`, `rows` and `cols`; the word stride and
+    /// the fold masks are recomputed, so a rebuilt matrix folds hashes exactly
+    /// as the original did.
     #[test]
-    fn a_round_trip_recomputes_the_derived_fields() {
+    fn a_rebuild_from_words_recomputes_the_derived_fields() {
         for (rows, cols) in GEOMETRIES {
             let mut m = BitMatrix::new(rows, cols);
             for row in 0..rows {
                 m.set(row, (row * 7) % cols);
             }
-            let bytes = rmp_serde::to_vec(&m).expect("encode");
-            let decoded: BitMatrix = rmp_serde::from_slice(&bytes).expect("decode");
+            let decoded = BitMatrix::from_words(rows, cols, m.words().to_vec()).expect("rebuild");
 
             assert_eq!((decoded.rows(), decoded.cols()), (rows, cols));
             for row in 0..rows {
@@ -538,45 +500,22 @@ mod tests {
         }
     }
 
-    #[derive(serde::Serialize)]
-    #[serde(rename = "BitMatrix")]
-    struct CraftedMatrix {
-        words: Vec<u64>,
-        rows: usize,
-        cols: usize,
-    }
-
     /// A payload whose word count disagrees with its dimensions fails at
     /// decode rather than later, as an index panic or a silent alias.
     #[test]
     fn a_payload_that_does_not_fit_its_dimensions_is_rejected() {
-        let short = CraftedMatrix {
-            words: vec![0; 2],
-            rows: 3,
-            cols: 100,
-        };
-        let bytes = rmp_serde::to_vec(&short).expect("encode");
-        let err = rmp_serde::from_slice::<BitMatrix>(&bytes).expect_err("short payload accepted");
+        let short = BitMatrix::from_words(3, 100, vec![0; 2]);
+        let err = short.expect_err("short payload accepted");
         assert!(
             err.to_string().contains("needs 6 words, got 2"),
             "unexpected error: {err}"
         );
 
-        let long = CraftedMatrix {
-            words: vec![0; 9],
-            rows: 3,
-            cols: 100,
-        };
-        let bytes = rmp_serde::to_vec(&long).expect("encode");
-        assert!(rmp_serde::from_slice::<BitMatrix>(&bytes).is_err());
+        let long = BitMatrix::from_words(3, 100, vec![0; 9]);
+        assert!(long.is_err());
 
-        let empty = CraftedMatrix {
-            words: vec![],
-            rows: 0,
-            cols: 100,
-        };
-        let bytes = rmp_serde::to_vec(&empty).expect("encode");
-        let err = rmp_serde::from_slice::<BitMatrix>(&bytes).expect_err("zero rows accepted");
+        let empty = BitMatrix::from_words(0, 100, vec![]);
+        let err = empty.expect_err("zero rows accepted");
         assert!(
             err.to_string().contains("needs both dimensions"),
             "unexpected error: {err}"
@@ -588,31 +527,12 @@ mod tests {
     /// right length for a grid of `usize::MAX` rows.
     #[test]
     fn dimensions_whose_word_count_overflows_are_rejected() {
-        let overflowing = CraftedMatrix {
-            words: vec![],
-            rows: usize::MAX,
-            cols: 128,
-        };
-        let bytes = rmp_serde::to_vec(&overflowing).expect("encode");
-        let err = rmp_serde::from_slice::<BitMatrix>(&bytes).expect_err("overflow accepted");
+        let overflowing = BitMatrix::from_words(usize::MAX, 128, vec![]);
+        let err = overflowing.expect_err("overflow accepted");
         assert!(
             err.to_string().contains("dimensions overflow"),
             "unexpected error: {err}"
         );
     }
 
-    /// The wire carries the three stored fields and nothing derived from them.
-    #[test]
-    fn the_wire_form_carries_only_the_stored_fields() {
-        let m = BitMatrix::new(3, 100);
-        let stored = CraftedMatrix {
-            words: vec![0; 6],
-            rows: 3,
-            cols: 100,
-        };
-        assert_eq!(
-            rmp_serde::to_vec(&m).expect("encode"),
-            rmp_serde::to_vec(&stored).expect("encode")
-        );
-    }
 }

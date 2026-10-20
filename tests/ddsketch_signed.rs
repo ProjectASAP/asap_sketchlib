@@ -76,7 +76,7 @@ fn zero_only_special_values_and_octo_flush() {
 }
 
 #[test]
-fn tiny_values_are_counted_in_zero_bucket_and_signed_serde_survives() {
+fn tiny_values_are_counted_in_zero_bucket_and_survive_asapv1() {
     let mut core = DdSketch::new(0.01);
     let tiny = f64::MIN_POSITIVE / 2.;
     for v in [-tiny, tiny, 0.] {
@@ -85,7 +85,7 @@ fn tiny_values_are_counted_in_zero_bucket_and_signed_serde_survives() {
     assert_eq!(core.get_count(), 3);
     assert_eq!(core.zero_count(), 3);
     core.try_add(&-3.).unwrap();
-    let decoded: DdSketch = rmp_serde::from_slice(&rmp_serde::to_vec(&core).unwrap()).unwrap();
+    let decoded = DdSketch::from_asapv1(&core.to_asapv1().unwrap()).unwrap();
     assert_eq!(decoded.get_count(), 4);
     assert_eq!(decoded.sum(), core.sum());
     assert_eq!(decoded.min(), core.min());

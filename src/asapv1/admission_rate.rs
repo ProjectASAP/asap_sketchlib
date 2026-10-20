@@ -3,8 +3,7 @@
 //! producer admitted each update. HLL, Count-Min, Count Sketch and DDSketch
 //! carry it, as the last key of the map, and only when `p < 1`.
 
-use serde::de::Error;
-use serde::{Deserialize, Deserializer};
+use serde::Deserializer;
 
 use super::wire_key::exact;
 
@@ -55,15 +54,6 @@ pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<f64>, D::Error> {
     exact(deserializer).map(Some)
-}
-
-/// Reads a sketch's rate from its derived serde form: inside `(0, 1]`.
-pub(crate) fn deserialize_rate<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<f64, D::Error> {
-    let p = f64::deserialize(deserializer)?;
-    to_key(p).map_err(D::Error::custom)?;
-    Ok(p)
 }
 
 #[cfg(test)]

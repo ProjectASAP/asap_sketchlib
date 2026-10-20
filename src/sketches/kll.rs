@@ -11,7 +11,6 @@
 //! - <https://www.amazon.science/publications/insert-optimized-implementation-of-streaming-data-sketches>
 
 use rand::{Rng, rng};
-use serde::{Deserialize, Serialize};
 
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
@@ -34,11 +33,10 @@ const DEFAULT_K: i32 = 200;
 
 /// Coin generates deterministic pseudo-random coin flips while amortizing
 /// calls to the RNG by consuming one bit at a time from a 64-bit buffer.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub(crate) struct Coin {
     state: u64,
     bit_cache: u64,
-    #[serde(default)]
     remaining_bits: u8,
 }
 
@@ -109,7 +107,7 @@ impl Coin {
 }
 
 /// A single (value, normalized rank) pair in a CDF table.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct CdfEntry {
     value: f64,
     quantile: f64,
@@ -848,15 +846,6 @@ impl<T: NumericalValue> Kll<T> {
         out
     }
 
-    // -- Serialization -------------------------------------------------------
-    //
-    // The ASAPv1 wire methods (`to_asapv1` / `from_asapv1`)
-    // live in the `wire` submodule, which authors the envelope + metadata +
-    // payload. The `serde::{Serialize, Deserialize}` impls below stay: they are
-    // the *nested* codec used when a `Kll` is embedded in a larger serde value
-    // (e.g. `HydraCounter::Kll`), which is a different concern from the
-    // standalone ASAPv1 envelope.
-
     fn ensure_levels_sorted(&mut self) {
         if self.num_levels <= 1 {
             return;
@@ -869,36 +858,6 @@ impl<T: NumericalValue> Kll<T> {
                 self.items[s..e].sort_unstable_by(T::total_cmp);
             }
         }
-    }
-}
-
-/// Wire format for serialization (only the used portion of the buffer).
-#[derive(Serialize, Deserialize)]
-struct KLLWire<T> {
-    items: Vec<T>,
-    levels: Vec<usize>,
-    k: usize,
-    m: usize,
-    num_levels: usize,
-    co: Coin,
-}
-
-impl<T: NumericalValue + Serialize> Serialize for Kll<T> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let used_start = self.levels[0];
-        let used_end = self.levels[self.num_levels];
-        let wire = KLLWire {
-            items: self.items[used_start..used_end].to_vec(),
-            levels: self.levels[..=self.num_levels]
-                .iter()
-                .map(|&l| l - used_start)
-                .collect(),
-            k: self.k,
-            m: self.m,
-            num_levels: self.num_levels,
-            co: self.coin.clone(),
-        };
-        wire.serialize(serializer)
     }
 }
 
@@ -923,83 +882,6 @@ impl Kll<f64> {
             self.push_value(value);
         }
         Ok(())
-    }
-}
-
-impl<'de, T: NumericalValue + Deserialize<'de>> Deserialize<'de> for Kll<T> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use serde::de::Error as _;
-        let wire = KLLWire::<T>::deserialize(deserializer)?;
-
-        // Fail closed on crafted bytes. This nested serde path is reachable with
-        // untrusted input via `HydraCounter::Kll` (`Hydra::from_asapv1`)
-        // and direct `rmp_serde::from_slice::<Kll<_>>`, so it must guard the same
-        // way the ASAPv1 decoder does: bound `k`/`m` to the range the constructor
-        // clamps to (else `compute_max_capacity` / `Vec::with_capacity` blow up),
-        // and validate the level layout (else the buffer math below underflows or
-        // indexes out of bounds, and `count()` overflows on a later query).
-        if wire.m < 2 || wire.m > wire.k || wire.k > MAX_K {
-            return Err(D::Error::custom(format!(
-                "KLL: k={}, m={} outside valid range (2 <= m <= k <= {MAX_K})",
-                wire.k, wire.m
-            )));
-        }
-        if wire.num_levels == 0
-            || wire.num_levels > MAX_LEVELS
-            || wire.levels.len() != wire.num_levels + 1
-            || wire.levels.first() != Some(&0)
-            || wire.levels.windows(2).any(|w| w[0] > w[1])
-            || wire.levels.last() != Some(&wire.items.len())
-        {
-            return Err(D::Error::custom("KLL: inconsistent level layout"));
-        }
-        let sizes: Vec<usize> = wire.levels.windows(2).map(|w| w[1] - w[0]).collect();
-        if checked_weighted_count(&sizes).is_none() {
-            return Err(D::Error::custom(
-                "KLL: level layout overflows weighted count",
-            ));
-        }
-
-        let max_cap = compute_max_capacity(wire.k, wire.m);
-        let used_len = wire.items.len();
-        if used_len > max_cap {
-            return Err(D::Error::custom(format!(
-                "KLL: {used_len} items exceed max_capacity {max_cap}"
-            )));
-        }
-        let offset = max_cap - used_len;
-
-        let mut items = vec![T::default(); max_cap].into_boxed_slice();
-        items[offset..offset + used_len].copy_from_slice(&wire.items);
-
-        let mut levels = vec![0usize; MAX_LEVELS + 1].into_boxed_slice();
-        for (i, &l) in wire.levels.iter().enumerate() {
-            levels[i] = l + offset;
-        }
-
-        let mut sketch = Kll {
-            items,
-            levels,
-            k: wire.k,
-            m: wire.m,
-            num_levels: wire.num_levels,
-            max_capacity: max_cap,
-            coin: wire.co,
-            // Wire format does not carry the explicit-seed flag — a
-            // round-tripped sketch keeps its current coin state but
-            // would re-randomize from time on a subsequent clear().
-            // Callers that need clear()-determinism after a deserialize
-            // should rebuild via with_seed.
-            seed: None,
-            capacity_cache: [0; CAPACITY_CACHE_LEN],
-            top_height: 0,
-            level0_capacity: 0,
-            merge_buf: Vec::with_capacity(wire.k),
-            cdf_cache: None,
-        };
-        sketch.rebuild_capacity_cache();
-        sketch.ensure_levels_sorted();
-        Ok(sketch)
     }
 }
 
@@ -1150,26 +1032,6 @@ mod tests {
         assert!(
             after > before + 50.0,
             "median {before} barely moved after 10k huge inserts -> stale cache served"
-        );
-    }
-
-    // Crafted nested-serde bytes (the `HydraCounter::Kll` path, reachable with
-    // untrusted input) with an out-of-range `k` must fail closed, not overflow
-    // `compute_max_capacity` / drive a huge allocation.
-    #[test]
-    fn kllwire_serde_rejects_crafted_dimensions() {
-        let wire = KLLWire::<f64> {
-            items: vec![],
-            levels: vec![0, 0],
-            k: usize::MAX,
-            m: 8,
-            num_levels: 1,
-            co: Coin::from_seed(1),
-        };
-        let bytes = rmp_serde::to_vec(&wire).expect("encode crafted wire");
-        assert!(
-            rmp_serde::from_slice::<Kll<f64>>(&bytes).is_err(),
-            "an out-of-range k must be rejected by the nested serde decoder"
         );
     }
 

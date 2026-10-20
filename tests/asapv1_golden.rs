@@ -2,7 +2,9 @@
 //!
 //! Each fixture is built from a fixed, KNOWN raw sketch state (register bytes /
 //! matrix values set directly, never hashed) and asserted to serialize to the
-//! exact bytes in `asapv1_golden/*.hex`. That directory is a git submodule of
+//! exact bytes in `asapv1_golden/*.hex`. A state the public API cannot build is
+//! checked here by decoding to it, and its encode in the sketch's own
+//! `wire.rs`. That directory is a git submodule of
 //! <https://github.com/ProjectASAP/sketchlib-golden-bytes>, the fixtures every ASAPv1 implementation
 //! must reproduce.
 //!
@@ -1028,39 +1030,37 @@ fn kll_dynamic_i64_k200_matches_golden() {
 }
 
 // ---------------------------------------------------------------------------
-// DDSketch and its delta: set the stores and scalars directly -> serialize ==
-// golden, golden round-trips, and the delta merged into the signed state gives
-// the expected stores and scalars.
+// DDSketch and its delta: golden decodes to the known stores and scalars and
+// round-trips, and the delta merged into the signed state gives the expected
+// stores and scalars. Encoding the known state is checked in
+// `src/sketches/ddsketch/wire.rs`, which can build it.
 // ---------------------------------------------------------------------------
 
 const DD_ALPHA: f64 = 0.01;
 
-/// An α=0.01 DDSketch with its stores, zero count and scalars set directly,
-/// built through `DdSketch`'s serde form.
-fn dd_state(
+/// Decodes `golden`, checks the decoded stores, zero count and scalars, and
+/// re-serializes it.
+fn assert_dd_golden(
+    golden: &str,
     positive: (&[u64], i32),
     negative: (&[u64], i32),
     zero_count: u64,
-    scalars: (f64, f64, f64),
-) -> DdSketch {
-    let (sum, min, max) = scalars;
-    let store = |(counts, offset): (&[u64], i32)| ((counts.to_vec(),), offset);
-    let state = (
-        DD_ALPHA,
-        store(positive),
-        sum,
-        min,
-        max,
-        store(negative),
-        zero_count,
-    );
-    rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state")
-}
-
-fn assert_dd_golden(golden: &str, sketch: &DdSketch) {
+    (sum, min, max): (f64, f64, f64),
+) {
     let want = decode_hex(golden);
-    assert_eq!(sketch.to_asapv1().expect("serialize"), want);
     let decoded = DdSketch::from_asapv1(&want).expect("decode");
+    assert_eq!(
+        (decoded.positive_store_counts(), decoded.positive_store_offset()),
+        positive
+    );
+    assert_eq!(
+        (decoded.negative_store_counts(), decoded.negative_store_offset()),
+        negative
+    );
+    assert_eq!(decoded.zero_count(), zero_count);
+    assert_eq!(decoded.sum().to_bits(), sum.to_bits());
+    assert_eq!(decoded.min().map(f64::to_bits), Some(min.to_bits()));
+    assert_eq!(decoded.max().map(f64::to_bits), Some(max.to_bits()));
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
 
@@ -1076,20 +1076,21 @@ fn dd_buckets(counts: &[u64], offset: i32) -> Vec<(i32, u64)> {
 fn ddsketch_positive_a001_matches_golden() {
     let counts = [1, 0, 127, 128, 300, 65536, 4294967296];
     let scalars = (2181071000.0, 0.453125, 0.5078125);
-    let sketch = dd_state((&counts, -40), (&[], 0), 0, scalars);
-    assert_dd_golden(GOLDEN_DD_POSITIVE, &sketch);
+    assert_dd_golden(GOLDEN_DD_POSITIVE, (&counts, -40), (&[], 0), 0, scalars);
 }
 
 #[test]
 fn ddsketch_signed_a001_matches_golden() {
     let scalars = (2523.90625, -0.016, 515.0);
-    let sketch = dd_state((&[3, 0, 2], 310), (&[5, 1], -208), 7, scalars);
-    assert_dd_golden(GOLDEN_DD_SIGNED, &sketch);
+    assert_dd_golden(GOLDEN_DD_SIGNED, (&[3, 0, 2], 310), (&[5, 1], -208), 7, scalars);
 }
 
 #[test]
 fn ddsketch_empty_a001_matches_golden() {
-    assert_dd_golden(GOLDEN_DD_EMPTY, &DdSketch::new(DD_ALPHA));
+    let want = decode_hex(GOLDEN_DD_EMPTY);
+    assert_eq!(DdSketch::new(DD_ALPHA).to_asapv1().expect("serialize"), want);
+    let decoded = DdSketch::from_asapv1(&want).expect("decode");
+    assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
 
 #[test]
@@ -1470,13 +1471,11 @@ fn univmon_empty_l3_2x4_h5_matches_golden() {
 }
 
 // ---------------------------------------------------------------------------
-// CountSketchWithL2Norm: counts, l2 accumulators and seed index set through the sketch's
-// serde form -> serialize == golden, round-trips.
+// CountSketchWithL2Norm: golden decodes to the known counts and round-trips.
+// Encoding the known state is checked in `src/sketches/countsketch_l2_norm/wire.rs`.
 // ---------------------------------------------------------------------------
 
 const L2HH_COUNTS: [[i64; 4]; 2] = [[127, 128, 65535, -32768], [-32, -33, -2147483648, i64::MIN]];
-/// Set independently of the counts.
-const L2HH_L2: [i64; 2] = [65536, i64::MAX];
 const L2HH_SEED_INDEX: usize = 7;
 
 #[test]
@@ -1484,12 +1483,6 @@ fn count_l2hh_2x4_seed7_matches_golden() {
     let want = decode_hex(GOLDEN_L2HH);
 
     let flat: Vec<i64> = L2HH_COUNTS.iter().flatten().copied().collect();
-    let state = ((&flat, 2, 4), (L2HH_L2,), 2, 4, L2HH_SEED_INDEX);
-    let sketch: CountSketchWithL2Norm =
-        rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state");
-    let got = sketch.to_asapv1().expect("serialize");
-    assert_eq!(got, want, "CountSketchWithL2Norm bytes diverge from golden");
-
     let decoded: CountSketchWithL2Norm = CountSketchWithL2Norm::from_asapv1(&want).expect("decode");
     assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
     assert_eq!((decoded.rows(), decoded.cols()), (2, 4));
@@ -1749,23 +1742,18 @@ fn kmv_k8_matches_golden() {
 }
 
 // ---------------------------------------------------------------------------
-// Bloom: the bit grid set through the filter's serde form -> serialize ==
-// golden, round-trips. Column `c` of row `r` is bit `c % 64` of word
+// Bloom: golden decodes to the known bit grid and round-trips. Encoding the
+// known grid is checked in `src/sketches/bloom/wire.rs`. Column `c` of row `r` is bit `c % 64` of word
 // `r * ceil(cols / 64) + c / 64`.
 // ---------------------------------------------------------------------------
 
 fn assert_bloom_golden<Mode: asap_sketchlib::BloomMode>(
     golden: &str,
-    (rows, cols, mode): (usize, usize, &str),
+    (rows, cols): (usize, usize),
     words: &[u64],
     inserted: u64,
 ) {
     let want = decode_hex(golden);
-    let state = ((words, rows, cols), inserted, mode);
-    let sketch: Bloom<Mode> =
-        rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state");
-    assert_eq!(sketch.to_asapv1().expect("serialize"), want);
-
     let decoded = Bloom::<Mode>::from_asapv1(&want).expect("decode");
     assert_eq!((decoded.rows(), decoded.cols()), (rows, cols));
     assert_eq!(decoded.inserted(), inserted);
@@ -1782,36 +1770,28 @@ fn assert_bloom_golden<Mode: asap_sketchlib::BloomMode>(
 #[test]
 fn bloom_regular_3x128_matches_golden() {
     let words = [1, 1 << 63, 0, 0xff, u64::MAX, 0x10000];
-    assert_bloom_golden::<RegularPath>(GOLDEN_BLOOM_REGULAR, (3, 128, "regular"), &words, 300);
+    assert_bloom_golden::<RegularPath>(GOLDEN_BLOOM_REGULAR, (3, 128), &words, 300);
 }
 
 #[test]
 fn bloom_fast_5x32_matches_golden() {
     let words = [1, 0x8000_0000, 0, 0xffff_ffff, 0x10000];
-    assert_bloom_golden::<FastPath>(GOLDEN_BLOOM_FAST, (5, 32, "fast"), &words, 9);
+    assert_bloom_golden::<FastPath>(GOLDEN_BLOOM_FAST, (5, 32), &words, 9);
 }
 
 // ---------------------------------------------------------------------------
-// Space-Saving: the triples set through the summary's serde form, seated out
-// of emitted order -> serialize == golden, round-trips.
+// Space-Saving: golden decodes to the known triples and round-trips. Encoding
+// the known triples is checked in `src/sketches/space_saving/wire.rs`.
 // ---------------------------------------------------------------------------
 
 fn assert_space_saving_golden(
     golden: &str,
     capacity: usize,
     total: u64,
-    discarded_max: u64,
     emitted: &[(OwnedDataInput, u64, u64)],
     min_count: u64,
 ) {
     let want = decode_hex(golden);
-    let mut seated = emitted.to_vec();
-    seated.reverse();
-    let state = (capacity, total, discarded_max, seated);
-    let sketch: SpaceSaving =
-        rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state");
-    assert_eq!(sketch.to_asapv1().expect("serialize"), want);
-
     let decoded: SpaceSaving = SpaceSaving::from_asapv1(&want).expect("decode");
     assert_eq!((decoded.capacity(), decoded.total()), (capacity, total));
     assert_eq!(decoded.min_count(), min_count);
@@ -1835,7 +1815,7 @@ fn space_saving_i64_c8_matches_golden() {
         (-129, 5, 0),
     ]
     .map(|(key, count, error)| (OwnedDataInput::I64(key), count, error));
-    assert_space_saving_golden(GOLDEN_SPACE_SAVING_I64, 8, 70030, 4, &emitted, 4);
+    assert_space_saving_golden(GOLDEN_SPACE_SAVING_I64, 8, 70030, &emitted, 4);
 }
 
 /// A full summary: `min_count` is its smallest count. `b""` precedes `b"ab"`.
@@ -1843,12 +1823,12 @@ fn space_saving_i64_c8_matches_golden() {
 fn space_saving_bytes_c3_matches_golden() {
     let emitted = [(&b"\xff\x00"[..], 9, 0), (b"", 4, 1), (b"ab", 4, 0)]
         .map(|(key, count, error)| (OwnedDataInput::Bytes(key.to_vec()), count, error));
-    assert_space_saving_golden(GOLDEN_SPACE_SAVING_BYTES, 3, 20, 3, &emitted, 4);
+    assert_space_saving_golden(GOLDEN_SPACE_SAVING_BYTES, 3, 20, &emitted, 4);
 }
 
 // ---------------------------------------------------------------------------
-// UniformSampling: entries and running scalars set through the sampler's serde
-// form -> serialize == golden, round-trips.
+// UniformSampling: golden decodes to the known samples and round-trips.
+// Encoding the known state is checked in `src/sketches/uniform/wire.rs`.
 // ---------------------------------------------------------------------------
 
 /// The priority-3 tie orders `-0.0` before `0.0`; a `NaN` sample is legal.
@@ -1862,11 +1842,6 @@ fn uniform_sampling_r0p25_matches_golden() {
         (1 << 63, 1e300),
         (u64::MAX, f64::NAN),
     ];
-    let state = (0.25f64, 20u64, 0x0123_4567_89ab_cdefu64, entries);
-    let sketch: UniformSampling =
-        rmp_serde::from_slice(&rmp_serde::to_vec(&state).unwrap()).expect("valid state");
-    assert_eq!(sketch.to_asapv1().expect("serialize"), want);
-
     let decoded = UniformSampling::from_asapv1(&want).expect("decode");
     assert_eq!((decoded.sample_rate(), decoded.total_seen()), (0.25, 20));
     let bits: Vec<u64> = decoded.samples().iter().map(|v| v.to_bits()).collect();

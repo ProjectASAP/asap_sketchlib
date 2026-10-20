@@ -56,8 +56,6 @@ hash-spec group. The payload is `[priorities, values, total_seen, rng_state]`,
 emitted in ascending priority. `rng_state` is the SplitMix64 word the next
 priority is drawn from, so a decoded sampler continues the same draw sequence.
 
-Also derives serde for the internal Rust-only codec.
-
 ## Examples
 
 ```rust

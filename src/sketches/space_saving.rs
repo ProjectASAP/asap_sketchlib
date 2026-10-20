@@ -28,7 +28,6 @@
 
 use crate::common::DigestBuildHasher;
 use crate::{DataInput, DefaultXxHasher, OwnedDataInput, SketchHasher};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smallvec::SmallVec;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -555,17 +554,8 @@ fn key_order(key: &OwnedDataInput) -> (u8, u128, &[u8]) {
     }
 }
 
-/// Serialized form: the summary as the triples it answers with, since the
-/// bucket and counter lists and the key index all follow from them.
-#[derive(Serialize)]
-struct SpaceSavingRef<'a> {
-    capacity: usize,
-    total: u64,
-    discarded_max: u64,
-    entries: Vec<(&'a OwnedDataInput, u64, u64)>,
-}
-
-#[derive(Deserialize)]
+/// A summary as the triples it answers with; the bucket and counter lists and
+/// the key index all follow from them.
 struct SpaceSavingState {
     capacity: usize,
     total: u64,
@@ -573,26 +563,20 @@ struct SpaceSavingState {
     entries: Vec<(OwnedDataInput, u64, u64)>,
 }
 
-impl<H: SketchHasher> Serialize for SpaceSaving<H> {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        SpaceSavingRef {
+#[cfg(test)]
+impl<H: SketchHasher> SpaceSaving<H> {
+    /// Rebuilds a copy from the triples it answers with, as a decode does.
+    fn rebuilt(&self) -> Result<Self, String> {
+        Self::rebuild(SpaceSavingState {
             capacity: self.capacity,
             total: self.total,
             discarded_max: self.discarded_max,
             entries: self
                 .monitored
                 .iter()
-                .map(|c| (&c.key, self.buckets[c.bucket].count, c.error))
+                .map(|c| (c.key.clone(), self.buckets[c.bucket].count, c.error))
                 .collect(),
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de, H: SketchHasher> Deserialize<'de> for SpaceSaving<H> {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let state = SpaceSavingState::deserialize(deserializer)?;
-        Self::rebuild(state).map_err(serde::de::Error::custom)
+        })
     }
 }
 
@@ -1179,10 +1163,10 @@ mod tests {
     }
 
     /// The ceiling a merge leaves behind lives only in `discarded_max`; an under-full
-    /// summary reads it from no counter, so a serde round trip that dropped it
+    /// summary reads it from no counter, so a rebuild that dropped it
     /// would answer below the truth.
     #[test]
-    fn a_serde_round_trip_carries_a_ceiling_no_counter_holds() {
+    fn a_rebuild_carries_a_ceiling_no_counter_holds() {
         let mut left: SpaceSaving = SpaceSaving::with_capacity(33);
         let mut right: SpaceSaving = SpaceSaving::with_capacity(1);
         for _ in 0..10 {
@@ -1195,8 +1179,7 @@ mod tests {
         assert!(left.len() < left.capacity(), "the merge left room to spare");
         assert_eq!(left.min_count(), 30);
 
-        let bytes = rmp_serde::to_vec(&left).expect("serialize");
-        let decoded: SpaceSaving = rmp_serde::from_slice(&bytes).expect("deserialize");
+        let decoded: SpaceSaving = left.rebuilt().expect("rebuild");
 
         decoded.validate().expect("decoded summary");
         assert_eq!(
@@ -1496,8 +1479,7 @@ mod tests {
     #[test]
     fn a_decoded_summary_rebuilds_both_link_directions() {
         let (summary, truth) = fuzzed(48, 200, 3_000, 77);
-        let bytes = rmp_serde::to_vec(&summary).expect("serialize");
-        let decoded: SpaceSaving = rmp_serde::from_slice(&bytes).expect("deserialize");
+        let decoded: SpaceSaving = summary.rebuilt().expect("rebuild");
 
         decoded.validate().expect("decoded summary");
         assert_eq!(decoded.len(), summary.len());
@@ -1709,17 +1691,16 @@ mod tests {
         assert_eq!(left.estimate(&DataInput::Bytes(&[0x02])), 7);
     }
 
-    /// A serde round trip carries the raw bytes, and the decoded summary
+    /// A rebuild carries the raw bytes, and the rebuilt summary
     /// answers the same `DataInput::Bytes` the original did — which it can only
     /// do if the rebuild hashed the stored key to the digest a query reaches.
     #[test]
-    fn a_serde_round_trip_keeps_a_byte_key() {
+    fn a_rebuild_keeps_a_byte_key() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(4);
         summary.update_weighted(&DataInput::Bytes(RAW), 9);
         summary.update_weighted(&DataInput::Bytes(&[0x00; 5]), 4);
 
-        let bytes = rmp_serde::to_vec(&summary).expect("serialize");
-        let decoded: SpaceSaving = rmp_serde::from_slice(&bytes).expect("deserialize");
+        let decoded: SpaceSaving = summary.rebuilt().expect("rebuild");
 
         decoded.validate().expect("decoded summary");
         assert_eq!(bytes_of(&decoded), bytes_of(&summary));
@@ -1879,8 +1860,7 @@ mod collisions {
             summary.update_weighted(&DataInput::I64(key), weight);
         }
 
-        let bytes = rmp_serde::to_vec(&summary).expect("serialize");
-        let decoded: Colliding = rmp_serde::from_slice(&bytes).expect("deserialize");
+        let decoded: Colliding = summary.rebuilt().expect("rebuild");
 
         decoded.validate().expect("decoded summary");
         assert_eq!(decoded.len(), 3);

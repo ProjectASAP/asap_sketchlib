@@ -75,9 +75,7 @@ A grid mixing counter variants, UnivMon cells mixing key variants, a cell whose
 geometry differs from the prototype's, a `prototype` holding data, a
 declared grid the storage does not match, a row count past `MATRIX_MAX_ROWS`,
 and a payload length that disagrees with the declared geometry are all rejected
-on both sides. `Hydra` also derives
-serde, which is the nested codec used when a Hydra is embedded in a larger
-serde value.
+on both sides.
 
 ## Examples
 

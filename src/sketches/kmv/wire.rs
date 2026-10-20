@@ -24,7 +24,7 @@
 //! Retained values are the 64-bit digests `hash64_seeded` returns and travel at
 //! that width, neither widened nor narrowed.
 
-use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError, from_slice};
+use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
@@ -78,40 +78,13 @@ struct KmvPayload {
     hashes: Vec<u64>,
 }
 
-/// The serde shape of [`CommonHeap`]'s own fields.
-#[derive(Serialize)]
-struct HeapSeed {
-    data: Vec<u64>,
-    size: usize,
-    order: RetainSmallest,
-}
-
-/// Rebuilds the retained heap through [`CommonHeap`]'s serde form, so the
-/// backing vector is sized from the payload and `k` sizes no allocation. A
-/// descending run already satisfies the max-heap invariant, so the hashes seat
-/// as they are.
-fn rebuild_heap(
-    k: usize,
-    ascending: Vec<u64>,
-) -> Result<CommonHeap<u64, RetainSmallest>, RmpDecodeError> {
-    let len = ascending.len();
+/// Seats the retained hashes as the heap, with the backing vector sized from
+/// the payload so `k` sizes no allocation. A descending run already satisfies
+/// the max-heap invariant, so the hashes seat as they are.
+fn rebuild_heap(k: usize, ascending: Vec<u64>) -> CommonHeap<u64, RetainSmallest> {
     let mut data = ascending;
     data.reverse();
-    let seed = rmp_serde::to_vec_named(&HeapSeed {
-        data,
-        size: k,
-        order: RetainSmallest,
-    })
-    .map_err(|err| RmpDecodeError::Uncategorized(err.to_string()))?;
-    let heap: CommonHeap<u64, RetainSmallest> = from_slice(&seed)?;
-    if heap.len() != len || heap.capacity() != k {
-        return Err(RmpDecodeError::Uncategorized(format!(
-            "KMV heap rebuild: {} of {len} hashes under a bound of {} against k {k}",
-            heap.len(),
-            heap.capacity()
-        )));
-    }
-    Ok(heap)
+    CommonHeap::from_heap_vec(data, k, RetainSmallest)
 }
 
 // Wire serialization for KMV. `wire` is a descendant of the sketch module, so
@@ -202,7 +175,7 @@ impl<H: SketchHasher + HashProfile> Kmv<H> {
         }
         Ok(Kmv {
             k,
-            retained_hashes: rebuild_heap(k, decoded.hashes)?,
+            retained_hashes: rebuild_heap(k, decoded.hashes),
             _hasher: PhantomData,
         })
     }
@@ -220,6 +193,7 @@ impl<H: SketchHasher + HashProfile> Kmv<H> {
 mod tests {
     use super::*;
     use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, OwnedDataInput};
+    use rmp_serde::from_slice;
 
     fn populated(k: usize, keys: u64) -> Kmv {
         let mut sketch: Kmv = Kmv::new(k);

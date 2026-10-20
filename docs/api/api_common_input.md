@@ -61,8 +61,8 @@ fn merge(&mut self, other: &HydraCounter) -> Result<(), String>
 
 ## Serialization
 
-- `DataInput`, `OwnedDataInput`, `HeapEntry`, and `HydraCounter` derive serde traits.
-- `HydraQuery` is query-only and does not derive serde in current code.
+None of these types implements serde's `Serialize` / `Deserialize`; a sketch
+holding them serializes through its own `to_asapv1`.
 
 ## Variants (Core)
 

@@ -481,4 +481,27 @@ mod tests {
             "an over-full sampler must not serialize"
         );
     }
+
+    /// Known entries and running scalars serialize to the `asapv1_golden/`
+    /// bytes.
+    #[test]
+    fn known_state_matches_golden() {
+        use crate::asapv1::envelope::hex;
+
+        let sampler = UniformSampling {
+            sample_rate: 0.25,
+            total_seen: 20,
+            rng_state: 0x0123_4567_89ab_cdef,
+            entries: [
+                (3u64, -0.0f64),
+                (3, 0.0),
+                (1 << 63, 1e300),
+                (u64::MAX, f64::NAN),
+            ]
+            .map(|(priority, value)| SampleEntry::new(priority, value))
+            .to_vec(),
+        };
+        let golden = hex(include_str!("../../../asapv1_golden/uniform_sampling_r0p25.hex"));
+        assert_eq!(sampler.to_asapv1().unwrap(), golden);
+    }
 }

@@ -701,4 +701,24 @@ mod tests {
             right.to_asapv1().expect("serialize")
         );
     }
+
+    /// Known counts, L2 accumulators and seed index serialize to the
+    /// `asapv1_golden/` bytes.
+    #[test]
+    fn known_state_matches_golden() {
+        use crate::asapv1::envelope::hex;
+        use std::marker::PhantomData;
+
+        const COUNTS: [[i64; 4]; 2] = [[127, 128, 65535, -32768], [-32, -33, -2147483648, i64::MIN]];
+        let sketch: CountSketchWithL2Norm = CountSketchWithL2Norm {
+            counts: Vector2D::from_fn(2, 4, |r, c| COUNTS[r][c]),
+            row_l2_squared: Vector1D::from_vec(vec![65536, i64::MAX]),
+            rows: 2,
+            cols: 4,
+            seed_index: 7,
+            _hasher: PhantomData,
+        };
+        let golden = hex(include_str!("../../../asapv1_golden/count_l2hh_2x4_seed7.hex"));
+        assert_eq!(sketch.to_asapv1().unwrap(), golden);
+    }
 }

@@ -83,7 +83,7 @@ and `0x01 0x03` (HIP) are rejected, and `Kll` is compact, so `0x06 0x01`
 (dynamic) is rejected. The dispatch is the same in every build: a decoder built
 without `experimental` rejects `0x0d 0x00` with an error naming the variant and
 the feature, and its encoder can never emit it.
-An unrecognized kind_id is rejected. `EhBucketSketch` also derives serde.
+An unrecognized kind_id is rejected.
 
 ## Examples
 

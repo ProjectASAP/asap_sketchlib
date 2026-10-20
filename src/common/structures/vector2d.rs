@@ -1,4 +1,3 @@
-use serde::{Deserialize, Serialize};
 use std::ops::{Index, IndexMut};
 
 use crate::{
@@ -6,7 +5,7 @@ use crate::{
     compute_median_inline_f64,
 };
 /// Shared thin wrapper over `Vec<T>` tailored for sketches.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Vector2D<T> {
     data: Vec<T>,
     rows: usize,
@@ -14,39 +13,6 @@ pub struct Vector2D<T> {
     mask_bits: u32,
     mask: u128,
     nitro: Nitro,
-}
-
-// Helper type for deserialization: we only read stored fields and recompute
-// derived ones (mask_bits, mask) from rows/cols.
-#[derive(Deserialize)]
-struct Vector2DDeserialize<T> {
-    data: Vec<T>,
-    rows: usize,
-    cols: usize,
-    #[serde(default)]
-    nitro: Nitro,
-}
-
-impl<'de, T> Deserialize<'de> for Vector2D<T>
-where
-    T: Deserialize<'de>,
-{
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let input = Vector2DDeserialize::deserialize(deserializer)?;
-        let mask_bits = super::matrix_storage::cols_mask_bits(input.cols);
-        let mask = super::matrix_storage::cols_mask(input.cols);
-        Ok(Self {
-            data: input.data,
-            rows: input.rows,
-            cols: input.cols,
-            mask_bits,
-            mask,
-            nitro: input.nitro,
-        })
-    }
 }
 
 impl<T> Vector2D<T> {

@@ -19,7 +19,6 @@ use crate::{
     BitMatrix, DataInput, DefaultXxHasher, FastPath, FastPathHasher, MATRIX_MAX_ROWS,
     MatrixStorage, RegularPath, SketchHasher,
 };
-use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 mod wire;
@@ -65,58 +64,6 @@ pub struct Bloom<Mode = RegularPath, H: SketchHasher = DefaultXxHasher> {
     inserted: u64,
     _mode: PhantomData<Mode>,
     _hasher: PhantomData<H>,
-}
-
-#[derive(Serialize)]
-#[serde(rename = "Bloom")]
-struct BloomSer<'a> {
-    bits: &'a BitMatrix,
-    inserted: u64,
-    mode: &'static str,
-}
-
-#[derive(Deserialize)]
-#[serde(rename = "Bloom")]
-struct BloomDe {
-    bits: BitMatrix,
-    inserted: u64,
-    mode: String,
-}
-
-impl<Mode: BloomMode, H: SketchHasher> Serialize for Bloom<Mode, H> {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        BloomSer {
-            bits: &self.bits,
-            inserted: self.inserted,
-            mode: Mode::MODE_TAG,
-        }
-        .serialize(serializer)
-    }
-}
-
-impl<'de, Mode: BloomMode, H: SketchHasher> Deserialize<'de> for Bloom<Mode, H> {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let input = BloomDe::deserialize(deserializer)?;
-        if input.mode != Mode::MODE_TAG {
-            return Err(serde::de::Error::custom(format!(
-                "bloom filter was built on the {} hash path, cannot decode as {}",
-                input.mode,
-                Mode::MODE_TAG
-            )));
-        }
-        if input.bits.rows() > BLOOM_MAX_SLICES {
-            return Err(serde::de::Error::custom(format!(
-                "bloom filter has {} slices, past BLOOM_MAX_SLICES {BLOOM_MAX_SLICES}",
-                input.bits.rows()
-            )));
-        }
-        Ok(Self {
-            bits: input.bits,
-            inserted: input.inserted,
-            _mode: PhantomData,
-            _hasher: PhantomData,
-        })
-    }
 }
 
 impl<Mode, H: SketchHasher> Default for Bloom<Mode, H> {
@@ -339,7 +286,6 @@ mod tests {
     use super::*;
 
     const WIDE_COLS: usize = 1 << 10;
-    const NARROW_COLS: usize = 16;
 
     fn keys(count: u64) -> Vec<DataInput<'static>> {
         (0..count).map(DataInput::U64).collect()
@@ -529,25 +475,6 @@ mod tests {
             BLOOM_MAX_SLICES,
             "the boundary geometry built {} rows",
             filter.rows()
-        );
-    }
-
-    /// The plain serde form carries the grid dimensions, so it is a second door
-    /// into a filter construction would refuse. It fails closed on the same
-    /// bound rather than panicking inside a decoder.
-    #[test]
-    fn a_serde_payload_past_the_slice_cap_is_rejected() {
-        let bytes = rmp_serde::to_vec(&BloomSer {
-            bits: &BitMatrix::new(BLOOM_MAX_SLICES + 1, NARROW_COLS),
-            inserted: 0,
-            mode: <RegularPath as BloomMode>::MODE_TAG,
-        })
-        .expect("encode");
-        let err = rmp_serde::from_slice::<Bloom<RegularPath>>(&bytes)
-            .expect_err("a filter past the slice cap must not decode");
-        assert!(
-            err.to_string().contains("BLOOM_MAX_SLICES"),
-            "the slice cap must be named in the rejection, got {err}"
         );
     }
 

@@ -1,8 +1,6 @@
 //! A fixed integer matrix.
 //! Size fixed at compile time and heap-backed via Box.
 
-use serde::{Deserialize, Serialize};
-
 /// Quick-start row count for fixed matrix aliases.
 pub const QUICKSTART_ROWS: usize = 5;
 /// Quick-start column count for fixed matrix aliases.
@@ -23,9 +21,7 @@ pub const DEFAULT_COLS: usize = 4096;
 /// an inconsistent hand-written impl silently produces wrong estimates.
 /// [`impl_hll_registers!`](crate::impl_hll_registers) enforces them at
 /// compile time.
-pub trait HllRegisterStorage:
-    Clone + std::fmt::Debug + Default + Serialize + for<'de> Deserialize<'de>
-{
+pub trait HllRegisterStorage: Clone + std::fmt::Debug + Default {
     /// HLL precision parameter.
     const PRECISION: usize;
     /// Number of hash bits reserved for register-rank computation.
@@ -139,67 +135,6 @@ macro_rules! impl_hll_registers {
             }
         }
 
-        impl $crate::__private::serde::Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> ::std::result::Result<S::Ok, S::Error>
-            where
-                S: $crate::__private::serde::Serializer,
-            {
-                $crate::__private::serde_big_array::BigArray::serialize(
-                    &*self.registers,
-                    serializer,
-                )
-            }
-        }
-
-        impl<'de> $crate::__private::serde::Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> ::std::result::Result<Self, D::Error>
-            where
-                D: $crate::__private::serde::Deserializer<'de>,
-            {
-                // Fills a heap-allocated array element by element. The
-                // encoding is the same fixed-length sequence `BigArray`
-                // writes, but decoding never builds an `[u8; N]` on the
-                // stack -- see `zeroed_registers`.
-                struct RegisterVisitor;
-
-                impl<'de> $crate::__private::serde::de::Visitor<'de> for RegisterVisitor {
-                    type Value = $name;
-
-                    fn expecting(
-                        &self,
-                        formatter: &mut ::std::fmt::Formatter,
-                    ) -> ::std::fmt::Result {
-                        ::std::write!(formatter, "an array of {} bytes", $num_registers)
-                    }
-
-                    fn visit_seq<A>(
-                        self,
-                        mut seq: A,
-                    ) -> ::std::result::Result<Self::Value, A::Error>
-                    where
-                        A: $crate::__private::serde::de::SeqAccess<'de>,
-                    {
-                        let mut out = <$name as ::std::default::Default>::default();
-                        for i in 0..$num_registers {
-                            match seq.next_element::<u8>()? {
-                                Some(byte) => out.registers[i] = byte,
-                                None => {
-                                    return Err(
-                                        <A::Error as $crate::__private::serde::de::Error>::invalid_length(
-                                            i, &self,
-                                        ),
-                                    );
-                                }
-                            }
-                        }
-                        Ok(out)
-                    }
-                }
-
-                deserializer.deserialize_tuple($num_registers, RegisterVisitor)
-            }
-        }
-
         impl ::std::ops::Index<usize> for $name {
             type Output = u8;
 
@@ -288,28 +223,6 @@ macro_rules! impl_fixed_matrix {
                 Self {
                     data: Box::new([0 as $counter; $rows * $cols]),
                 }
-            }
-        }
-
-        impl $crate::__private::serde::Serialize for $name {
-            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-            where
-                S: $crate::__private::serde::Serializer,
-            {
-                $crate::__private::serde_big_array::BigArray::serialize(&*self.data, serializer)
-            }
-        }
-
-        impl<'de> $crate::__private::serde::Deserialize<'de> for $name {
-            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-            where
-                D: $crate::__private::serde::Deserializer<'de>,
-            {
-                let data: [$counter; $rows * $cols] =
-                    $crate::__private::serde_big_array::BigArray::deserialize(deserializer)?;
-                Ok(Self {
-                    data: Box::new(data),
-                })
             }
         }
 

@@ -2,7 +2,6 @@
 
 use crate::asapv1::admission_rate;
 use crate::{DataInput, Vector2D};
-use serde::{Deserialize, Serialize};
 
 use super::super::sketches::*;
 use super::UnivMon;
@@ -10,7 +9,7 @@ use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
 
 pub(crate) mod wire;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Norm choices used by EH merge policies.
 pub enum SketchNorm {
     /// L1-based merge policy.
@@ -19,7 +18,7 @@ pub enum SketchNorm {
     L2,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 /// Erased sketch variants supported by exponential histograms.
 pub enum EhBucketSketch {
     /// Count-Min sketch.
@@ -336,10 +335,10 @@ mod tests {
         assert!((10.0..=30.0).contains(&q50), "unexpected q50 {q50}");
     }
 
-    /// `EhBucketSketch` derives its serde form from the variants it holds, so a
-    /// round trip of a nested DDSketch must carry the sketch's whole state.
+    /// An ASAPv1 round trip of a nested DDSketch carries the sketch's whole
+    /// state.
     #[test]
-    fn nested_ddsketch_survives_a_serde_round_trip() {
+    fn nested_ddsketch_survives_an_asapv1_round_trip() {
         let mut dd = EhBucketSketch::DdSketch(DdSketch::new(0.01));
         for v in [10.0f64, 20.0, 30.0, 40.0] {
             dd.update(&DataInput::F64(v));
@@ -351,8 +350,8 @@ mod tests {
             _ => panic!("expected the DDSketch variant"),
         };
 
-        let bytes = rmp_serde::to_vec(&dd).expect("encode");
-        let restored: EhBucketSketch = rmp_serde::from_slice(&bytes).expect("decode");
+        let bytes = dd.to_asapv1().expect("encode");
+        let restored = EhBucketSketch::from_asapv1(&bytes).expect("decode");
         let after = match &restored {
             EhBucketSketch::DdSketch(inner) => {
                 (inner.get_count(), inner.sum(), inner.min(), inner.max())

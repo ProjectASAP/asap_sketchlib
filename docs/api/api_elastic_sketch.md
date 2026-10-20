@@ -343,7 +343,7 @@ both sides past it.
 A zero dimension, a `heavy_buckets` disagreeing with the heavy table, a free bucket
 that still names a flow, a payload length that disagrees with the declared
 geometry, and a `nil` flow id whose `vote_pos` is non-zero are all rejected on
-both sides. `ElasticSketch` also derives serde.
+both sides.
 
 ## Examples
 

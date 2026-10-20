@@ -31,7 +31,6 @@ use crate::common::{
 };
 use crate::octo_delta::UnivMonCellDelta;
 use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) mod wire;
@@ -40,7 +39,7 @@ const DEFAULT_ROWS: usize = 5;
 const DEFAULT_COLS: usize = 2048;
 const DEFAULT_LAYERS: usize = 8;
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum UnivMonUpdateMode {
     #[default]
     Unset,
@@ -48,7 +47,7 @@ pub(crate) enum UnivMonUpdateMode {
     Terminal,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Clone, Debug)]
 /// UnivMon sketch pyramid for multi-metric stream estimation.
 pub struct UnivMon {
     /// Per-layer L2/heavy-hitter sketches.
@@ -65,9 +64,7 @@ pub struct UnivMon {
     pub heap_size: usize,
     /// Total inserted weight (the exact L1 norm).
     pub total_weight: usize,
-    #[serde(default)]
     update_mode: UnivMonUpdateMode,
-    #[serde(default)]
     candidate_complete: Vec<bool>,
 }
 

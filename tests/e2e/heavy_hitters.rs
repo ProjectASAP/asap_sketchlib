@@ -358,16 +358,16 @@ fn a_merge_keeps_the_total_and_never_reads_low() {
     );
 }
 
-/// A round-trip through serde preserves every answer, including the key index
-/// the summary looks up on.
+/// An ASAPv1 round trip preserves every answer, including the key index the
+/// summary looks up on.
 #[test]
-fn a_serde_round_trip_preserves_every_answer() {
+fn an_asapv1_round_trip_preserves_every_answer() {
     let stream = stream();
     let truth = truth_of(&stream);
     let summary = filled(256, &stream);
 
-    let bytes = rmp_serde::to_vec(&summary).expect("serialize");
-    let decoded: SpaceSaving = rmp_serde::from_slice(&bytes).expect("deserialize");
+    let bytes = summary.to_asapv1().expect("serialize");
+    let decoded: SpaceSaving = SpaceSaving::from_asapv1(&bytes).expect("deserialize");
 
     assert_eq!(decoded.len(), summary.len());
     assert_eq!(decoded.capacity(), summary.capacity());
@@ -610,8 +610,8 @@ fn a_round_trip_carries_the_merged_ceiling() {
     let mut merged = filled(32, &stream[..stream.len() / 2]);
     merged.merge(&filled(4, &stream[stream.len() / 2..]));
 
-    let bytes = rmp_serde::to_vec(&merged).expect("serialize");
-    let decoded: SpaceSaving = rmp_serde::from_slice(&bytes).expect("deserialize");
+    let bytes = merged.to_asapv1().expect("serialize");
+    let decoded: SpaceSaving = SpaceSaving::from_asapv1(&bytes).expect("deserialize");
 
     assert_eq!(decoded.min_count(), merged.min_count());
     assert_eq!(decoded.total(), merged.total());
@@ -625,98 +625,6 @@ fn a_round_trip_carries_the_merged_ceiling() {
             decoded.upper_bound(&probe)
         );
     }
-}
-
-/// Serialized state that no run of the algorithm could have produced is
-/// refused, rather than decoded into a summary that panics or loops.
-#[test]
-fn crafted_state_fails_closed() {
-    #[derive(serde::Serialize)]
-    struct CraftedState {
-        capacity: usize,
-        total: u64,
-        discarded_max: u64,
-        entries: Vec<(OwnedDataInput, u64, u64)>,
-    }
-
-    let crafted = |capacity: usize,
-                   total: u64,
-                   discarded_max: u64,
-                   entries: Vec<(OwnedDataInput, u64, u64)>| {
-        rmp_serde::to_vec(&CraftedState {
-            capacity,
-            total,
-            discarded_max,
-            entries,
-        })
-        .expect("serialize")
-    };
-
-    let refused = [
-        (crafted(0, 100, 0, Vec::new()), "capacity is zero"),
-        (
-            crafted(
-                1,
-                100,
-                0,
-                vec![
-                    (OwnedDataInput::I64(1), 2, 0),
-                    (OwnedDataInput::I64(2), 2, 0),
-                ],
-            ),
-            "over a capacity of 1",
-        ),
-        (
-            crafted(4, 100, 0, vec![(OwnedDataInput::I64(1), 0, 0)]),
-            "counter at zero",
-        ),
-        (
-            crafted(4, 100, 0, vec![(OwnedDataInput::I64(1), 3, 9)]),
-            "error of 9 against a count of 3",
-        ),
-        (
-            crafted(
-                4,
-                100,
-                0,
-                vec![
-                    (OwnedDataInput::I64(1), 3, 0),
-                    (OwnedDataInput::I64(1), 2, 0),
-                ],
-            ),
-            "same key twice",
-        ),
-        (
-            crafted(4, 100, 200, vec![(OwnedDataInput::I64(1), 3, 0)]),
-            "ceiling of 200 above its lowest count of 3",
-        ),
-        (
-            crafted(4, 2, 0, vec![(OwnedDataInput::I64(1), 9, 0)]),
-            "total of 2 under the 9",
-        ),
-    ];
-    for (bytes, expected) in &refused {
-        let problem = rmp_serde::from_slice::<SpaceSaving>(bytes)
-            .expect_err("a crafted state must be refused, not decoded")
-            .to_string();
-        assert!(
-            problem.contains(expected),
-            "expected a complaint about {expected}, got {problem}"
-        );
-    }
-
-    let bytes = crafted(
-        4,
-        100,
-        0,
-        vec![
-            (OwnedDataInput::I64(1), 3, 1),
-            (OwnedDataInput::I64(2), 9, 2),
-        ],
-    );
-    let decoded: SpaceSaving = rmp_serde::from_slice(&bytes).expect("a well formed state");
-    assert_eq!(decoded.top_k(8).len(), 2);
-    assert_eq!(decoded.estimate(&DataInput::I64(2)), 9);
 }
 
 /// `SpaceSaving::default()` is the documented counter budget, and it fills.

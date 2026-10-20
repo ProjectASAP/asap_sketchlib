@@ -67,7 +67,7 @@ This document provides a high-level overview of implemented and planned features
 
 ### Serialization
 
-**MessagePack (rmp-serde)** - Serialization support across most sketch types
+**ASAPv1** - `to_asapv1` / `from_asapv1` on every sketch the ASAPv1 registry marks implemented
 
 ### Sampling
 
@@ -87,31 +87,30 @@ Insertion throughput measured on 10,000,000 Zipf-distributed `int64` values (s=1
 
 ### Serialization
 
-MessagePack (`rmp-serde`) support. **serde support** means the type derives `Serialize`/`Deserialize` and can be used with any serde-compatible serializer. **Built-in helpers** (`to_asapv1` / `from_asapv1`) provide one-call round-tripping without requiring users to depend on `rmp-serde` directly. These helpers emit the self-describing **ASAPv1** wire envelope (see the [ASAPv1 wire format spec](./asapv1_wire_format.md)) for every sketch the spec's `kind_id` registry marks *implemented*; NitroBatch, CountMinSketchFold, CountSketchFold, HashSketchEnsemble, ExponentialHistogramUnivMon and OctoSketch are not converted.
+`to_asapv1` / `from_asapv1` emit and read the self-describing **ASAPv1** wire envelope (see the [ASAPv1 wire format spec](./asapv1_wire_format.md)) for every sketch the spec's `kind_id` registry marks *implemented*. Sketch types do not implement serde's `Serialize` / `Deserialize`. NitroBatch, CountMinSketchFold, CountSketchFold, CountMinHll, MicroCm, HashSketchEnsemble, ExponentialHistogramUnivMon and OctoSketch have no serialized form.
 
-| Component | serde support | Built-in helpers |
-| --- | --- | --- |
-| CountMinSketch | Yes | Yes |
-| Count / CountSketchWithL2Norm | Yes | Yes |
-| HyperLogLog (all variants) | Yes | Yes |
-| DDSketch | Yes | Yes |
-| KLL / KllDynamic | Yes | Yes |
-| KMV | Yes | Yes |
-| Elastic | Yes | Yes |
-| Coco | Yes | Yes |
-| UniformSampling | Yes | Yes |
-| CountMinSketchFold / CountSketchFold | Yes | In Progress |
-| CountMinSketchWithHeap / CountSketchWithHeap | In Progress | Yes |
-| CountMinSketchWithSpaceSaving / CountSketchWithSpaceSaving | No | Yes |
-| SpaceSaving | Yes | Yes |
-| Bloom | Yes | Yes |
-| Hydra | Yes | Yes |
-| UnivMon | Yes | Yes |
-| Two-tier UnivMon | No | Yes |
-| UnivMonQ (experimental) | Internal wire DTO | Yes |
-| NitroBatch | Yes | In Progress |
-| EhBucketSketch | Yes | Yes |
-| ExponentialHistogram | No | Yes |
+| Component | ASAPv1 |
+| --- | --- |
+| CountMinSketch | Yes |
+| Count / CountSketchWithL2Norm | Yes |
+| HyperLogLog (all variants) | Yes |
+| DDSketch | Yes |
+| KLL / KllDynamic | Yes |
+| KMV | Yes |
+| Elastic | Yes |
+| Coco | Yes |
+| UniformSampling | Yes |
+| CountMinSketchWithHeap / CountSketchWithHeap | Yes |
+| CountMinSketchWithSpaceSaving / CountSketchWithSpaceSaving | Yes |
+| SpaceSaving | Yes |
+| Bloom | Yes |
+| Hydra | Yes |
+| UnivMon | Yes |
+| Two-tier UnivMon | Yes |
+| UnivMonQ (experimental) | Yes |
+| EhBucketSketch | Yes |
+| ExponentialHistogram | Yes |
+| SetAggregator | Yes |
 
 ### API Stability
 

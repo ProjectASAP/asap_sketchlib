@@ -14,7 +14,6 @@
 //! additional approximation error — the accuracy is identical to a full-width
 //! Count Sketch with W columns.
 
-use serde::{Deserialize, Serialize};
 
 use crate::count_min_fold::FoldCell;
 use crate::{DataInput, DefaultXxHasher, SketchHasher, TopKHeap, compute_median_inline_f64};
@@ -35,8 +34,7 @@ const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 ///
 /// Unlike `CountMinSketchFold`, insert applies a random ±1 sign per (row, key), and
 /// query returns the **median** of sign-corrected row estimates.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct CountSketchFold<H: SketchHasher = DefaultXxHasher> {
     /// Number of hash functions (rows). Same across all fold levels.
     rows: usize,
@@ -50,7 +48,6 @@ pub struct CountSketchFold<H: SketchHasher = DefaultXxHasher> {
     cells: Vec<FoldCell>,
     /// Top-K heavy-hitter tracking heap.
     heap: TopKHeap,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
 }
 
@@ -826,66 +823,6 @@ mod tests {
         for (i, (f, s)) in flat.iter().zip(std_flat.iter()).enumerate() {
             assert_eq!(*f, *s, "flat counter mismatch at [{i}]: fold={f}, std={s}");
         }
-    }
-
-    // -- Serde round trip ---------------------------------------------------
-
-    /// The derived serde form is the only serialization CountSketchFold has, so the
-    /// round trip has to carry the whole sketch: the folded cells with their
-    /// permanent `full_col` tags, the geometry the unfold path reads, and the
-    /// heavy-hitter heap (whose index is rebuilt on load rather than carried).
-    #[test]
-    fn serde_round_trip_keeps_the_cells_the_geometry_and_the_heap() {
-        let rows = 3;
-        let full_cols = 4096;
-        let fold_level = 4;
-        let top_k = 16;
-
-        let mut sk: CountSketchFold = CountSketchFold::new(rows, full_cols, fold_level, top_k);
-        let stream = sample_zipf_u64(2_000, 1.2, 20_000, 0x5EED_C55C);
-        for &value in &stream {
-            sk.update_weighted(&DataInput::U64(value), 1);
-        }
-        assert!(
-            sk.collided_cells() > 0,
-            "the fixture should exercise collided cells, not just Single ones"
-        );
-
-        let bytes = rmp_serde::to_vec(&sk).expect("encode");
-        let restored: CountSketchFold = rmp_serde::from_slice(&bytes).expect("decode");
-
-        assert_eq!(restored.rows(), sk.rows());
-        assert_eq!(restored.fold_cols(), sk.fold_cols());
-        assert_eq!(restored.full_cols(), sk.full_cols());
-        assert_eq!(restored.fold_level(), sk.fold_level());
-        assert_eq!(restored.total_entries(), sk.total_entries());
-        assert_eq!(restored.collided_cells(), sk.collided_cells());
-        assert_eq!(restored.to_flat_counters(), sk.to_flat_counters());
-
-        for value in 0..2_000u64 {
-            let key = DataInput::U64(value);
-            assert_eq!(
-                restored.estimate(&key),
-                sk.estimate(&key),
-                "estimate for {value} moved across the round trip"
-            );
-        }
-
-        let before = sk.heap().heap();
-        let after = restored.heap().heap();
-        assert_eq!(after.len(), before.len(), "heap size moved");
-        assert_eq!(after.len(), top_k, "the fixture should fill the heap");
-        for (a, b) in after.iter().zip(before.iter()) {
-            assert_eq!(a.key, b.key, "heap order moved across the round trip");
-            assert_eq!(a.count, b.count, "heap count moved across the round trip");
-        }
-        // The heap's key index is `#[serde(skip)]` and rebuilt on load, so a
-        // lookup has to work on the decoded side too.
-        let resident = before[0].key.clone();
-        assert!(
-            restored.heap().find_owned(&resident).is_some(),
-            "the rebuilt heap index cannot find its own resident"
-        );
     }
 
     // -- Memory efficiency --------------------------------------------------

@@ -3,7 +3,6 @@
 //! [`CountSketchWithL2Norm`] is the per-layer sketch of `UnivMon` and
 //! `UnivMonTwoTier`; its L2 norm sets their heavy-hitter threshold.
 
-use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use crate::common::structures::matrix_storage::cols_mask_bits;
@@ -17,15 +16,13 @@ pub(crate) mod wire;
 use crate::common::structures::fixed_structure::{DEFAULT_COLS, DEFAULT_ROWS};
 
 /// Count Sketch augmented with per-row L2 norm tracking for heavy-hitter detection.
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(bound = "")]
+#[derive(Clone, Debug)]
 pub struct CountSketchWithL2Norm<H: SketchHasher = DefaultXxHasher> {
     counts: Vector2D<i64>,
     row_l2_squared: Vector1D<i64>,
     rows: usize,
     cols: usize,
     seed_index: usize,
-    #[serde(skip)]
     _hasher: PhantomData<H>,
 }
 
