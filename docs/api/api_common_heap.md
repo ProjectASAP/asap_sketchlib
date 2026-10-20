@@ -44,6 +44,10 @@ fn heap(&self) -> &[HeapEntry<C>]
 fn len(&self) -> usize
 fn is_empty(&self) -> bool
 fn capacity(&self) -> usize
+// Bytes a heap of `heap_size` holds once full of keys shaped like `key` (a
+// string's or byte slice's length counts; a number's does not). Eviction
+// tombstones can make the index rehash into twice its buckets, not counted.
+fn estimated_memory_bytes(heap_size: usize, key: &DataInput) -> usize
 ```
 
 ## Merge

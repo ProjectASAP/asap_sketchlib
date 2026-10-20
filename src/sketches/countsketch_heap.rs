@@ -111,6 +111,23 @@ where
             heap: TopKHeap::new(heap_size),
         }
     }
+
+    /// Bytes a sketch built by [`Self::new`]`(rows, cols, heap_size)` holds
+    /// once its heap is full of keys shaped like `key`: the struct, the
+    /// `rows x cols` counters and the heap's allocations
+    /// ([`TopKHeap::estimated_memory_bytes`], whose caveats apply). A memory
+    /// model calls this to price a top-k sketch before building one.
+    pub fn estimated_memory_bytes(
+        rows: usize,
+        cols: usize,
+        heap_size: usize,
+        key: &DataInput,
+    ) -> usize {
+        size_of::<Self>()
+            + rows.saturating_mul(cols).saturating_mul(size_of::<T>())
+            + TopKHeap::<HeapCountOf<Vector2D<T>>>::estimated_memory_bytes(heap_size, key)
+            - size_of::<TopKHeap<HeapCountOf<Vector2D<T>>>>()
+    }
 }
 
 // -- Construction from any MatrixStorage -------------------------------------

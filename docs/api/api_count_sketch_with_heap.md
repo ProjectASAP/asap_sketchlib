@@ -21,6 +21,9 @@ and `i128`. Each entry's count is the sketch's median estimate, through
 fn new(rows: usize, cols: usize, heap_size: usize) -> Self
 fn from_storage(storage: S, heap_size: usize) -> Self
 fn default() -> Self
+// Vector2D storage: bytes `new(rows, cols, heap_size)` holds once its heap is
+// full of keys shaped like `key`, priced before building
+fn estimated_memory_bytes(rows: usize, cols: usize, heap_size: usize, key: &DataInput) -> usize
 ```
 
 ## Insert/Update

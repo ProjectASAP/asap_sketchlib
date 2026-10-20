@@ -12,6 +12,13 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`estimated_memory_bytes` for `TopKHeap`, `CountMinSketchWithHeap` and
+  `CountSketchWithHeap`**, so a memory model prices a top-k sketch before
+  building one. `TopKHeap::estimated_memory_bytes(heap_size, key)` counts the
+  struct, the `HeapEntry` and digest arrays, the digest index and each
+  resident's owned key bytes once `heap_size` keys shaped like `key` are
+  resident; the heap sketches add their `rows x cols` counters. Evictions can
+  make the index rehash into twice its buckets, which the count leaves out.
 - **`TupleKey` and `KeyColumn`**, a heap key of typed columns (null, bool,
   `i64`, `f64`, string) encoded into one canonical byte string, so a GROUP BY
   over several columns keeps one CountMinSketchWithHeap or CountSketchWithHeap candidate per tuple under
