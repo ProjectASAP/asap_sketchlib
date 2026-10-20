@@ -11,9 +11,9 @@ use crate::common::{
     DataInput, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, hash64_seeded, hash64_seeded_owned,
     heap_item_to_sketch_input,
 };
-use crate::common::{L2HH, Vector1D};
+use crate::common::Vector1D;
 use crate::sketch_framework::univmon::{UNIVMON_MAX_LAYERS, UnivMonUpdateMode};
-use crate::sketches::countsketch_heap::CountSketchWithL2Norm;
+use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
 use std::collections::{HashMap, HashSet};
 
 mod wire;
@@ -107,7 +107,7 @@ const DEFAULT_LAYERS: usize = 16;
 /// Optimized UnivMon variant with separate elephant and mouse layers.
 pub struct UnivMonTwoTier {
     /// Per-layer L2/heavy-hitter sketches.
-    pub layer_sketches: Vector1D<L2HH>,
+    pub layer_sketches: Vector1D<CountSketchWithL2Norm>,
     /// Per-layer heavy-hitter heaps.
     pub layer_heaps: Vector1D<TopKHeap>,
     /// Total number of layers.
@@ -155,29 +155,27 @@ impl UnivMonTwoTier {
             layers <= UNIVMON_MAX_LAYERS,
             "layer count must be at most UNIVMON_MAX_LAYERS {UNIVMON_MAX_LAYERS}"
         );
-        let sk_vec: Vec<L2HH> = if layers <= elephant_layers {
+        let sk_vec: Vec<CountSketchWithL2Norm> = if layers <= elephant_layers {
             (0..layers)
                 .map(|i| {
-                    L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
+                    CountSketchWithL2Norm::with_dimensions_and_seed_index(
                         elephant_rows,
                         elephant_cols,
                         i,
-                    ))
+                    )
                 })
                 .collect()
         } else {
             (0..elephant_layers)
                 .map(|i| {
-                    L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
+                    CountSketchWithL2Norm::with_dimensions_and_seed_index(
                         elephant_rows,
                         elephant_cols,
                         i,
-                    ))
+                    )
                 })
                 .chain((elephant_layers..layers).map(|i| {
-                    L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
-                        mouse_rows, mouse_cols, i,
-                    ))
+                    CountSketchWithL2Norm::with_dimensions_and_seed_index(mouse_rows, mouse_cols, i)
                 }))
                 .collect()
         };
@@ -243,7 +241,7 @@ impl UnivMonTwoTier {
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
         let bottom = self.find_bottom_layer_num(h);
         for i in 0..=bottom {
-            let count = self.layer_sketches[i].update_and_est(key, weight);
+            let count = self.layer_sketches[i].update_weighted_and_estimate(key, weight);
             if !self.layer_heaps[i].update(key, count as i64) {
                 self.candidate_complete[i] = false;
             }
@@ -258,7 +256,7 @@ impl UnivMonTwoTier {
         self.begin_update(weight, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
         let bottom = self.find_bottom_layer_num(h);
-        let count = self.layer_sketches[bottom].update_and_est(key, weight);
+        let count = self.layer_sketches[bottom].update_weighted_and_estimate(key, weight);
         if !self.layer_heaps[bottom].update(key, count as i64) {
             self.candidate_complete[bottom] = false;
         }
@@ -659,8 +657,8 @@ mod tests {
         assert_eq!(left.total_weight, 1000);
         assert!(left.estimate_entropy().is_finite());
         for level in 0..left.layers {
-            let L2HH::COUNT(merged_count) = &left.layer_sketches[level];
-            let L2HH::COUNT(one_pass_count) = &one_pass.layer_sketches[level];
+            let merged_count = &left.layer_sketches[level];
+            let one_pass_count = &one_pass.layer_sketches[level];
             assert_eq!(
                 merged_count.as_storage().as_slice(),
                 one_pass_count.as_storage().as_slice(),

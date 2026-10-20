@@ -171,7 +171,10 @@ signals a backwards-compatible change.
 - **`CountL2HH` -> `CountSketchWithL2Norm`** (breaking), with
   `update_weighted*`, `estimate*`, `l2()`, `l2_squared()`, `seed_index` and
   `with_dimensions_and_seed_index`; `l2hh_cell_for_row` ->
-  `CountSketchWithL2Norm::cell_for_row`.
+  `CountSketchWithL2Norm::cell_for_row`. It lives in module
+  `countsketch_l2_norm`, and the single-variant `L2HH` enum is gone:
+  `UnivMon` and `UnivMonTwoTier` `layer_sketches` hold `CountSketchWithL2Norm`
+  directly.
 - **Elastic and Coco** (breaking). `Elastic` -> `ElasticSketch`, `Coco` ->
   `CocoSketch`, `CocoWorkerSketch` -> `CocoSketchWorker`; `bktlen` ->
   `heavy_buckets`, `init_with_length` -> `with_heavy_buckets`,

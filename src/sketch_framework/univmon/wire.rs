@@ -17,7 +17,7 @@
 //!
 //! Each layer is a `CountSketchWithL2Norm` plus an `TopKHeap`. Their state is written
 //! straight into UnivMon's own positional array through
-//! [`l2hh_wire::layer_state`] and [`heap_entries`]; no layer carries an
+//! [`l2_norm_wire::layer_state`] and [`heap_entries`]; no layer carries an
 //! envelope, a magic or a metadata map of its own.
 //!
 //! ## The hash profile is the crate default
@@ -42,8 +42,10 @@ use crate::sketches::countminsketch_heap::heap_wire::{
     EMPTY_KEY_TYPE, check_distinct_keys, check_empty_key_type, heap_entries, key_type_of,
     rebuild_heap,
 };
-use crate::sketches::countsketch_heap::l2hh_wire;
-use crate::{DefaultXxHasher, HashProfile, L2HH, OwnedDataInput, TopKHeap, Vector1D};
+use crate::sketches::countsketch_l2_norm::wire as l2_norm_wire;
+use crate::{
+    CountSketchWithL2Norm, DefaultXxHasher, HashProfile, OwnedDataInput, TopKHeap, Vector1D,
+};
 
 use super::{UNIVMON_MAX_LAYERS, UnivMon, UnivMonUpdateMode};
 
@@ -187,7 +189,7 @@ pub(crate) struct PyramidState<'a> {
 /// layer's seed index is not its position, when a layer's heap holds the same
 /// wire key twice, or when the heaps hold more entries than `u32` can name.
 pub(crate) fn pyramid_state<'a>(
-    sketches: &'a Vector1D<L2HH>,
+    sketches: &'a Vector1D<CountSketchWithL2Norm>,
     heaps: &'a Vector1D<TopKHeap>,
     geometry: &[(usize, usize)],
     bucket_size: usize,
@@ -223,7 +225,7 @@ pub(crate) fn pyramid_state<'a>(
         update_mode,
     };
     for (layer, &(rows, cols)) in geometry.iter().enumerate() {
-        let L2HH::COUNT(counter) = &sketches[layer];
+        let counter = &sketches[layer];
         if (counter.rows(), counter.cols()) != (rows, cols) {
             return Err(RmpEncodeError::Syntax(format!(
                 "ASAPv1 UnivMon envelope: layer {layer} is {}x{} against the declared {rows}x{cols}",
@@ -237,7 +239,7 @@ pub(crate) fn pyramid_state<'a>(
                 counter.seed_index()
             )));
         }
-        let (counts, l2) = l2hh_wire::layer_state(counter)?;
+        let (counts, l2) = l2_norm_wire::layer_state(counter)?;
         state.counts.extend_from_slice(counts);
         state.l2.extend_from_slice(l2);
         let entries = heap_entries(&heaps[layer]);
@@ -462,7 +464,13 @@ pub(crate) fn decode_pyramid(
 }
 
 /// The counters and heaps one decoded pyramid rebuilds into.
-pub(crate) type DecodedLayers = (Vector1D<L2HH>, Vector1D<TopKHeap>, Vec<bool>, usize, u8);
+pub(crate) type DecodedLayers = (
+    Vector1D<CountSketchWithL2Norm>,
+    Vector1D<TopKHeap>,
+    Vec<bool>,
+    usize,
+    u8,
+);
 
 /// Seats the decoded layers, rebuilding every counter matrix and heap index.
 ///
@@ -491,7 +499,7 @@ pub(crate) fn rebuild_layers(
     let mut cells = 0usize;
     let mut accumulators = 0usize;
     for &(rows, cols) in geometry {
-        l2hh_wire::check_dimensions(rows, cols).map_err(complain)?;
+        l2_norm_wire::check_dimensions(rows, cols).map_err(complain)?;
         cells = cells
             .checked_add(rows.checked_mul(cols).ok_or_else(|| {
                 complain(format!("UnivMon layer geometry {rows}x{cols} overflows"))
@@ -533,13 +541,13 @@ pub(crate) fn rebuild_layers(
     for (layer, &(rows, cols)) in geometry.iter().enumerate() {
         let next_cell = cell + rows * cols;
         let next_accumulator = accumulator + rows;
-        sketches.push(L2HH::COUNT(l2hh_wire::rebuild_layer::<DefaultXxHasher>(
+        sketches.push(l2_norm_wire::rebuild_layer::<DefaultXxHasher>(
             rows,
             cols,
             layer,
             &decoded.counts[cell..next_cell],
             &decoded.l2[accumulator..next_accumulator],
-        )?));
+        )?);
         cell = next_cell;
         accumulator = next_accumulator;
         let run: Vec<(OwnedDataInput, i64)> = entries
@@ -973,10 +981,11 @@ mod tests {
         let count_sketch = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
             .to_asapv1()
             .expect("serialize Count Sketch");
-        let count_l2hh =
-            crate::sketches::countsketch_heap::CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(2, 8)
-                .to_asapv1()
-                .expect("serialize CountSketchWithL2Norm");
+        let count_l2hh = crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm::<
+            DefaultXxHasher,
+        >::with_dimensions(2, 8)
+        .to_asapv1()
+        .expect("serialize CountSketchWithL2Norm");
         let pyramid = crate::UnivMonTwoTier::new(4, 1, 2, 8, 2, 4, 2)
             .to_asapv1()
             .expect("serialize UnivMonTwoTier");
@@ -1067,23 +1076,20 @@ mod tests {
     #[test]
     fn univmon_rejects_serializing_an_inconsistent_pyramid() {
         let mut wrong_layer = UnivMon::new(4, 2, 16, 3);
-        wrong_layer.layer_sketches[1] = L2HH::COUNT(
-            crate::sketches::countsketch_heap::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 16, 1),
-        );
+        wrong_layer.layer_sketches[1] =
+            crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 16, 1);
         assert!(wrong_layer.to_asapv1().is_ok());
 
-        wrong_layer.layer_sketches[1] = L2HH::COUNT(
-            crate::sketches::countsketch_heap::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 32, 1),
-        );
+        wrong_layer.layer_sketches[1] =
+            crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 32, 1);
         assert!(
             wrong_layer.to_asapv1().is_err(),
             "a layer that is not the declared size must not serialize"
         );
 
         let mut wrong_seed = UnivMon::new(4, 2, 16, 3);
-        wrong_seed.layer_sketches[1] = L2HH::COUNT(
-            crate::sketches::countsketch_heap::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 16, 5),
-        );
+        wrong_seed.layer_sketches[1] =
+            crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 16, 5);
         assert!(
             wrong_seed.to_asapv1().is_err(),
             "a layer hashing at another layer's seed index must not serialize"

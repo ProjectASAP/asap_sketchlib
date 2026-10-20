@@ -26,7 +26,7 @@ use asap_sketchlib::{
     CountSketchWithHeap, CountSketchWithHeapDelta, CountSketchWithL2Norm,
     CountSketchWithSpaceSaving, DataInput, DdSketch, DdSketchDelta, ElasticSketch, Ertl, FastPath,
     HeapCount, HeavyBucket, HllRegistersP14, Hydra, HyperLogLog, HyperLogLogDelta,
-    HyperLogLogHipP12, HyperLogLogHipP14, HyperLogLogP12, HyperLogLogP14, Kll, KllDynamic, L2HH,
+    HyperLogLogHipP12, HyperLogLogHipP14, HyperLogLogP12, HyperLogLogP14, Kll, KllDynamic,
     OwnedDataInput, RegularPath, SetAggregator, SetAggregatorDelta, TopKHeap, UnivMon, Vector2D,
     peek_kind_id,
 };
@@ -1467,7 +1467,7 @@ fn univmon_known(keys: [DataInput<'_>; 6]) -> UnivMon {
 fn univmon_counts(um: &UnivMon) -> Vec<i64> {
     (0..um.layers)
         .flat_map(|layer| {
-            let L2HH::COUNT(counter) = &um.layer_sketches[layer];
+            let counter = &um.layer_sketches[layer];
             counter.as_storage().as_slice().to_vec()
         })
         .collect()
@@ -2003,7 +2003,7 @@ fn univmon_optimized_l5_e2_3x8_1x4_h6_matches_golden() {
     );
     assert_eq!(shape, (5, 2, 3, 8, 1, 4, 6, 70));
     for (layer, rows) in pyramid_layers().iter().enumerate() {
-        let L2HH::COUNT(counter) = &decoded.layer_sketches[layer];
+        let counter = &decoded.layer_sketches[layer];
         let flat: Vec<i64> = rows.iter().flatten().map(|&v| i64::from(v)).collect();
         assert_eq!(counter.as_storage().as_slice(), flat.as_slice());
         let mut heap: Vec<(String, i64)> = decoded.layer_heaps[layer]

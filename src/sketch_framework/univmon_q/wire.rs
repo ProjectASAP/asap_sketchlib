@@ -812,10 +812,11 @@ mod tests {
         let count_sketch = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
             .to_asapv1()
             .expect("serialize Count Sketch");
-        let count_l2hh =
-            crate::sketches::countsketch_heap::CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(2, 8)
-                .to_asapv1()
-                .expect("serialize CountSketchWithL2Norm");
+        let count_l2hh = crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm::<
+            DefaultXxHasher,
+        >::with_dimensions(2, 8)
+        .to_asapv1()
+        .expect("serialize CountSketchWithL2Norm");
         let univmon = crate::UnivMon::new(4, 2, 8, 2)
             .to_asapv1()
             .expect("serialize UnivMon");

@@ -31,7 +31,7 @@
 //!   appear?" These do not track which keys are heavy hitters.
 //! - [`countminsketch_heap`] / [`countsketch_heap`] — the same sketch paired
 //!   with a min-heap that tracks the top-`k` heavy hitters as items stream in
-//!   ([`CountMinSketchWithHeap`], [`CountSketchWithHeap`] / [`CountSketchWithL2Norm`]). Use these when the question is
+//!   ([`CountMinSketchWithHeap`], [`CountSketchWithHeap`]). Use these when the question is
 //!   "which keys are the most frequent?" rather than "how often did this
 //!   specific key appear?"
 //!
@@ -110,10 +110,12 @@ pub mod countminsketch_heap;
 pub use countminsketch_heap::{CountMinSketchWithHeap, CountMinSketchWithHeapDelta};
 
 pub mod countsketch_heap;
-pub use countsketch_heap::CountSketchWithL2Norm;
 pub use countsketch_heap::{
     CountSketchHeapCounter, CountSketchWithHeap, CountSketchWithHeapDelta, heap_count_from_estimate,
 };
+
+pub mod countsketch_l2_norm;
+pub use countsketch_l2_norm::CountSketchWithL2Norm;
 
 pub mod countminsketch_space_saving;
 pub use countminsketch_space_saving::{CandidateCounter, CountMinSketchWithSpaceSaving};

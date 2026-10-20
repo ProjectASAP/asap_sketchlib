@@ -365,9 +365,9 @@ Delta tests: [`src/sketches/countsketch_heap/delta.rs`](../src/sketches/countske
 
 ### CountSketchWithL2Norm
 
-Test file: [`src/sketches/countsketch_heap.rs`](../src/sketches/countsketch_heap.rs)
+Test file: [`src/sketches/countsketch_l2_norm.rs`](../src/sketches/countsketch_l2_norm.rs)
 
-Wire tests: [`src/sketches/countsketch_heap/l2hh_wire.rs`](../src/sketches/countsketch_heap/l2hh_wire.rs)
+Wire tests: [`src/sketches/countsketch_l2_norm/wire.rs`](../src/sketches/countsketch_l2_norm/wire.rs)
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |

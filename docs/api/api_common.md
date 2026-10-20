@@ -37,7 +37,7 @@ src/common/
 ```rust
 use asap_sketchlib::common::{
     // Input layer
-    DataInput, OwnedDataInput, HeapEntry, L2HH,
+    DataInput, OwnedDataInput, HeapEntry,
     input_to_owned, heap_item_to_sketch_input,
 
     // Hash layer

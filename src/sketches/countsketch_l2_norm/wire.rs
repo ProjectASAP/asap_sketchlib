@@ -1,12 +1,12 @@
 //! ASAPv1 wire serialization for [`CountSketchWithL2Norm`], plus the sub-payload the
 //! UnivMon family reuses.
 //!
-//! Child submodule of [`crate::sketches::countsketch_heap`]: it holds the
-//! metadata/payload DTOs, the kind_id constant and the `to_asapv1` /
-//! `from_asapv1` impls, while the algorithm lives in the parent
-//! module file. Being a descendant module, it reads the private `counts`,
-//! `l2`, `row`, `col` and `seed_index` fields directly without widening any
-//! field visibility. See `docs/asapv1_wire_format.md`.
+//! Child submodule of [`crate::sketches::countsketch_l2_norm`]: it holds the
+//! metadata/payload DTOs and the `to_asapv1` / `from_asapv1` impls, while the
+//! algorithm lives in the parent module file. Being a descendant module, it
+//! reads the private `counts`, `row_l2_squared`, `rows`, `cols` and
+//! `seed_index` fields directly without widening any field visibility. See
+//! `docs/asapv1_wire_format.md`.
 //!
 //! CountSketchWithL2Norm is one algorithm — a single kind_id `0x19 0x00`. The dimensions
 //! (`rows` / `cols`) and the seed-list index the sketch hashes with
@@ -15,8 +15,8 @@
 //!
 //! ## The shared sub-payload
 //!
-//! [`CountSketchWithL2Norm`] is also the per-layer counter of `UnivMon`, `UnivMonTwoTier`
-//! and every other `L2HH::COUNT`. Those sketches inline the same
+//! [`CountSketchWithL2Norm`] is also the per-layer counter of `UnivMon` and
+//! `UnivMonTwoTier`. Those sketches inline the same
 //! `(counts, l2)` state into their own positional arrays instead of nesting an
 //! envelope per layer, so [`layer_state`] and [`rebuild_layer`] are the one
 //! place that state is read and rebuilt.
@@ -194,7 +194,7 @@ pub(crate) fn rebuild_layer<H: SketchHasher>(
     })
 }
 
-// Wire serialization for CountSketchWithL2Norm. `l2hh_wire` is a descendant of the sketch
+// Wire serialization for CountSketchWithL2Norm. This module is a descendant of the sketch
 // module, so this impl reads the private fields directly.
 impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope

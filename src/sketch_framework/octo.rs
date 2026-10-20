@@ -43,7 +43,8 @@ use crate::octo_delta::{
 use crate::sketch_framework::univmon::UnivMonDeltaFidelity;
 use crate::sketches::coco::{CocoRng, CocoSketch};
 use crate::sketches::countminsketch_heap::CountMinSketchWithHeap;
-use crate::sketches::countsketch_heap::{CountSketchWithHeap, CountSketchWithL2Norm};
+use crate::sketches::countsketch_heap::CountSketchWithHeap;
+use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
 use crate::sketches::elastic::{ElasticSketch, LAMBDA};
 use crate::{
     Classic, CountMinSketch, CountMinSketchCellDelta, CountSketch, CountSketchCellDelta, DataInput,
@@ -4044,7 +4045,6 @@ mod runtime_tests {
 
     #[test]
     fn run_octo_univmon_reaches_the_deepest_layer() {
-        use crate::L2HH;
         // The structural half of `a_flat_threshold_starves_the_deep_univmon_layers`,
         // checked against the shipped pipeline rather than the replica that
         // test needs in order to run the flat counterfactual at all.
@@ -4055,7 +4055,7 @@ mod runtime_tests {
         let result = run_octo(&inputs, &config(1), plan.clone(), || plan.aggregator(heap));
 
         let deepest = layers - 1;
-        let L2HH::COUNT(inner) = &result.parent.sketch.layer_sketches[deepest];
+        let inner = &result.parent.sketch.layer_sketches[deepest];
         let nonzero = (0..inner.rows())
             .flat_map(|r| (0..inner.cols()).map(move |c| (r, c)))
             .filter(|(r, c)| inner.as_storage().query_one_counter(*r, *c) != 0)
@@ -4529,7 +4529,6 @@ mod runtime_tests {
 #[cfg(test)]
 mod univmon_tests {
     use super::*;
-    use crate::L2HH;
 
     const HEAP: usize = 32;
     const ROWS: usize = 3;
@@ -4537,7 +4536,7 @@ mod univmon_tests {
     const LAYERS: usize = 6;
 
     fn layer_counters(sketch: &UnivMon, layer: usize) -> Vec<i64> {
-        let L2HH::COUNT(inner) = &sketch.layer_sketches[layer];
+        let inner = &sketch.layer_sketches[layer];
         (0..inner.rows())
             .flat_map(|r| (0..inner.cols()).map(move |c| (r, c)))
             .map(|(r, c)| inner.as_storage().query_one_counter(r, c))

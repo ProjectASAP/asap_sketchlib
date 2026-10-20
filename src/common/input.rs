@@ -9,8 +9,8 @@ use std::{
 };
 
 use crate::{
-    CountMinSketch, CountSketch, CountSketchWithL2Norm, Ertl, FastPath, HeapCount, HyperLogLog,
-    Kll, MatrixHash, UnivMon, Vector2D,
+    CountMinSketch, CountSketch, Ertl, FastPath, HeapCount, HyperLogLog, Kll, MatrixHash, UnivMon,
+    Vector2D,
 };
 
 /// Input wrapper for sketch APIs (supports primitive and borrowed values).
@@ -276,66 +276,6 @@ impl Hash for OwnedDataInput {
             OwnedDataInput::F64(val) => state.write_u64(val.to_bits()),
             OwnedDataInput::String(val) => val.hash(state),
             OwnedDataInput::Bytes(val) => val.hash(state),
-        }
-    }
-}
-
-/// Counter wrapper for UnivMon (currently backed by CountSketchWithL2Norm).
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum L2HH {
-    /// Count-sketch-based heavy-hitter tracker with L2 support.
-    COUNT(CountSketchWithL2Norm),
-}
-
-impl L2HH {
-    /// Updates the counter and returns the current estimate.
-    pub fn update_and_est(&mut self, key: &DataInput, value: i64) -> f64 {
-        match self {
-            L2HH::COUNT(count_l2hh) => count_l2hh.update_weighted_and_estimate(key, value),
-        }
-    }
-
-    /// Updates the counter without refreshing the cached L2 value.
-    pub fn update_and_est_without_l2(&mut self, key: &DataInput, value: i64) -> f64 {
-        match self {
-            L2HH::COUNT(count_l2hh) => count_l2hh.fast_update_and_est_without_l2(key, value),
-        }
-    }
-
-    /// Returns the current L2 estimate.
-    pub fn l2(&self) -> f64 {
-        match self {
-            L2HH::COUNT(count_l2hh) => count_l2hh.l2(),
-        }
-    }
-
-    /// Returns the current frequency estimate without changing the sketch.
-    pub fn estimate(&self, key: &DataInput) -> f64 {
-        match self {
-            L2HH::COUNT(count_l2hh) => count_l2hh.estimate(key),
-        }
-    }
-
-    /// Applies a counter delta promoted by an OctoSketch worker.
-    pub fn apply_delta(&mut self, delta: crate::octo_delta::CountSketchCellDelta) {
-        match self {
-            L2HH::COUNT(count_l2hh) => count_l2hh.apply_delta(delta),
-        }
-    }
-
-    /// Merges another counter of the same kind into this one.
-    pub fn merge(&mut self, other: &L2HH) {
-        match (self, other) {
-            (L2HH::COUNT(self_count), L2HH::COUNT(other_count)) => {
-                self_count.merge(other_count);
-            }
-        }
-    }
-
-    /// Resets all counters to zero without reallocating.
-    pub fn clear(&mut self) {
-        match self {
-            L2HH::COUNT(count_l2hh) => count_l2hh.clear(),
         }
     }
 }

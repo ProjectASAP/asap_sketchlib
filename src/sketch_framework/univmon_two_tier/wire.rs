@@ -291,10 +291,10 @@ mod tests {
     use super::*;
     use crate::sketch_framework::univmon::UNIVMON_MAX_LAYERS;
     use crate::sketch_framework::univmon::wire::PyramidPayload;
-    use crate::sketches::countsketch_heap::CountSketchWithL2Norm;
+    use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
     use crate::{
-        DEFAULT_CANONICAL_SEED_INDEX, DataInput, L2HH, MATRIX_MAX_ROWS, OwnedDataInput,
-        RegularPath, SketchHasher, Vector2D,
+        DEFAULT_CANONICAL_SEED_INDEX, DataInput, MATRIX_MAX_ROWS, OwnedDataInput, RegularPath,
+        SketchHasher, Vector2D,
     };
     use rmp_serde::from_slice;
 
@@ -373,8 +373,8 @@ mod tests {
         let encoded = pyramid.to_asapv1().expect("serialize");
         let decoded = UnivMonTwoTier::from_asapv1(&encoded).expect("decode");
         for layer in 0..pyramid.layers {
-            let L2HH::COUNT(original) = &pyramid.layer_sketches[layer];
-            let L2HH::COUNT(rebuilt) = &decoded.layer_sketches[layer];
+            let original = &pyramid.layer_sketches[layer];
+            let rebuilt = &decoded.layer_sketches[layer];
             let expected = if layer < 2 { (3, 16) } else { (2, 8) };
             assert_eq!((rebuilt.rows(), rebuilt.cols()), expected);
             assert_eq!(rebuilt.seed_index(), layer);
@@ -425,7 +425,7 @@ mod tests {
         let encoded = pyramid.to_asapv1().expect("serialize");
         let decoded = UnivMonTwoTier::from_asapv1(&encoded).expect("decode");
         for layer in 0..3 {
-            let L2HH::COUNT(rebuilt) = &decoded.layer_sketches[layer];
+            let rebuilt = &decoded.layer_sketches[layer];
             assert_eq!((rebuilt.rows(), rebuilt.cols()), (2, 16));
         }
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
@@ -806,18 +806,16 @@ mod tests {
     #[test]
     fn pyramid_rejects_serializing_an_inconsistent_layout() {
         let mut wrong_tier = UnivMonTwoTier::new(4, 2, 3, 16, 2, 8, 4);
-        wrong_tier.layer_sketches[3] = L2HH::COUNT(
-            CountSketchWithL2Norm::with_dimensions_and_seed_index(3, 16, 3),
-        );
+        wrong_tier.layer_sketches[3] =
+            CountSketchWithL2Norm::with_dimensions_and_seed_index(3, 16, 3);
         assert!(
             wrong_tier.to_asapv1().is_err(),
             "a mouse layer holding elephant dimensions must not serialize"
         );
 
         let mut wrong_seed = UnivMonTwoTier::new(4, 2, 3, 16, 2, 8, 4);
-        wrong_seed.layer_sketches[3] = L2HH::COUNT(
-            CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 8, 0),
-        );
+        wrong_seed.layer_sketches[3] =
+            CountSketchWithL2Norm::with_dimensions_and_seed_index(2, 8, 0);
         assert!(
             wrong_seed.to_asapv1().is_err(),
             "a layer hashing at another layer's seed index must not serialize"

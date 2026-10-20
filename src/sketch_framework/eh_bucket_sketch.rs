@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::sketches::*;
 use super::UnivMon;
-use crate::sketches::countsketch_heap::CountSketchWithL2Norm;
+use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
 
 pub(crate) mod wire;
 

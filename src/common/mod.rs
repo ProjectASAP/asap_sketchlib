@@ -43,9 +43,7 @@ pub use hash::{
     hash64_seeded_owned, hash128_seeded, hash128_seeded_owned,
 };
 pub use heap::{HeapCount, HeapCounter, TopKHeap};
-pub use input::{
-    DataInput, HeapEntry, L2HH, OwnedDataInput, heap_item_to_sketch_input, input_to_owned,
-};
+pub use input::{DataInput, HeapEntry, OwnedDataInput, heap_item_to_sketch_input, input_to_owned};
 pub use numerical::NumericalValue;
 pub use precompute_hash::PRECOMPUTED_HASH;
 pub use precompute_sample::LN_ONE_MINUS_U_TABLE;

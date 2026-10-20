@@ -15,7 +15,6 @@ Canonical input and ownership model shared across sketches/frameworks.
 - `HeapEntry<C: HeapCount = i64>`
 - `HydraQuery<'a>`
 - `HydraCounter`
-- `L2HH`
 
 `HydraQuery` and `HydraCounter` are defined in `asap_sketchlib::common::input`.
 
@@ -34,11 +33,6 @@ fn init_item(k: DataInput, count: C) -> Self
 ## Insert/Update
 
 ```rust
-// L2HH
-fn update_and_est(&mut self, key: &DataInput, value: i64) -> f64
-fn update_and_est_without_l2(&mut self, key: &DataInput, value: i64) -> f64
-fn clear(&mut self)
-
 // HydraCounter
 fn update(&mut self, value: &DataInput, weight: Option<i32>)
 fn update_with_hash(
@@ -52,9 +46,6 @@ fn update_with_hash(
 ## Query
 
 ```rust
-// L2HH
-fn l2(&self) -> f64
-
 // HydraCounter
 fn query(&self, query: &HydraQuery) -> Result<f64, String>
 ```
@@ -62,16 +53,13 @@ fn query(&self, query: &HydraQuery) -> Result<f64, String>
 ## Merge
 
 ```rust
-// L2HH
-fn merge(&mut self, other: &L2HH)
-
 // HydraCounter
 fn merge(&mut self, other: &HydraCounter) -> Result<(), String>
 ```
 
 ## Serialization
 
-- `DataInput`, `OwnedDataInput`, `HeapEntry`, `HydraCounter`, and `L2HH` derive serde traits.
+- `DataInput`, `OwnedDataInput`, `HeapEntry`, and `HydraCounter` derive serde traits.
 - `HydraQuery` is query-only and does not derive serde in current code.
 
 ## Variants (Core)

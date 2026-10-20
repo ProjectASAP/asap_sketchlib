@@ -28,9 +28,9 @@ use crate::common::{
     DataInput, OwnedDataInput, SEED_LIST, UNIVMON_BOTTOM_LAYER_SEED_INDEX, hash64_seeded,
     hash64_seeded_owned, heap_item_to_sketch_input,
 };
-use crate::common::{L2HH, Vector1D};
+use crate::common::Vector1D;
 use crate::octo_delta::UnivMonCellDelta;
-use crate::sketches::countsketch_heap::CountSketchWithL2Norm;
+use crate::sketches::countsketch_l2_norm::CountSketchWithL2Norm;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -53,7 +53,7 @@ pub(crate) enum UnivMonUpdateMode {
 /// UnivMon sketch pyramid for multi-metric stream estimation.
 pub struct UnivMon {
     /// Per-layer L2/heavy-hitter sketches.
-    pub layer_sketches: Vector1D<L2HH>,
+    pub layer_sketches: Vector1D<CountSketchWithL2Norm>,
     /// Per-layer heavy-hitter heaps.
     pub layer_heaps: Vector1D<TopKHeap>,
     /// Number of pyramid layers.
@@ -138,12 +138,8 @@ impl UnivMon {
             layers <= UNIVMON_MAX_LAYERS,
             "layer count must be at most UNIVMON_MAX_LAYERS {UNIVMON_MAX_LAYERS}"
         );
-        let sk_vec: Vec<L2HH> = (0..layers)
-            .map(|i| {
-                L2HH::COUNT(CountSketchWithL2Norm::with_dimensions_and_seed_index(
-                    rows, cols, i,
-                ))
-            })
+        let sk_vec: Vec<CountSketchWithL2Norm> = (0..layers)
+            .map(|i| CountSketchWithL2Norm::with_dimensions_and_seed_index(rows, cols, i))
             .collect();
 
         let hh_vec: Vec<TopKHeap> = (0..layers).map(|_| TopKHeap::new(heap_size)).collect();
@@ -268,7 +264,7 @@ impl UnivMon {
     #[inline(always)]
     fn update(&mut self, key: &DataInput, value: i64, bottom_layer_num: usize) {
         for i in 0..=bottom_layer_num {
-            let count = self.layer_sketches[i].update_and_est(key, value);
+            let count = self.layer_sketches[i].update_weighted_and_estimate(key, value);
             if !self.layer_heaps[i].update(key, count as i64) {
                 self.candidate_complete[i] = false;
             }
@@ -297,7 +293,7 @@ impl UnivMon {
         self.begin_update(weight, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
         let bottom_layer_num = self.find_bottom_layer_num(h, self.layers);
-        let count = self.layer_sketches[bottom_layer_num].update_and_est(key, weight);
+        let count = self.layer_sketches[bottom_layer_num].update_weighted_and_estimate(key, weight);
         if !self.layer_heaps[bottom_layer_num].update(key, count as i64) {
             self.candidate_complete[bottom_layer_num] = false;
         }
@@ -573,7 +569,7 @@ mod tests {
         let deepest = UnivMon::new(4, 2, 16, UNIVMON_MAX_LAYERS);
         let seeds: Vec<usize> = (0..UNIVMON_MAX_LAYERS)
             .map(|layer| {
-                let L2HH::COUNT(counter) = &deepest.layer_sketches[layer];
+                let counter = &deepest.layer_sketches[layer];
                 counter.seed_index()
             })
             .collect();

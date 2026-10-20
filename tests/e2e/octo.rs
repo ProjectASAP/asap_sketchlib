@@ -36,7 +36,7 @@ use asap_sketchlib::common::UNIVMON_BOTTOM_LAYER_SEED_INDEX;
 use asap_sketchlib::{
     Classic, CountMinSketch, CountMinSketchCellDelta, CountSketch, CountSketchCellDelta,
     CountSketchWithL2NormWorker, DataInput, DdSketch, DdSketchWorker, Ertl, FastPath,
-    HllRegisterDelta, HyperLogLog, HyperLogLogP12, HyperLogLogP16, L2HH,
+    HllRegisterDelta, HyperLogLog, HyperLogLogP12, HyperLogLogP16,
     OCTO_COUNT_MIN_DEFAULT_THRESHOLD, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
     OCTO_HLL_DEFAULT_THRESHOLD, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker, RegularPath,
     UnivMon, UnivMonCellDelta, UnivMonDeltaFidelity, UnivMonOctoAggregator, UnivMonOctoPlan,
@@ -2816,7 +2816,7 @@ fn a_flat_threshold_starves_the_deep_univmon_layers() {
     });
 
     let nonzero = |sketch: &UnivMon, layer: usize| -> usize {
-        let L2HH::COUNT(inner) = &sketch.layer_sketches[layer];
+        let inner = &sketch.layer_sketches[layer];
         (0..inner.rows())
             .flat_map(|r| (0..inner.cols()).map(move |c| (r, c)))
             .filter(|(r, c)| inner.as_storage().query_one_counter(*r, *c) != 0)
