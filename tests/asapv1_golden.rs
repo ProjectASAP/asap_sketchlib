@@ -21,9 +21,9 @@ use asap_sketchlib::{
     TupleKey, UnivMonQ, UnivMonQConfig, UnivMonTwoTier,
 };
 use asap_sketchlib::{
-    Classic, CocoBucket, CocoSketch, CountSketch, CountMinSketch, CountMinSketchDelta,
-    CountMinSketchWithHeap, CountMinSketchWithHeapDelta, CountMinSketchWithSpaceSaving,
-    CountSketchCellDelta, CountSketchWithHeap, CountSketchWithHeapDelta, CountSketchWithL2Norm,
+    Classic, CocoBucket, CocoSketch, CountMinSketch, CountMinSketchDelta, CountMinSketchWithHeap,
+    CountMinSketchWithHeapDelta, CountMinSketchWithSpaceSaving, CountSketch, CountSketchCellDelta,
+    CountSketchWithHeap, CountSketchWithHeapDelta, CountSketchWithL2Norm,
     CountSketchWithSpaceSaving, DataInput, DdSketch, DdSketchDelta, ElasticSketch, Ertl, FastPath,
     HeapCount, HeavyBucket, HllRegistersP14, Hydra, HyperLogLog, HyperLogLogDelta,
     HyperLogLogHipP12, HyperLogLogHipP14, HyperLogLogP12, HyperLogLogP14, Kll, KllDynamic, L2HH,
@@ -396,9 +396,10 @@ fn cs_i64_regular_2x4_matches_golden() {
 fn cs_i64_fast_2x4_matches_golden() {
     let want = decode_hex(GOLDEN_CS_FAST);
 
-    let sketch = CountSketch::<Vector2D<i64>, FastPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
-        CS_VALS[r][c]
-    }));
+    let sketch =
+        CountSketch::<Vector2D<i64>, FastPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
+            CS_VALS[r][c]
+        }));
     let got = sketch.to_asapv1().expect("serialize");
     assert_eq!(got, want, "Count Sketch i64/fast bytes diverge from golden");
 
@@ -558,7 +559,10 @@ fn check_cmsheap_i64_golden(golden: &str, heap_size: usize, entries: &[(OwnedDat
 
     let decoded = CmsHeapI64::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = I64_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.count_min_sketch().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(
+        decoded.count_min_sketch().as_storage().as_slice(),
+        flat.as_slice()
+    );
     assert_heap(decoded.heap(), heap_size, entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -599,7 +603,10 @@ fn cmsheap_i32_fast_2x3_i64keys_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<i32> = I64_VALS.iter().flatten().map(|&v| v as i32).collect();
-    assert_eq!(decoded.count_min_sketch().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(
+        decoded.count_min_sketch().as_storage().as_slice(),
+        flat.as_slice()
+    );
     assert_heap(decoded.heap(), 3, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -627,7 +634,10 @@ fn cmsheap_f64_fast_2x3_f64keys_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<f64> = F64_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.count_min_sketch().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(
+        decoded.count_min_sketch().as_storage().as_slice(),
+        flat.as_slice()
+    );
     assert_heap(decoded.heap(), 6, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -650,7 +660,10 @@ fn cmsheap_i64_regular_2x3_delta_matches_golden() {
     let mut state = CmsHeapI64::from_asapv1(&decode_hex(GOLDEN_CMSHEAP_STR)).expect("state");
     state.merge_delta(&decoded).expect("merge");
     let expected = [127, 0, 94, 128, -32469, 4295032832];
-    assert_eq!(state.count_min_sketch().as_storage().as_slice(), expected.as_slice());
+    assert_eq!(
+        state.count_min_sketch().as_storage().as_slice(),
+        expected.as_slice()
+    );
     assert_heap(state.heap(), 5, &entries);
 }
 
@@ -670,7 +683,10 @@ fn csheap_i64_regular_2x4_strkeys_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.count_sketch().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(
+        decoded.count_sketch().as_storage().as_slice(),
+        flat.as_slice()
+    );
     assert_heap(decoded.heap(), 5, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -695,7 +711,10 @@ fn csheap_i64_regular_2x4_i64tie_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.count_sketch().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(
+        decoded.count_sketch().as_storage().as_slice(),
+        flat.as_slice()
+    );
     assert_heap(decoded.heap(), 6, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -721,7 +740,10 @@ fn csheap_f64_fast_2x4_strkeys_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<f64> = CS_F64_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.count_sketch().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(
+        decoded.count_sketch().as_storage().as_slice(),
+        flat.as_slice()
+    );
     assert_heap(decoded.heap(), 4, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
@@ -747,7 +769,10 @@ fn csheap_i64_regular_2x4_delta_matches_golden() {
     .expect("state");
     state.merge_delta(&decoded).expect("merge");
     let expected = [-32, -1, 383, 65536, -130, -33, 32767, -4294967297];
-    assert_eq!(state.count_sketch().as_storage().as_slice(), expected.as_slice());
+    assert_eq!(
+        state.count_sketch().as_storage().as_slice(),
+        expected.as_slice()
+    );
     assert_heap(state.heap(), 5, &entries);
 }
 
@@ -837,7 +862,10 @@ fn csheap_i64_regular_2x4_tuplekeys_matches_golden() {
 
     let decoded = Heap::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.count_sketch().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(
+        decoded.count_sketch().as_storage().as_slice(),
+        flat.as_slice()
+    );
     assert_heap(decoded.heap(), 6, &entries);
     assert_tuple_keys(decoded.heap(), &named);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
@@ -889,7 +917,10 @@ fn cmsspacesaving_i64_regular_2x3_strkeys_matches_golden() {
 
     let decoded = Sketch::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = I64_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.count_min_sketch().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(
+        decoded.count_min_sketch().as_storage().as_slice(),
+        flat.as_slice()
+    );
     let entries = [
         (DataInput::Str("hot"), 300, 0),
         (DataInput::Str("warm"), 128, 0),
@@ -916,7 +947,10 @@ fn csspacesaving_f64_fast_2x4_i64keys_matches_golden() {
 
     let decoded = Sketch::from_asapv1(&want).expect("decode");
     let flat: Vec<f64> = CS_F64_VALS.iter().flatten().copied().collect();
-    assert_eq!(decoded.count_sketch().as_storage().as_slice(), flat.as_slice());
+    assert_eq!(
+        decoded.count_sketch().as_storage().as_slice(),
+        flat.as_slice()
+    );
     let entries = [
         (DataInput::I64(-1), 65536, 0),
         (DataInput::I64(7), 6, 5),
@@ -1635,7 +1669,11 @@ fn hydra_cs_2x2_counter_2x2_matches_golden() {
     let cells = CELLS
         .iter()
         .map(|m| {
-            HydraCounter::CountSketch(CountSketch::from_storage(Vector2D::from_fn(2, 2, |r, c| m[r][c])))
+            HydraCounter::CountSketch(CountSketch::from_storage(Vector2D::from_fn(
+                2,
+                2,
+                |r, c| m[r][c],
+            )))
         })
         .collect();
     let prototype = HydraCounter::CountSketch(CountSketch::with_dimensions(2, 2));
@@ -1674,7 +1712,11 @@ fn hydra_univmon_1x2_matches_golden() {
     let fresh = || UnivMon::new(2, 1, 2, 2);
     let mut um = fresh();
     for (layer, col, value) in [(0usize, 0u32, 5i32), (0, 1, -3), (1, 1, 2)] {
-        um.layer_sketches[layer].apply_delta(CountSketchCellDelta { row: 0, col, count: value });
+        um.layer_sketches[layer].apply_delta(CountSketchCellDelta {
+            row: 0,
+            col,
+            count: value,
+        });
     }
     um.layer_heaps[0].update(&DataInput::U64(7), 5);
     um.layer_heaps[0].update(&DataInput::U64(300), 2);
@@ -1895,7 +1937,7 @@ fn uniform_sampling_r0p25_matches_golden() {
 }
 
 // ---------------------------------------------------------------------------
-// UnivMon Optimized: 5 layers, elephant tier 2 layers of 3x8, mouse tier 1x4,
+// Two-tier UnivMon: 5 layers, elephant tier 2 layers of 3x8, mouse tier 1x4,
 // heap capacity 6. Cells through `apply_delta`, heap entries through `update`
 // -> serialize == golden, round-trips.
 // ---------------------------------------------------------------------------

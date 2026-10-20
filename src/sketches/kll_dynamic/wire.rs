@@ -14,12 +14,12 @@
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 
-use crate::message_pack_format::kind;
 use crate::Vector1D;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
 use crate::sketches::kll::{
-    Coin, KllCoinWire, KllPayload, KllWireItem, kll_metadata,
-    split_and_validate_meta, validate_kll_payload,
+    Coin, KllCoinWire, KllPayload, KllWireItem, kll_metadata, split_and_validate_meta,
+    validate_kll_payload,
 };
 
 use super::{CAPACITY_CACHE_LEN, KllDynamic};
@@ -44,7 +44,12 @@ where
             rmp_serde::to_vec_named(&kll_metadata::<T>(self.k as u32, self.m as u32, None))?;
         let (state, bit_cache, remaining_bits) = self.coin.to_wire();
         let payload = rmp_serde::to_vec(&KllPayload {
-            levels: self.level_bounds_top_down.as_slice().iter().map(|&l| l as u32).collect(),
+            levels: self
+                .level_bounds_top_down
+                .as_slice()
+                .iter()
+                .map(|&l| l as u32)
+                .collect(),
             items: self.items.as_slice().to_vec(),
             coin: KllCoinWire {
                 state,
@@ -70,7 +75,9 @@ where
         } = payload;
         let mut sketch = KllDynamic {
             items: Vector1D::from_vec(items),
-            level_bounds_top_down: Vector1D::from_vec(levels.into_iter().map(|l| l as usize).collect()),
+            level_bounds_top_down: Vector1D::from_vec(
+                levels.into_iter().map(|l| l as usize).collect(),
+            ),
             k: meta.k as usize,
             m: meta.m as usize,
             num_levels,
@@ -89,8 +96,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::message_pack_format::kind;
     use crate::message_pack_format::envelope;
+    use crate::message_pack_format::kind;
     use crate::sketches::kll_dynamic::KllDynamic;
 
     fn build_dynamic(k: i32, n: u64) -> KllDynamic<f64> {

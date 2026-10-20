@@ -10,14 +10,12 @@ use std::collections::HashSet;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::portable::delta_set_aggregator::SetAggregatorDelta;
 use crate::message_pack_format::wire_key::WireString;
 
 use super::SetAggregator;
-
-
 
 /// The metadata map both kinds carry, a msgpack **map** (`to_vec_named`).
 #[derive(Debug, PartialEq, Serialize, Deserialize)]

@@ -27,7 +27,7 @@ use common::specs::{
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
-    CocoSketch, CountSketch, CountMinSketch, CountMinSketchFold, CountMinSketchFoldConfig,
+    CocoSketch, CountMinSketch, CountMinSketchFold, CountMinSketchFoldConfig, CountSketch,
     CountSketchFold, CountSketchFoldConfig, CountSketchWithL2Norm, DataInput, DdSketch,
     EhBucketSketch, ElasticSketch, Ertl, ExponentialHistogram, FastPath, HyperLogLog, Kll,
     KllConfig, SketchNorm, SketchPool, TumblingWindow, UnivMon, UnivMonQ, UnivMonQConfig, Vector2D,
@@ -709,7 +709,9 @@ fn every_eh_variant_can_merge_into_its_own_kind() {
         ),
         (
             "CS",
-            EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 256)),
+            EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+                3, 256,
+            )),
         ),
         (
             "COCO",

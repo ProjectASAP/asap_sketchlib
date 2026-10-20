@@ -376,7 +376,8 @@ mod tests {
 
         let mut cms_heap = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(2, 4, 3);
         assert!(cms_heap.to_asapv1().is_ok());
-        *cms_heap.count_min_sketch_mut() = cms_heap.count_min_sketch().clone().with_admission_rate(0.5);
+        *cms_heap.count_min_sketch_mut() =
+            cms_heap.count_min_sketch().clone().with_admission_rate(0.5);
         assert!(cms_heap.to_asapv1().is_err());
 
         let mut cs_heap = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(2, 4, 3);

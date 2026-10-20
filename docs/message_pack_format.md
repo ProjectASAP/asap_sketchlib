@@ -132,7 +132,7 @@ Converted:
 - **Hydra** (`src/sketch_framework/hydra/wire.rs`, `0x07 0x00`-`0x07 0x04`) — one
   `kind_id` per counter variant; the cells' state tiles or nests one array.
 - **UnivMon** (`src/sketch_framework/univmon/wire.rs`, `0x10 0x00`) and
-  **UnivMon Optimized** (`src/sketch_framework/univmon_two_tier/wire.rs`,
+  **Two-tier UnivMon** (`src/sketch_framework/univmon_two_tier/wire.rs`,
   `0x11 0x00`) — one payload shape, two metadata schemas.
 - **UnivMon-Q** (`src/sketch_framework/univmon_q/wire.rs`, `0x1a 0x00`) — the
   levels' counters, candidates, extrema and coordinated occurrence sample.

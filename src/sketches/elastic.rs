@@ -1324,7 +1324,10 @@ mod tests {
         assert_eq!(sk.heavy[stale_idx].vote_pos, 1);
         assert!(!sk.stale_at(stale_idx));
         // the displaced copy was not the flow's live entry, which still answers
-        assert!(sk.estimate(displaced.clone()) > 0, "{displaced} lost its mass");
+        assert!(
+            sk.estimate(displaced.clone()) > 0,
+            "{displaced} lost its mass"
+        );
     }
 
     #[test]

@@ -10,7 +10,9 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use asap_sketchlib::{CountSketch, CountMinSketch, DataInput, FastPath, Kll, RegularPath, Vector2D};
+use asap_sketchlib::{
+    CountMinSketch, CountSketch, DataInput, FastPath, Kll, RegularPath, Vector2D,
+};
 
 const N_ITEMS: usize = 200_000;
 const ESTIMATE_N: usize = 100_000;

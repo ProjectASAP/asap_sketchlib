@@ -26,10 +26,7 @@ use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, hash64_seeded};
 // ---------------------------------------------------------------------------
 
 use crate::message_pack_format::envelope;
-use crate::sketches::hll::{
-    HllMetadata, HllPayloadHip, HllPayloadPlain,
-    standard_hll_metadata,
-};
+use crate::sketches::hll::{HllMetadata, HllPayloadHip, HllPayloadPlain, standard_hll_metadata};
 
 /// Retained only for `test_msgpack_round_trip`'s magic-prefix assertion.
 #[cfg(test)]

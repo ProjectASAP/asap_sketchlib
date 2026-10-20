@@ -393,7 +393,9 @@ fn cdf_drift_kll(left: &Kll<i64>, right: &Kll<i64>, truth: &Truth) -> f64 {
     truth
         .probes
         .iter()
-        .map(|&(value, _)| (left.normalized_rank(value as f64) - right.normalized_rank(value as f64)).abs())
+        .map(|&(value, _)| {
+            (left.normalized_rank(value as f64) - right.normalized_rank(value as f64)).abs()
+        })
         .fold(0.0, f64::max)
 }
 

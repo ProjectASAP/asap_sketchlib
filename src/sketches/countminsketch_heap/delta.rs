@@ -8,10 +8,10 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::COUNT_MIN_WITH_HEAP_DELTA;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::delta::{add_cells, check_cells};
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::COUNT_MIN_WITH_HEAP_DELTA;
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode};
 use crate::{
     DefaultXxHasher, HashProfile, HeapCounter, RegularPath, SketchHasher, TopKHeap, Vector2D,
@@ -22,7 +22,6 @@ use super::heap_wire::{
     DeltaCells, check_geometry, decode_metadata, decode_payload, encode_metadata, encode_payload,
     heap_entries, rebuild_heap, wire_key_type,
 };
-
 
 /// A change to a `rows x cols` [`CountMinSketchWithHeap`] state: each value of `deltas` is
 /// added to the cell its position names in `indices`, a row-major index
@@ -91,7 +90,11 @@ where
             deltas: self.deltas.clone(),
         };
         let payload = encode_payload(key_type, cells, &entries)?;
-        Ok(envelope::encode(kind::COUNT_MIN_WITH_HEAP_DELTA, &metadata, &payload))
+        Ok(envelope::encode(
+            kind::COUNT_MIN_WITH_HEAP_DELTA,
+            &metadata,
+            &payload,
+        ))
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.

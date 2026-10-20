@@ -7,7 +7,7 @@
 //! and `candidate_complete` fields directly without widening any field
 //! visibility. See `docs/asapv1_wire_format.md`.
 //!
-//! UnivMon Optimized is one algorithm — a single kind_id `0x11 0x00`. It
+//! Two-tier UnivMon is one algorithm — a single kind_id `0x11 0x00`. It
 //! shares [`UnivMon`](crate::UnivMon)'s payload
 //! (`[counts, l2, heap_lens, keys, heap_counts, candidate_complete,
 //! bucket_size, update_mode]`) and differs only in its metadata: the two-tier
@@ -21,9 +21,9 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::UNIVMON_TWO_TIER;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::UNIVMON_TWO_TIER;
 use crate::sketch_framework::univmon::wire::{
     check_layers, decode_pyramid, encode_pyramid, pyramid_key_type, pyramid_state, rebuild_layers,
     update_mode_of, update_mode_tag,
@@ -32,7 +32,6 @@ use crate::sketches::countminsketch_heap::heap_wire::check_empty_key_type;
 use crate::{DefaultXxHasher, HashProfile};
 
 use super::UnivMonTwoTier;
-
 
 /// UnivMonTwoTier descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
@@ -196,7 +195,11 @@ impl UnivMonTwoTier {
             key_type,
         ))?;
         let payload = encode_pyramid(key_type, state)?;
-        Ok(envelope::encode(kind::UNIVMON_TWO_TIER, &metadata, &payload))
+        Ok(envelope::encode(
+            kind::UNIVMON_TWO_TIER,
+            &metadata,
+            &payload,
+        ))
     }
 
     /// Deserializes a pyramid from an ASAPv1 MessagePack envelope. The layout

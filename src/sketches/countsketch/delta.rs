@@ -7,17 +7,16 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::COUNT_SKETCH_DELTA;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::{add_cells, check_cells};
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::COUNT_SKETCH_DELTA;
 use crate::message_pack_format::wire_key::exact_vec;
 use crate::{DefaultXxHasher, HashProfile, RegularPath, SketchHasher, Vector2D};
 
 use super::wire::{CsWireCounter, CsWireMode, check_geometry, decode_metadata, encode_metadata};
 use super::{CountSketch, CountSketchCounter};
-
 
 /// A change to a `rows x cols` [`CountSketch`] state: each value of `deltas` is added
 /// to the cell its position names in `indices`, a row-major index
@@ -84,7 +83,11 @@ where
             indices: self.indices.clone(),
             deltas: self.deltas.clone(),
         })?;
-        Ok(envelope::encode(kind::COUNT_SKETCH_DELTA, &metadata, &payload))
+        Ok(envelope::encode(
+            kind::COUNT_SKETCH_DELTA,
+            &metadata,
+            &payload,
+        ))
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.

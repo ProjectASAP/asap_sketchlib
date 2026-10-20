@@ -212,7 +212,8 @@ fn main() {
     println!(
         "  Q reserved memory={:.3} MiB; UnivMon counters alone={:.3} MiB before heap metadata.",
         summaries[0].memory_mib,
-        (base_config.layers * base_config.rows * base_config.top_layer_cols * size_of::<i64>()) as f64
+        (base_config.layers * base_config.rows * base_config.top_layer_cols * size_of::<i64>())
+            as f64
             / (1024.0 * 1024.0),
     );
     println!(
@@ -368,7 +369,12 @@ fn evaluate_trial(
 }
 
 fn new_univmon(config: UnivMonQConfig, candidates: usize) -> UnivMon {
-    UnivMon::new(candidates, config.rows, config.top_layer_cols, config.layers)
+    UnivMon::new(
+        candidates,
+        config.rows,
+        config.top_layer_cols,
+        config.layers,
+    )
 }
 
 fn build_shards(data: &[i64], config: UnivMonQConfig, seed: u64) -> Vec<UnivMonQ> {
@@ -645,12 +651,15 @@ fn validate(sketch: &UnivMonQ, truth: &Truth) -> usize {
     violations += cdf
         .windows(2)
         .filter(|pair| {
-            !pair[0].value.total_cmp(&pair[1].value).is_lt() || pair[0].normalized_rank > pair[1].normalized_rank
+            !pair[0].value.total_cmp(&pair[1].value).is_lt()
+                || pair[0].normalized_rank > pair[1].normalized_rank
         })
         .count();
     violations += cdf
         .iter()
-        .filter(|point| !point.normalized_rank.is_finite() || !(0.0..=1.0).contains(&point.normalized_rank))
+        .filter(|point| {
+            !point.normalized_rank.is_finite() || !(0.0..=1.0).contains(&point.normalized_rank)
+        })
         .count();
     let quantiles = query.quantiles(&QUANTILES);
     violations += quantiles

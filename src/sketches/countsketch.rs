@@ -914,10 +914,11 @@ mod tests {
         sketch.update_weighted(&key, 1.5);
         assert_eq!(sketch.estimate(&key), 1.5);
 
-        let nan =
-            CountSketch::<Vector2D<f64>, RegularPath>::from_storage(Vector2D::from_fn(3, 4, |_, _| {
-                f64::NAN
-            }));
+        let nan = CountSketch::<Vector2D<f64>, RegularPath>::from_storage(Vector2D::from_fn(
+            3,
+            4,
+            |_, _| f64::NAN,
+        ));
         assert!(nan.estimate(&key).is_nan());
     }
 

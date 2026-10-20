@@ -31,7 +31,7 @@
 //! * [`HashSketchEnsemble::cardinality`] — distinct-count estimate (HLL only).
 
 use crate::{
-    Classic, CountSketch, CountMinSketch, DataInput, DefaultXxHasher, Ertl, FastPath, HyperLogLog,
+    Classic, CountMinSketch, CountSketch, DataInput, DefaultXxHasher, Ertl, FastPath, HyperLogLog,
     HyperLogLogHip, MatrixHash, MatrixHashLayout, SketchHasher, Vector1D,
     hash_for_matrix_seeded_with_layout_generic, hash_layout_for_matrix,
     sketch_framework::sketch_catalog::{CountMinFastOps, CountSketchFastOps},
@@ -623,7 +623,8 @@ mod tests {
         ])
         .expect("single CMS");
 
-        let result = layer.push(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into());
+        let result =
+            layer.push(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into());
         assert!(result.is_ok());
         assert_eq!(layer.len(), 2);
     }
@@ -635,7 +636,8 @@ mod tests {
         ])
         .expect("single CMS");
 
-        let result = layer.push(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into());
+        let result =
+            layer.push(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into());
         assert!(result.is_err());
     }
 }

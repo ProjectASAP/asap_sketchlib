@@ -743,7 +743,9 @@ impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
             return None;
         }
         let target = (q * self.count() as f64).ceil().max(1.0) / self.count() as f64;
-        let index = self.cdf.partition_point(|point| point.normalized_rank < target);
+        let index = self
+            .cdf
+            .partition_point(|point| point.normalized_rank < target);
         self.cdf
             .get(index.min(self.cdf.len().saturating_sub(1)))
             .map(|point| point.value)
@@ -2134,7 +2136,8 @@ mod tests {
         assert!(sketch.layers.iter().any(|level| level.ever_evicted));
         let query = sketch.prepare_queries();
         assert!(query.cdf().windows(2).all(|points| {
-            points[0].value.total_cmp(&points[1].value).is_lt() && points[0].normalized_rank <= points[1].normalized_rank
+            points[0].value.total_cmp(&points[1].value).is_lt()
+                && points[0].normalized_rank <= points[1].normalized_rank
         }));
         assert_eq!(query.cdf().last().unwrap().normalized_rank, 1.0);
 

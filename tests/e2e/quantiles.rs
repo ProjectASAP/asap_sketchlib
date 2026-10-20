@@ -1120,7 +1120,11 @@ fn univmonq_ordered_queries_satisfy_the_documented_cdf_and_rank_bounds() {
             let n = q.count() as f64;
             let view = q.prepare_queries();
             let diag = view.ordered_query_diagnostics();
-            let estimated: Vec<(f64, f64)> = view.cdf().iter().map(|p| (p.value, p.normalized_rank)).collect();
+            let estimated: Vec<(f64, f64)> = view
+                .cdf()
+                .iter()
+                .map(|p| (p.value, p.normalized_rank))
+                .collect();
 
             let gate = view.estimate_f2() / (n * n);
             let threshold = 1.0 / config.ordered_samples as f64;

@@ -31,14 +31,13 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::message_pack_format::kind::COUNT_SKETCH_WITH_L2_NORM;
-use crate::message_pack_format::kind;
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::COUNT_SKETCH_WITH_L2_NORM;
 use crate::{HashProfile, SketchHasher, Vector1D, Vector2D};
 
-use super::{CountSketchWithL2Norm};
-
+use super::CountSketchWithL2Norm;
 
 /// CountSketchWithL2Norm descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
@@ -227,7 +226,11 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
             counts: counts.to_vec(),
             l2: l2.to_vec(),
         })?;
-        Ok(envelope::encode(kind::COUNT_SKETCH_WITH_L2_NORM, &metadata, &payload))
+        Ok(envelope::encode(
+            kind::COUNT_SKETCH_WITH_L2_NORM,
+            &metadata,
+            &payload,
+        ))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The
@@ -340,7 +343,10 @@ mod tests {
             sketch.as_storage().as_slice(),
             decoded.as_storage().as_slice()
         );
-        assert_eq!(sketch.row_l2_squared.as_slice(), decoded.row_l2_squared.as_slice());
+        assert_eq!(
+            sketch.row_l2_squared.as_slice(),
+            decoded.row_l2_squared.as_slice()
+        );
         assert_eq!(sketch.l2(), decoded.l2());
     }
 

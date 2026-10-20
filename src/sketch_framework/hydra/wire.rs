@@ -44,22 +44,23 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::{HYDRA_COUNT_MIN, HYDRA_COUNT_SKETCH, HYDRA_HLL, HYDRA_KLL, HYDRA_UNIVMON};
-use crate::message_pack_format::kind;
 use crate::common::hash::check_matrix_rows;
 use crate::input::HydraCounter;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::{
+    HYDRA_COUNT_MIN, HYDRA_COUNT_SKETCH, HYDRA_HLL, HYDRA_KLL, HYDRA_UNIVMON,
+};
 use crate::message_pack_format::wire_key::exact_vec;
 use crate::sketch_framework::univmon::wire::{PyramidPayload, UnivMonMetadata, univmon_metadata};
 use crate::sketches::countminsketch_heap::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
 use crate::{
-    CountSketch, CountMinSketch, DefaultXxHasher, Ertl, FastPath, HashProfile, HllRegistersP14,
+    CountMinSketch, CountSketch, DefaultXxHasher, Ertl, FastPath, HashProfile, HllRegistersP14,
     HyperLogLog, Kll, UnivMon, Vector2D,
 };
 
 use super::{Hydra, KeySchema};
-
 
 /// Metadata `cell_counter_type`: both matrix counters are `Vector2D<i32>`, carried
 /// at their own width.
@@ -70,7 +71,6 @@ const COUNTER_MODE: &str = "fast";
 
 /// Metadata `cell_item_type`: the KLL counter retains `f64` samples.
 const COUNTER_ITEM_TYPE: &str = "f64";
-
 
 /// The grid geometry and key columns every Hydra metadata carries.
 struct HydraGrid {
@@ -870,7 +870,9 @@ impl Hydra {
             rows: rows,
             cols: cols,
             cells: sketches,
-            prototype: HydraCounter::CountSketch(CountSketch::with_dimensions(cell_rows, cell_cols)),
+            prototype: HydraCounter::CountSketch(CountSketch::with_dimensions(
+                cell_rows, cell_cols,
+            )),
             schema: schema_of(&meta.schema)?,
         })
     }
@@ -1191,7 +1193,9 @@ mod tests {
     }
 
     fn cs_counter() -> HydraCounter {
-        HydraCounter::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(2, 16))
+        HydraCounter::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+            2, 16,
+        ))
     }
 
     fn cm_grid() -> Hydra {
@@ -1441,8 +1445,14 @@ mod tests {
                 kind::HYDRA_KLL,
                 kll_grid().to_asapv1().expect("serialize KLL"),
             ),
-            (kind::HYDRA_COUNT_MIN, cm_grid().to_asapv1().expect("serialize CM")),
-            (kind::HYDRA_COUNT_SKETCH, cs_grid().to_asapv1().expect("serialize CS")),
+            (
+                kind::HYDRA_COUNT_MIN,
+                cm_grid().to_asapv1().expect("serialize CM"),
+            ),
+            (
+                kind::HYDRA_COUNT_SKETCH,
+                cs_grid().to_asapv1().expect("serialize CS"),
+            ),
             (
                 kind::HYDRA_HLL,
                 hll_grid().to_asapv1().expect("serialize HLL"),

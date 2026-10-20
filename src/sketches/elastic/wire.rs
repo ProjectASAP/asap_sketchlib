@@ -36,15 +36,14 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::message_pack_format::kind::ELASTIC;
-use crate::message_pack_format::kind;
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::ELASTIC;
 use crate::{CountMinSketch, HashProfile, SketchHasher, Vector2D};
 
 use super::{ElasticSketch, HeavyBucket};
-
 
 /// Metadata `light_counter_type`: the light layer is `Vector2D<i32>`, carried
 /// at its own width.
@@ -642,7 +641,10 @@ mod tests {
             sketch.estimate(primary.to_string()),
             decoded.estimate(primary.to_string())
         );
-        assert_eq!(sketch.estimate(secondary.clone()), decoded.estimate(secondary));
+        assert_eq!(
+            sketch.estimate(secondary.clone()),
+            decoded.estimate(secondary)
+        );
     }
 
     /// Votes and light counters are signed on the wire and round-trip

@@ -46,7 +46,7 @@ use crate::sketches::countminsketch_heap::CountMinSketchWithHeap;
 use crate::sketches::countsketch_heap::{CountSketchWithHeap, CountSketchWithL2Norm};
 use crate::sketches::elastic::{ElasticSketch, LAMBDA};
 use crate::{
-    Classic, CountSketch, CountMinSketch, CountMinSketchCellDelta, CountSketchCellDelta, DataInput,
+    Classic, CountMinSketch, CountMinSketchCellDelta, CountSketch, CountSketchCellDelta, DataInput,
     DdSketch, HllRegisterDelta, HyperLogLog, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
     OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, OCTO_HLL_DEFAULT_THRESHOLD, OwnedDataInput, RegularPath,
     UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon, UnivMonCellDelta, Vector2D, hash64_seeded,
@@ -493,7 +493,8 @@ impl CountSketchWithL2NormWorker {
     ) {
         let threshold = threshold.clamp(1, OCTO_MAX_PROMOTION_THRESHOLD) as u8;
         for row in 0..self.rows {
-            let (col, sign) = CountSketchWithL2Norm::cell_for_row(hashed, row, self.cols, self.mask_bits);
+            let (col, sign) =
+                CountSketchWithL2Norm::cell_for_row(hashed, row, self.cols, self.mask_bits);
             let cell = &mut self.counters[row * self.cols + col];
             *cell += sign as i8;
             if cell.unsigned_abs() >= threshold {
@@ -2073,15 +2074,19 @@ impl OctoWorker for UnivMonOctoWorker {
         {
             let layer_threshold = univmon_layer_threshold(threshold, layer);
             let key = &payload.key;
-            self.layer_sketches[layer].update_emit_delta_with_hash(hashed, layer_threshold, &mut |delta| {
-                emit(UnivMonCellDelta {
-                    layer: layer as u32,
-                    key: key.clone(),
-                    cell: delta,
-                    worker_id,
-                    total_weight,
-                })
-            });
+            self.layer_sketches[layer].update_emit_delta_with_hash(
+                hashed,
+                layer_threshold,
+                &mut |delta| {
+                    emit(UnivMonCellDelta {
+                        layer: layer as u32,
+                        key: key.clone(),
+                        cell: delta,
+                        worker_id,
+                        total_weight,
+                    })
+                },
+            );
         }
     }
 }

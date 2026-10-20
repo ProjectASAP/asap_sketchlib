@@ -22,10 +22,10 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::COUNT_SKETCH_WITH_HEAP;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::COUNT_SKETCH_WITH_HEAP;
 use crate::sketches::countminsketch_heap::heap_wire::{
     decode_metadata, decode_payload, encode_metadata, encode_payload, heap_entries, rebuild_heap,
     wire_key_type,
@@ -34,7 +34,6 @@ use crate::sketches::countsketch::{CsWireCounter, CsWireMode};
 use crate::{CountSketch, HashProfile, SketchHasher, Vector2D};
 
 use super::{CountSketchHeapCounter, CountSketchWithHeap};
-
 
 // Wire serialization for the canonical CountSketchWithHeap configs only. `wire` is a
 // descendant of the sketch module, so this impl reads the private fields
@@ -85,7 +84,11 @@ where
             )));
         }
         let payload = encode_payload(key_type, counts.to_vec(), &entries)?;
-        Ok(envelope::encode(kind::COUNT_SKETCH_WITH_HEAP, &metadata, &payload))
+        Ok(envelope::encode(
+            kind::COUNT_SKETCH_WITH_HEAP,
+            &metadata,
+            &payload,
+        ))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The matrix
@@ -218,7 +221,14 @@ mod tests {
             sketch.count_sketch().as_storage().as_slice(),
             decoded.count_sketch().as_storage().as_slice()
         );
-        assert!(decoded.count_sketch().as_storage().as_slice().iter().any(|&v| v < 0));
+        assert!(
+            decoded
+                .count_sketch()
+                .as_storage()
+                .as_slice()
+                .iter()
+                .any(|&v| v < 0)
+        );
         assert!(decoded.heap().find(&DataInput::Str("flow")).is_some());
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
     }

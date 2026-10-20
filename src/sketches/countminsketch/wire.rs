@@ -20,17 +20,16 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::COUNT_MIN;
-use crate::message_pack_format::kind;
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::DeltaCounter;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::COUNT_MIN;
 use crate::message_pack_format::wire_key::exact_vec;
 use crate::{FastPath, HashProfile, RegularPath, SketchHasher, Vector2D};
 
 use super::CountMinSketch;
-
 
 /// Names the wire counter type carried in the metadata (`counter_type`).
 /// Implemented only for the wire-eligible counter types.
@@ -427,8 +426,9 @@ mod tests {
     /// Serializing it must fail rather than emit bytes the decoder refuses.
     #[test]
     fn count_min_rejects_serializing_an_unfilled_matrix() {
-        let sketch =
-            CountMinSketch::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::<i64>::unfilled(2, 4));
+        let sketch = CountMinSketch::<Vector2D<i64>, RegularPath>::from_storage(
+            Vector2D::<i64>::unfilled(2, 4),
+        );
         assert!(
             sketch.to_asapv1().is_err(),
             "a matrix whose cell count disagrees with its dimensions must not serialize"

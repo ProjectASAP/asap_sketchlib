@@ -56,7 +56,7 @@ use crate::common;
 use common::specs::{CountMinSpec, SIMULTANEOUS_LEVEL, SamplingConfidenceSpec, Tally};
 use common::{FreqTruth, zipf_u64};
 
-use asap_sketchlib::{CountSketch, CountMinSketch, DataInput, FastPath, NitroBatch, Vector2D};
+use asap_sketchlib::{CountMinSketch, CountSketch, DataInput, FastPath, NitroBatch, Vector2D};
 
 /// Every rate the public constructors accept that the suite covers.
 ///
@@ -1067,8 +1067,10 @@ fn count_sketch_seeded_nitro_sampling_is_reproducible() {
     const RATE: f64 = 0.25;
     let (stream, _) = integration_stream();
     let build = |seed: u64| {
-        let mut sketch =
-            CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+        let mut sketch = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
+            INTEGRATION_ROWS,
+            INTEGRATION_COLS,
+        );
         sketch.enable_nitro_with_seed(RATE, seed);
         for k in &stream {
             sketch.nitro_update(&DataInput::U64(*k));

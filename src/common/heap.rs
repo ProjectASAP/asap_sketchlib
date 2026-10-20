@@ -543,9 +543,18 @@ mod tests {
     #[test]
     fn test_custom_struct_with_ord() {
         let mut heap = CommonHeap::<HeapEntry, RetainLargest>::new_min(3);
-        heap.push(HeapEntry::from_input(DataInput::String("five".to_owned()), 5));
-        heap.push(HeapEntry::from_input(DataInput::String("three".to_owned()), 3));
-        heap.push(HeapEntry::from_input(DataInput::String("seven".to_owned()), 7));
+        heap.push(HeapEntry::from_input(
+            DataInput::String("five".to_owned()),
+            5,
+        ));
+        heap.push(HeapEntry::from_input(
+            DataInput::String("three".to_owned()),
+            3,
+        ));
+        heap.push(HeapEntry::from_input(
+            DataInput::String("seven".to_owned()),
+            7,
+        ));
 
         assert_eq!(heap.peek().map(|item| item.count), Some(3));
     }

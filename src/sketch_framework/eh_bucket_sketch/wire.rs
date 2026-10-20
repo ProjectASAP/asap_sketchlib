@@ -30,14 +30,12 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::EH_BUCKET_SKETCH;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::EH_BUCKET_SKETCH;
 
 use super::EhBucketSketch;
-
-
 
 /// The registry name of a nested kind_id. Error messages only: encoding and
 /// decoding dispatch on the bytes.
@@ -146,7 +144,9 @@ pub(crate) fn sketch_state(sketch: &EhBucketSketch) -> Result<SketchState, RmpEn
     match sketch {
         EhBucketSketch::CountMinSketch(s) => triple(kind::COUNT_MIN, &s.to_asapv1()?),
         EhBucketSketch::CocoSketch(s) => triple(kind::COCO, &s.to_asapv1()?),
-        EhBucketSketch::CountSketchWithL2Norm(s) => triple(kind::COUNT_SKETCH_WITH_L2_NORM, &s.to_asapv1()?),
+        EhBucketSketch::CountSketchWithL2Norm(s) => {
+            triple(kind::COUNT_SKETCH_WITH_L2_NORM, &s.to_asapv1()?)
+        }
         EhBucketSketch::CountSketch(s) => triple(kind::COUNT_SKETCH, &s.to_asapv1()?),
         EhBucketSketch::DdSketch(s) => triple(kind::DDSKETCH, &s.to_asapv1()?),
         EhBucketSketch::ElasticSketch(s) => triple(kind::ELASTIC, &s.to_asapv1()?),
@@ -185,9 +185,9 @@ fn rebuild_variant(triple: &SketchState) -> Result<EhBucketSketch, RmpDecodeErro
         kind::COUNT_SKETCH_WITH_L2_NORM => Ok(EhBucketSketch::CountSketchWithL2Norm(
             crate::CountSketchWithL2Norm::from_asapv1(&bytes)?,
         )),
-        kind::COUNT_SKETCH => Ok(EhBucketSketch::CountSketch(crate::CountSketch::from_asapv1(
-            &bytes,
-        )?)),
+        kind::COUNT_SKETCH => Ok(EhBucketSketch::CountSketch(
+            crate::CountSketch::from_asapv1(&bytes)?,
+        )),
         kind::DDSKETCH => Ok(EhBucketSketch::DdSketch(crate::DdSketch::from_asapv1(
             &bytes,
         )?)),
@@ -221,7 +221,11 @@ impl EhBucketSketch {
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata = rmp_serde::to_vec_named(&eh_sketch_list_metadata())?;
         let payload = rmp_serde::to_vec(&sketch_state(self)?)?;
-        Ok(envelope::encode(kind::EH_BUCKET_SKETCH, &metadata, &payload))
+        Ok(envelope::encode(
+            kind::EH_BUCKET_SKETCH,
+            &metadata,
+            &payload,
+        ))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The nested
@@ -250,9 +254,9 @@ pub(crate) mod tests {
     use super::*;
     use crate::sketch_framework::univmon::UnivMon;
     use crate::{
-        CountSketch, CountMinSketch, CountSketchWithL2Norm, DEFAULT_CANONICAL_SEED_INDEX, DataInput,
-        DdSketch, DefaultXxHasher, Ertl, FastPath, HashProfile, HyperLogLog, Kll, SketchHasher,
-        Vector2D,
+        CountMinSketch, CountSketch, CountSketchWithL2Norm, DEFAULT_CANONICAL_SEED_INDEX,
+        DataInput, DdSketch, DefaultXxHasher, Ertl, FastPath, HashProfile, HyperLogLog, Kll,
+        SketchHasher, Vector2D,
     };
 
     /// An input the named variant accepts. UnivMon's heaps hold one `OwnedDataInput`
@@ -278,9 +282,10 @@ pub(crate) mod tests {
         out.push(EhBucketSketch::CountSketchWithL2Norm(
             CountSketchWithL2Norm::with_dimensions(3, 256),
         ));
-        out.push(EhBucketSketch::CountSketch(
-            CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
-        ));
+        out.push(EhBucketSketch::CountSketch(CountSketch::<
+            Vector2D<i32>,
+            FastPath,
+        >::with_dimensions(3, 8)));
         out.push(EhBucketSketch::DdSketch(DdSketch::new(0.01)));
         out.push(EhBucketSketch::ElasticSketch(
             crate::ElasticSketch::with_heavy_and_light(8, 2, 256),

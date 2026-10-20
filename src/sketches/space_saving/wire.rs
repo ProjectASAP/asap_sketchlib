@@ -46,9 +46,9 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::SPACE_SAVING;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::SPACE_SAVING;
 use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HashProfile, OwnedDataInput, SketchHasher};
 
@@ -57,7 +57,6 @@ use std::collections::HashSet;
 use super::parts::emitted_order;
 use super::{SpaceSaving, SpaceSavingState, key_order};
 use crate::sketches::countminsketch_heap::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
-
 
 /// The metadata `key_type` naming a key's exact [`OwnedDataInput`] variant, or `None`
 /// for the 128-bit variants, which are not wire types.

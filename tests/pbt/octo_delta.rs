@@ -19,9 +19,9 @@ use std::collections::{HashMap, HashSet};
 use asap_sketchlib::octo_delta::DdSign;
 use asap_sketchlib::sketches::hll::HyperLogLogImpl;
 use asap_sketchlib::{
-    Classic, CocoDelta, CocoOctoAggregator, CocoSketch, CocoSketchWorker, CountSketch, CountMinSketch,
+    Classic, CocoDelta, CocoOctoAggregator, CocoSketch, CocoSketchWorker, CountMinSketch,
     CountMinSketchCellDelta, CountMinSketchOctoAggregator, CountMinSketchWithHeapOctoAggregator,
-    CountMinSketchWithHeapOctoPlan, CountMinSketchWorker, CountSketchCellDelta,
+    CountMinSketchWithHeapOctoPlan, CountMinSketchWorker, CountSketch, CountSketchCellDelta,
     CountSketchOctoAggregator, CountSketchWithHeapOctoAggregator, CountSketchWithL2Norm,
     CountSketchWithL2NormWorker, CountSketchWorker, DataInput, DdOctoAggregator, DdSketch,
     DdSketchBucketDelta, DdSketchWorker, ElasticDelta, ElasticOctoAggregator, ElasticSketch,

@@ -19,10 +19,10 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::COUNT_MIN_WITH_HEAP;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::COUNT_MIN_WITH_HEAP;
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode};
 use crate::{CountMinSketch, HashProfile, HeapCounter, SketchHasher, Vector2D};
 
@@ -31,7 +31,6 @@ use super::heap_wire::{
     decode_metadata, decode_payload, encode_metadata, encode_payload, heap_entries, rebuild_heap,
     wire_key_type,
 };
-
 
 // Wire serialization for the canonical CountMinSketchWithHeap configs only. `wire` is a
 // descendant of the sketch module, so this impl reads the private fields
@@ -77,7 +76,11 @@ where
             )));
         }
         let payload = encode_payload(key_type, counts.to_vec(), &entries)?;
-        Ok(envelope::encode(kind::COUNT_MIN_WITH_HEAP, &metadata, &payload))
+        Ok(envelope::encode(
+            kind::COUNT_MIN_WITH_HEAP,
+            &metadata,
+            &payload,
+        ))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The matrix

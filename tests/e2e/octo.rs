@@ -34,14 +34,14 @@ use crate::common;
 use asap_sketchlib::OCTO_DDSKETCH_DEFAULT_THRESHOLD;
 use asap_sketchlib::common::UNIVMON_BOTTOM_LAYER_SEED_INDEX;
 use asap_sketchlib::{
-    Classic, CountSketch, CountMinSketch, CountMinSketchCellDelta, CountSketchCellDelta,
+    Classic, CountMinSketch, CountMinSketchCellDelta, CountSketch, CountSketchCellDelta,
     CountSketchWithL2NormWorker, DataInput, DdSketch, DdSketchWorker, Ertl, FastPath,
     HllRegisterDelta, HyperLogLog, HyperLogLogP12, HyperLogLogP16, L2HH,
     OCTO_COUNT_MIN_DEFAULT_THRESHOLD, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
     OCTO_HLL_DEFAULT_THRESHOLD, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker, RegularPath,
     UnivMon, UnivMonCellDelta, UnivMonDeltaFidelity, UnivMonOctoAggregator, UnivMonOctoPlan,
-    UnivMonOctoWorker, Vector2D, hash64_seeded, hash128_seeded,
-    input_to_owned, univmon_layer_threshold,
+    UnivMonOctoWorker, Vector2D, hash64_seeded, hash128_seeded, input_to_owned,
+    univmon_layer_threshold,
 };
 use common::{FreqTruth, zipf_u64};
 use rand::SeedableRng;

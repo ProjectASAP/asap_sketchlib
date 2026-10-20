@@ -10,7 +10,7 @@
 //! below rate 1.0 are the ones sampling does not disturb.
 
 use crate::support::grid;
-use asap_sketchlib::{CountSketch, CountMinSketch, DataInput, FastPath, NitroBatch, Vector2D};
+use asap_sketchlib::{CountMinSketch, CountSketch, DataInput, FastPath, NitroBatch, Vector2D};
 use proptest::prelude::*;
 
 type CmTarget = CountMinSketch<Vector2D<i32>, FastPath>;

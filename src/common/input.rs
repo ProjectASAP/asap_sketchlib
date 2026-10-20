@@ -9,8 +9,8 @@ use std::{
 };
 
 use crate::{
-    CountSketch, CountMinSketch, CountSketchWithL2Norm, Ertl, FastPath, HeapCount, HyperLogLog, Kll,
-    MatrixHash, UnivMon, Vector2D,
+    CountMinSketch, CountSketch, CountSketchWithL2Norm, Ertl, FastPath, HeapCount, HyperLogLog,
+    Kll, MatrixHash, UnivMon, Vector2D,
 };
 
 /// Input wrapper for sketch APIs (supports primitive and borrowed values).
@@ -518,7 +518,9 @@ impl HydraCounter {
                 Ok(count.estimate(value))
             }
             (HydraCounter::Kll(kll), HydraQuery::Quantile(q)) => Ok(kll.quantile(*q)),
-            (HydraCounter::Kll(kll), HydraQuery::Cdf(value)) => Ok(kll.cdf().normalized_rank(*value)),
+            (HydraCounter::Kll(kll), HydraQuery::Cdf(value)) => {
+                Ok(kll.cdf().normalized_rank(*value))
+            }
             (HydraCounter::UnivMon(um), HydraQuery::Cardinality) => Ok(um.estimate_cardinality()),
             (HydraCounter::UnivMon(um), HydraQuery::L1Norm) => Ok(um.estimate_l1()),
             (HydraCounter::UnivMon(um), HydraQuery::L2Norm) => Ok(um.estimate_l2()),

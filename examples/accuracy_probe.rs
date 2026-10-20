@@ -13,7 +13,7 @@ use asap_sketchlib::message_pack_format::portable::hll::{HllSketch, HllVariant};
 use asap_sketchlib::message_pack_format::portable::hydra_kll::HydraKllSketch;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketch as PortableKll;
 use asap_sketchlib::{
-    CountSketch as CoreCount, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap,
+    CountMinSketch, CountMinSketchWithHeap, CountSketch as CoreCount, CountSketchWithHeap,
     CountSketchWithL2Norm, DataInput, DdSketch, Hydra, HyperLogLog, Kll, UnivMon,
 };
 use rand::rngs::StdRng;

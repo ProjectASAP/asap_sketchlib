@@ -4,7 +4,7 @@ use common::{uniform_u64, zipf_u64};
 
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::{
-    Bloom, CocoSketch, CountSketch, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap,
+    Bloom, CocoSketch, CountMinSketch, CountMinSketchWithHeap, CountSketch, CountSketchWithHeap,
     DataInput, DdSketch, DefaultXxHasher, EhBucketSketch, ElasticSketch, Ertl,
     ExponentialHistogram, FastPath, Hydra, HyperLogLog, Kll, KllDynamic, RegularPath, SpaceSaving,
     UnivMon, UnivMonQ, UnivMonTwoTier, Vector2D,
@@ -423,7 +423,8 @@ fn the_matrix_and_quantile_envelopes_carry_their_answers_unchanged() {
 
     let decoded_cm =
         CountMinSketch::<Vector2D<i64>, FastPath>::from_asapv1(&cm_bytes).expect("decode");
-    let decoded_cs = CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&cs_bytes).expect("decode");
+    let decoded_cs =
+        CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&cs_bytes).expect("decode");
     let decoded_kll = Kll::<f64>::from_asapv1(&kll_bytes).expect("decode");
     let decoded_hll = HyperLogLog::<Ertl>::from_asapv1(&hll_bytes).expect("decode");
 

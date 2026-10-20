@@ -7,17 +7,16 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::COUNT_MIN_DELTA;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::{add_cells, check_cells};
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::COUNT_MIN_DELTA;
 use crate::message_pack_format::wire_key::exact_vec;
 use crate::{DefaultXxHasher, HashProfile, RegularPath, SketchHasher, Vector2D};
 
 use super::CountMinSketch;
 use super::wire::{CmsWireCounter, CmsWireMode, check_geometry, decode_metadata, encode_metadata};
-
 
 /// A change to a `rows x cols` [`CountMinSketch`] state: each value of `deltas` is
 /// added to the cell its position names in `indices`, a row-major index

@@ -45,7 +45,7 @@ This is the canonical API entry point for `asap_sketchlib`.
 - [HashSketchEnsemble](./api/api_hashlayer.md) - `Ready`
 - [UnivMon](./api/api_univmon.md) - `Ready`
   - Reference: Liu et al., "One Sketch To Rule Them All: Rethinking Network Flow Monitoring with UnivMon," SIGCOMM 2016. [https://dl.acm.org/doi/10.1145/2934872.2934906](https://dl.acm.org/doi/10.1145/2934872.2934906)
-- [UnivMon Optimized](./api/api_univmon_optimized.md) - `Ready`
+- [Two-tier UnivMon](./api/api_univmon_optimized.md) - `Ready`
 - [UnivMon-Q](./api/api_univmon_q.md) - `Experimental`
   - Universal F0/F2/compatible g-sum/entropy/heavy-hitter measurements plus additive-rank quantiles in one mergeable sketch. Its API, estimators, and guarantees may change.
   - Evaluation: [large synthetic comparison with UnivMon](./univmon_q_evaluation.md).

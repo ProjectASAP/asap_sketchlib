@@ -107,7 +107,7 @@ MessagePack (`rmp-serde`) support. **serde support** means the type derives `Ser
 | Bloom | Yes | Yes |
 | Hydra | Yes | Yes |
 | UnivMon | Yes | Yes |
-| UnivMon Optimized | No | Yes |
+| Two-tier UnivMon | No | Yes |
 | UnivMonQ (experimental) | Internal wire DTO | Yes |
 | NitroBatch | Yes | In Progress |
 | EhBucketSketch | Yes | Yes |

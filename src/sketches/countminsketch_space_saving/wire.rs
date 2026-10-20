@@ -5,14 +5,13 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
+use crate::message_pack_format::kind;
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode};
 use crate::{CountMinSketch, HashProfile, SketchHasher, Vector2D};
 
 use super::CountMinSketchWithSpaceSaving;
 use super::summary_wire::{self, DecodedSummaryTopK, SummaryKind};
-
 
 impl<T, Mode, H> CountMinSketchWithSpaceSaving<Vector2D<T>, Mode, H>
 where

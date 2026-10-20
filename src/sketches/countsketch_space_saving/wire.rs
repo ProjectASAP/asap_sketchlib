@@ -5,8 +5,8 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
+use crate::message_pack_format::kind;
 use crate::sketches::countminsketch_space_saving::summary_wire::{
     self, DecodedSummaryTopK, SummaryKind,
 };
@@ -14,7 +14,6 @@ use crate::sketches::countsketch::{CountSketchCounter, CsWireCounter, CsWireMode
 use crate::{CountSketch, HashProfile, SketchHasher, Vector2D};
 
 use super::CountSketchWithSpaceSaving;
-
 
 impl<T, Mode, H> CountSketchWithSpaceSaving<Vector2D<T>, Mode, H>
 where

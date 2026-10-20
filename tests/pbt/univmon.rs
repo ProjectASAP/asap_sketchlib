@@ -17,8 +17,8 @@
 
 use crate::support::{PROBE_KEYS, close, grid};
 use asap_sketchlib::{
-    CountSketchWithL2Norm, DataInput, HeapEntry, L2HH, OwnedDataInput, UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon,
-    hash64_seeded, hash128_seeded,
+    CountSketchWithL2Norm, DataInput, HeapEntry, L2HH, OwnedDataInput,
+    UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon, hash64_seeded, hash128_seeded,
 };
 use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};

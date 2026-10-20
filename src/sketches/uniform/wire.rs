@@ -25,13 +25,12 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::UNIFORM_SAMPLING;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::UNIFORM_SAMPLING;
 use crate::message_pack_format::wire_key::{exact, exact_vec};
 
 use super::{SampleEntry, UniformSampling};
-
 
 /// Metadata `item_type`: the sampler stores every retained sample as `f64`.
 const SAMPLE_ITEM_TYPE: &str = "f64";
@@ -128,7 +127,11 @@ impl UniformSampling {
             total_seen: self.total_seen,
             rng_state: self.rng_state,
         })?;
-        Ok(envelope::encode(kind::UNIFORM_SAMPLING, &metadata, &payload))
+        Ok(envelope::encode(
+            kind::UNIFORM_SAMPLING,
+            &metadata,
+            &payload,
+        ))
     }
 
     /// Deserializes a sampler from an ASAPv1 MessagePack envelope. The rate is

@@ -116,7 +116,10 @@ where
 
 impl<S: MatrixStorage, M, H: SketchHasher> CountMinSketchWithSpaceSaving<S, M, H> {
     /// Pairs an existing matrix with an existing summary.
-    pub fn from_parts(count_min_sketch: CountMinSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self {
+    pub fn from_parts(
+        count_min_sketch: CountMinSketch<S, M, H>,
+        space_saving: SpaceSaving<H>,
+    ) -> Self {
         CountMinSketchWithSpaceSaving {
             count_min_sketch,
             summary: space_saving,
@@ -351,7 +354,10 @@ mod tests {
             .map(|(x, y)| x + y)
             .collect();
         a.merge(&b);
-        assert_eq!(a.count_min_sketch().as_storage().as_slice(), cells.as_slice());
+        assert_eq!(
+            a.count_min_sketch().as_storage().as_slice(),
+            cells.as_slice()
+        );
         assert_eq!(ranked(&a.top_k(2)), vec![(1, 7), (2, 1)]);
     }
 

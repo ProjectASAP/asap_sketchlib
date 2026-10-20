@@ -20,8 +20,8 @@
 
 use crate::support::keys;
 use asap_sketchlib::{
-    Classic, CountSketch, CountMinSketch, DataInput, DefaultXxHasher, EnsembleSketch, Ertl, FastPath,
-    HashSketchEnsemble, HyperLogLog, HyperLogLogHip, Vector2D,
+    Classic, CountMinSketch, CountSketch, DataInput, DefaultXxHasher, EnsembleSketch, Ertl,
+    FastPath, HashSketchEnsemble, HyperLogLog, HyperLogLogHip, Vector2D,
 };
 use proptest::prelude::*;
 

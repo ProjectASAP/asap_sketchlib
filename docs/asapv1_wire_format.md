@@ -26,7 +26,7 @@ If the doc feels long, these sections carry the key points:
 
 ## Status
 
-- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinSketchDelta`), CountMinSketchWithHeap with its delta (`CountMinSketchWithHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CountSketchWithHeap with its delta (`CountSketchWithHeapDelta`), DDSketch with its delta (`DdSketchDelta`), KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, UnivMon Optimized, ExponentialHistogram, EhBucketSketch, Bloom, Space-Saving, CountSketchWithL2Norm, UnivMon-Q, CountMinSketchWithSpaceSaving, CountSketchWithSpaceSaving, and SetAggregator with its delta (`SetAggregatorDelta`).
+- **Implemented (Rust).** Every kind_id the Section 1 registry marks *implemented* serializes through the shared `message_pack_format::envelope` module per this spec: HLL (three estimators) with the Classic and Ertl-MLE deltas (`HyperLogLogDelta`), Count-Min with its delta (`CountMinSketchDelta`), CountMinSketchWithHeap with its delta (`CountMinSketchWithHeapDelta`), Count Sketch with its delta (`sketches::CountSketchDelta`), CountSketchWithHeap with its delta (`CountSketchWithHeapDelta`), DDSketch with its delta (`DdSketchDelta`), KLL (compact + dynamic), Hydra (five counter variants), Elastic, Coco, UniformSampling, KMV, UnivMon, Two-tier UnivMon, ExponentialHistogram, EhBucketSketch, Bloom, Space-Saving, CountSketchWithL2Norm, UnivMon-Q, CountMinSketchWithSpaceSaving, CountSketchWithSpaceSaving, and SetAggregator with its delta (`SetAggregatorDelta`).
 - **Self-describing.** The hash-spec metadata is derived from the hasher's `HashProfile` (read live, never hardcoded), so the bytes truthfully describe how a sketch was hashed; custom hash profiles are supported (Section 2).
 - **Byte-level encoding** is pinned in Section 4; the resolved decisions are summarized at the end.
 - **`sketchlib-go`** is aligned separately (see Cross-language contract).
@@ -214,7 +214,7 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x0e 0x00` | KMV (`Unstable`) | k-minimum-values | Section 3.14 | implemented |
 | `0x0f 0x00` | HashSketchEnsemble | - | TBD | reserved / not designed |
 | `0x10 0x00` | UnivMon | Pyramid | Section 3.15 | implemented |
-| `0x11 0x00` | UnivMon Optimized | Two-tier pyramid | Section 3.16 | implemented |
+| `0x11 0x00` | Two-tier UnivMon (`UnivMonTwoTier`) | Two-tier pyramid | Section 3.16 | implemented |
 | `0x12 0x00` | NitroBatch | - | TBD | reserved / not designed |
 | `0x13 0x00` | ExponentialHistogram | Sliding window over sketch buckets | Section 3.17 | implemented |
 | `0x14 0x00` | EhBucketSketch | Nested-sketch union | Section 3.18 | implemented |
@@ -222,7 +222,7 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x16 0x00` | OctoSketch | - | TBD | reserved / not designed |
 | `0x17 0x00` | Bloom | Partitioned | Section 3.4 | implemented |
 | `0x18 0x00` | Space-Saving | Stream-Summary | Section 3.5 | implemented |
-| `0x19 0x00` | CountSketchWithL2Norm | Count Sketch with L2 accumulators | Section 3.19 | implemented |
+| `0x19 0x00` | Count-Sketch-with-L2-norm (`CountSketchWithL2Norm`) | Count Sketch with L2 accumulators | Section 3.19 | implemented |
 | `0x1a 0x00` | UnivMon-Q (`UnivMonQ`) | Quantile pyramid | Section 3.20 | implemented |
 | `0x1b 0x00` | CountMinSketchFold | - | TBD | reserved / not designed |
 | `0x1c 0x00` | CountSketchFold | - | TBD | reserved / not designed |
@@ -320,13 +320,13 @@ These two are the only seed-index keys, because `HashProfile` declares exactly t
 | `mode` | string | Count Sketch, CountSketchWithHeap, CountSketchWithSpaceSaving | `"fast"` or `"regular"`; the key-to-column derivation **and the sign derivation** — the two paths take the `±` from different bits (§3.6) |
 | `k` | u32 | KLL | compactor capacity (accuracy parameter) |
 | `k` | u32 | KMV, ExponentialHistogram | a retention bound: the digests kept, or the histogram's merge parameter |
-| `heap_size` | u32 | CountMinSketchWithHeap, CountSketchWithHeap, UnivMon, UnivMon Optimized, UnivMon-Q | entries a heap keeps: the top-k heap, each layer's heap, or each layer's candidate table |
-| `layers` | u32 | UnivMon, UnivMon Optimized, UnivMon-Q | number of layers |
+| `heap_size` | u32 | CountMinSketchWithHeap, CountSketchWithHeap, UnivMon, Two-tier UnivMon, UnivMon-Q | entries a heap keeps: the top-k heap, each layer's heap, or each layer's candidate table |
+| `layers` | u32 | UnivMon, Two-tier UnivMon, UnivMon-Q | number of layers |
 | `m` | u32 | KLL | minimum level capacity |
 | `item_type` | string | KLL | `"f64"` or `"i64"`; element type of `items` |
 | `item_type` | string | UniformSampling | `"f64"`; element type of `values` |
 | `capacity` | u32 | Space-Saving, CountMinSketchWithSpaceSaving, CountSketchWithSpaceSaving | monitored-counter budget |
-| `key_type` | string | Space-Saving, CountMinSketchWithHeap, CountSketchWithHeap, CountMinSketchWithSpaceSaving, CountSketchWithSpaceSaving, UnivMon, UnivMon Optimized | exact `OwnedDataInput` variant of `keys`, never widened (Section 3.5) |
+| `key_type` | string | Space-Saving, CountMinSketchWithHeap, CountSketchWithHeap, CountMinSketchWithSpaceSaving, CountSketchWithSpaceSaving, UnivMon, Two-tier UnivMon | exact `OwnedDataInput` variant of `keys`, never widened (Section 3.5) |
 | `seed_index` | u32 | CountSketchWithL2Norm, UnivMon-Q | a per-instance seed offset the caller chose; a structural param, not a profile constant |
 | `alpha` | f64 | DDSketch | relative accuracy, in `(0, 1)`; every bucket index derives from it |
 | `sample_rate` | f64 | UniformSampling | the construction rate, in `(0, 1]` |
@@ -334,7 +334,7 @@ These two are the only seed-index keys, because `HashProfile` declares exactly t
 | `window` | u64 | ExponentialHistogram | the sliding window's span |
 | `compaction_seed` | u64 | KLL | **optional**; present only when the sketch carries one, else the key is omitted. Compact KLL only (`KllDynamic` never emits it). |
 
-The names above are the ones more than one kind shares. **Each kind's full structural-param set, in its canonical wire order, is in that kind's Section 3 subsection** — including the params no other kind uses and the prefixed forms a kind gives an inlined sub-sketch's: Elastic's `heavy_buckets` / `light_rows` / `light_cols` / `light_counter_type` / `light_mode` (§3.11); Hydra's `cell_*` (§3.9); UnivMon Optimized's `elephant_layers` / `elephant_rows` / `elephant_cols` / `mouse_rows` / `mouse_cols` (§3.16); and UnivMon-Q's `top_layer_cols` / `cols_halving_period` / `ordered_samples` (§3.20).
+The names above are the ones more than one kind shares. **Each kind's full structural-param set, in its canonical wire order, is in that kind's Section 3 subsection** — including the params no other kind uses and the prefixed forms a kind gives an inlined sub-sketch's: Elastic's `heavy_buckets` / `light_rows` / `light_cols` / `light_counter_type` / `light_mode` (§3.11); Hydra's `cell_*` (§3.9); Two-tier UnivMon's `elephant_layers` / `elephant_rows` / `elephant_cols` / `mouse_rows` / `mouse_cols` (§3.16); and UnivMon-Q's `top_layer_cols` / `cols_halving_period` / `ordered_samples` (§3.20).
 
 Count-Min's matrix dimensions are **configuration** (they shape the payload, like HLL's `precision`), so per the config-to-metadata rule they live here.
 Count-Min's canonical structural-param order is `... matrix_seed_index, rows, cols, counter_type, mode`; this is the wire contract and Go must mirror it verbatim.
@@ -486,7 +486,7 @@ On the **fast** path one hash serves the whole matrix wherever it can: the layou
 In the two packed layouts the rows are **bit fields of one hash**, not independent draws, and the seed-list bound does not bind — but `rows <= 20` is declared and enforced on **both** doors whichever layout a geometry selects, so one geometry rule covers the format.
 `with_dimensions` is free to build a wider matrix in memory; such a sketch is rejected on **both** sides, so the format never emits bytes it would refuse to read back.
 
-The same `1 <= rows <= 20` bound is declared by **every matrix-shaped payload**, under whichever name that payload's rows carry: Bloom's slices (`0x17 0x00`, §3.4, as `BLOOM_MAX_SLICES`), Count Sketch (`0x04 0x00`, §3.6), CountMinSketchWithHeap (`0x03 0x00`), CountSketchWithHeap (`0x0a 0x00`), CountMinSketchWithSpaceSaving (`0x1e 0x00`) and CountSketchWithSpaceSaving (`0x1f 0x00`) with their base matrix, CountSketchWithL2Norm (`0x19 0x00`), Coco's table (`0x0c 0x00`), Elastic's light layer (`0x0b 0x00`), Hydra's grid and its matrix counters (`0x07 0x01` / `0x07 0x02`), and every UnivMon (`0x10 0x00`) and UnivMon Optimized (`0x11 0x00`) layer.
+The same `1 <= rows <= 20` bound is declared by **every matrix-shaped payload**, under whichever name that payload's rows carry: Bloom's slices (`0x17 0x00`, §3.4, as `BLOOM_MAX_SLICES`), Count Sketch (`0x04 0x00`, §3.6), CountMinSketchWithHeap (`0x03 0x00`), CountSketchWithHeap (`0x0a 0x00`), CountMinSketchWithSpaceSaving (`0x1e 0x00`) and CountSketchWithSpaceSaving (`0x1f 0x00`) with their base matrix, CountSketchWithL2Norm (`0x19 0x00`), Coco's table (`0x0c 0x00`), Elastic's light layer (`0x0b 0x00`), Hydra's grid and its matrix counters (`0x07 0x01` / `0x07 0x02`), and every UnivMon (`0x10 0x00`) and Two-tier UnivMon (`0x11 0x00`) layer.
 Two of them earn the bound outright, on every geometry: Coco's row `i` hashes at seed index `i`, and Elastic's light layer is fixed to the regular path.
 The rest inherit it from the paragraph above — the regular path always, the fast path once the packed layouts run out of bits.
 
@@ -1067,7 +1067,7 @@ UnivMon carries the hash-spec group — it hashes, and a consumer must reproduce
 
 The encode side enforces the same shape rules — a `layers` past 64, a layer that is not the declared size, a layer hashing at another layer's seed index, mixed or 128-bit keys, a layer count that disagrees with the declared `layers` — and rule 7, so the format never emits bytes it would refuse to read back: a layer heap holding the same `NaN` twice (§3.7's producer-side constraint) fails to serialize.
 
-### 3.16: UnivMon Optimized payload (`0x11 0x00`)
+### 3.16: Two-tier UnivMon payload (`0x11 0x00`)
 
 `UnivMonTwoTier` is UnivMon with two tiers: layers `0 .. elephant_layers` use `elephant_rows x elephant_cols` counters and the rest use `mouse_rows x mouse_cols`. Nothing else about it differs, so it **shares §3.15's payload byte for byte** and differs only in its metadata — the way HLL Classic and Ertl-MLE share one payload and differ only by `kind_id`:
 
@@ -1168,18 +1168,18 @@ The `kind_id` is carried rather than a name, because Section 1's registry is alr
 
 | Nested `kind_id` | Registry name | Rust arm | Build |
 | ---------------- | ------------- | -------- | ----- |
-| `0x01 0x02` | HLL Ertl-MLE | `HLL(HyperLogLog<Ertl>)` | always |
-| `0x02 0x00` | Count-Min | `CM(CountMinSketch<Vector2D<i32>, FastPath>)` | always |
-| `0x04 0x00` | Count Sketch | `CS(CountSketch<Vector2D<i32>, FastPath>)` | always |
-| `0x05 0x00` | DDSketch | `DDS(DdSketch)` | always |
+| `0x01 0x02` | HLL Ertl-MLE | `Hll(HyperLogLog<Ertl>)` | always |
+| `0x02 0x00` | Count-Min | `CountMinSketch(CountMinSketch<Vector2D<i32>, FastPath>)` | always |
+| `0x04 0x00` | Count Sketch | `CountSketch(CountSketch<Vector2D<i32>, FastPath>)` | always |
+| `0x05 0x00` | DDSketch | `DdSketch(DdSketch)` | always |
 | `0x06 0x00` | KLL compact | `Kll(Kll)` | always |
-| `0x0b 0x00` | Elastic | `ELASTIC(ElasticSketch)` | always |
-| `0x0c 0x00` | Coco | `COCO(CocoSketch)` | always |
-| `0x0d 0x00` | UniformSampling | `UNIFORM(UniformSampling)` | `experimental` |
-| `0x10 0x00` | UnivMon | `UNIVMON(UnivMon)` | always |
-| `0x19 0x00` | CountSketchWithL2Norm | `COUNTL2HH(CountSketchWithL2Norm)` | always |
+| `0x0b 0x00` | Elastic | `ElasticSketch(ElasticSketch)` | always |
+| `0x0c 0x00` | Coco | `CocoSketch(CocoSketch)` | always |
+| `0x0d 0x00` | UniformSampling | `Uniform(UniformSampling)` | `experimental` |
+| `0x10 0x00` | UnivMon | `UnivMon(UnivMon)` | always |
+| `0x19 0x00` | CountSketchWithL2Norm | `CountSketchWithL2Norm(CountSketchWithL2Norm)` | always |
 
-**Each id names one algorithm, and its siblings are not it.** `0x01 0x01`, `0x01 0x03` and `0x06 0x01` are rejected as unknown here: the arms hold `HyperLogLog<Ertl>` and the compact `Kll` and nothing else. `CM` and `CS` both hold `Vector2D<i32>` on the `FastPath`, so their descriptors carry `counter_type = "i32"` and `mode = "fast"`; `i32` is never widened, since a nested sketch must decode back into the arm it was stored as (Q-CS).
+**Each id names one algorithm, and its siblings are not it.** `0x01 0x01`, `0x01 0x03` and `0x06 0x01` are rejected as unknown here: the arms hold `HyperLogLog<Ertl>` and the compact `Kll` and nothing else. `CountMinSketch` and `CountSketch` both hold `Vector2D<i32>` on the `FastPath`, so their descriptors carry `counter_type = "i32"` and `mode = "fast"`; `i32` is never widened, since a nested sketch must decode back into the arm it was stored as (Q-CS).
 
 **Feature-gating contract (cross-language; Go must honour it).**
 
@@ -1200,7 +1200,7 @@ The `kind_id` is carried rather than a name, because Section 1's registry is alr
 
 The encode side re-splits the bytes the variant produced and rejects an id that is not the arm's own, so the tag and the blocks can never disagree.
 
-### 3.19: CountSketchWithL2Norm payload (`0x19 0x00`)
+### 3.19: Count-Sketch-with-L2-norm payload (`0x19 0x00`)
 
 `CountSketchWithL2Norm` is a Count Sketch whose rows also carry a running L2 accumulator. Its counters are always `i64` and its column derivation is fixed by the algorithm, so — unlike Count-Min (§3.2) and Count Sketch (§3.6) — its metadata carries neither a `counter_type` nor a `mode`: `kind_id` already determines both. What is left is the geometry and the seed-list index it hashes with:
 
@@ -1622,7 +1622,7 @@ Retire `portable` once the fixtures cover the rest.
 - **Q-SEEDIDX**: a **seed-index key is carried only for a hash whose index the sketch reads off the profile.** `HashProfile` declares two such constants, `CANONICAL_SEED_INDEX` and `MATRIX_SEED_INDEX`, and the metadata carries `canonical_seed_index` or `matrix_seed_index` accordingly. An index the algorithm fixes gets no key: Space-Saving's `0` (§3.5, and the summaries of §3.24 and §3.25), Coco's per-array `i` (§3.12), Elastic's heavy table (§3.11), Hydra's subkey fan-out at `HYDRA_SEED_INDEX` (§3.9) and the UnivMon family's `UNIVMON_BOTTOM_LAYER_SEED_INDEX` (§3.15). A per-instance seed a caller chose is a **structural param**, not a hash-spec field: `seed_index` on CountSketchWithL2Norm (§3.19) and UnivMon-Q (§3.20) is echoed back on decode rather than pinned against the target.
 - **Q-ORDER**: a payload whose in-memory container order does not survive a rebuild **pins an emitted order**, as a cross-language contract. Heaps, arenas and hash maps all have this property, so the rule reaches Space-Saving's triples (§3.5, §3.24, §3.25), the top-k heap entries (§3.7), KMV's digests (§3.14), UniformSampling's entries (§3.13), UnivMon-Q's candidates and occurrences (§3.20), and every layer- and bucket-indexed array. Two sketches holding the same state then emit the same bytes whatever order they were built in, and a decoded sketch re-serializes byte-identically. The heap key comparator is the same everywhere: descending count, ties by heap key order (§3.5).
 - **Q-CAP**: **a declared capacity never sizes an allocation.** Every structure is built from the run the payload actually carries, and the declared bound is checked against that run first; a payload naming a capacity of `2^32 - 1` with two entries costs two entries. This holds for every `capacity` (§3.5, §3.24, §3.25), every `heap_size`, KMV's `k`, UniformSampling's `total_seen`, UnivMon-Q's `ordered_samples`, and Hydra's grid and counter dimensions.
-- **Q-KEYTYPE**: `key_type` names the **exact `OwnedDataInput` variant** and is never widened, wherever heap keys reach the wire — Space-Saving (§3.5), CountMinSketchWithHeap and CountSketchWithHeap (§3.7, §3.10), CountMinSketchWithSpaceSaving and CountSketchWithSpaceSaving (§3.24, §3.25), the UnivMon family (§3.15, §3.16) and Hydra's UnivMon counter (§3.9). A container whose keys mix variants has no single name and **fails to serialize**; `OwnedDataInput::I128` / `U128` have no msgpack integer form and are not wire types. An empty container emits `"u64"`, and a decoder rejects an empty container under any other name, so its `key_type` has one value rather than one per producer. That canonicalizes the key naming and nothing else: a UnivMon Optimized pyramid still has more than one encoding per state, since layouts differing only in an `elephant_layers` at or above `layers` build identical layers, and an all-elephant pyramid carries its unused mouse dimensions on the wire regardless (§3.16). What holds everywhere is the round trip: a decoded container re-serializes byte-identically.
+- **Q-KEYTYPE**: `key_type` names the **exact `OwnedDataInput` variant** and is never widened, wherever heap keys reach the wire — Space-Saving (§3.5), CountMinSketchWithHeap and CountSketchWithHeap (§3.7, §3.10), CountMinSketchWithSpaceSaving and CountSketchWithSpaceSaving (§3.24, §3.25), the UnivMon family (§3.15, §3.16) and Hydra's UnivMon counter (§3.9). A container whose keys mix variants has no single name and **fails to serialize**; `OwnedDataInput::I128` / `U128` have no msgpack integer form and are not wire types. An empty container emits `"u64"`, and a decoder rejects an empty container under any other name, so its `key_type` has one value rather than one per producer. That canonicalizes the key naming and nothing else: a Two-tier UnivMon pyramid still has more than one encoding per state, since layouts differing only in an `elephant_layers` at or above `layers` build identical layers, and an all-elephant pyramid carries its unused mouse dimensions on the wire regardless (§3.16). What holds everywhere is the round trip: a decoded container re-serializes byte-identically.
 - **Q-DERIVED**: state a decoder can recompute exactly is **not carried**, and state it cannot is. Recomputed: DDSketch's `count` from its stores and `zero_count` (§3.8), `ExponentialHistogram`'s `l2_mass` and `merge_norm` (§3.17), Elastic's `heavy_buckets` from the declared bucket count (§3.11), every heap's digest index and array order, and every summary a sketch answers from its own state. Carried: DDSketch's `sum` / `min` / `max`, Elastic's `stale_copies`, UnivMon's `update_mode`, `candidate_complete` and `bucket_size`, UnivMon-Q's `ever_evicted`, `source_id` and `next_sequence`, UniformSampling's `priorities`, `total_seen` and `rng_state`, and CountSketchWithL2Norm's `l2`. Where a cached derived field exists in memory, the encoder rejects a value that disagrees with what the decoder would recompute.
 - **Q-NIL**: an absent slot is msgpack **nil** (`0xc0`), never a sentinel value. An empty string is a reachable key in Coco (§3.12) and a reachable flow id in Elastic (§3.11), so `""` cannot double as "free"; UnivMon-Q's absent extrema are nil for the same reason (§3.20). Go must model these as nullable, never as a zero value standing in for absent.
 - **Q-RNG**: RNG state is carried **resumable** when the generator is cheap to reproduce in another language, and opaque otherwise. UniformSampling's `rng_state` is one SplitMix64 word with published constants, so a decoded sampler continues the same draw sequence (§3.13); KLL's `coin` carries the compaction RNG's position and its `compaction_seed` is opaque state Go preserves without interpreting (Q-KLL-SEED).

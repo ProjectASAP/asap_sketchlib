@@ -36,7 +36,7 @@ use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, Tally};
 use common::{FreqTruth, zipf_u64};
 
 use asap_sketchlib::{
-    CountSketch, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap, DataInput,
+    CountMinSketch, CountMinSketchWithHeap, CountSketch, CountSketchWithHeap, DataInput,
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, FastPath, FixedMatrix, OwnedDataInput,
     QuickMatrixI64, QuickMatrixI128, RegularPath, Vector2D, hash_for_matrix,
     heap_count_from_estimate,
@@ -1085,7 +1085,8 @@ fn countsketch_holds_its_l2_contract_across_the_depth_and_width_axis() {
     for &rows in &COUNTSKETCH_DEPTH_AXIS {
         for &cols in &WIDTH_AXIS {
             let spec = CountSketchSpec::new(rows, cols);
-            let mut regular = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut regular =
+                CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
             let mut fast = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for k in &stream {
                 regular.update(&DataInput::U64(*k));

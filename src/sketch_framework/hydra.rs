@@ -342,7 +342,7 @@ impl Hydra {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CountSketch, CountMinSketch, Ertl, FastPath, HyperLogLog, Kll, UnivMon, Vector2D};
+    use crate::{CountMinSketch, CountSketch, Ertl, FastPath, HyperLogLog, Kll, UnivMon, Vector2D};
 
     const EPSILON: f64 = 1e-6;
 

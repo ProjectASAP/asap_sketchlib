@@ -1,4 +1,4 @@
-# API: UnivMon Optimized
+# API: Two-tier UnivMon
 
 Status: `Ready`
 

@@ -34,9 +34,9 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::UNIVMON;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::UNIVMON;
 use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::sketches::countminsketch_heap::heap_wire::{
     EMPTY_KEY_TYPE, check_distinct_keys, check_empty_key_type, heap_entries, key_type_of,
@@ -46,7 +46,6 @@ use crate::sketches::countsketch_heap::l2hh_wire;
 use crate::{DefaultXxHasher, HashProfile, L2HH, OwnedDataInput, TopKHeap, Vector1D};
 
 use super::{UNIVMON_MAX_LAYERS, UnivMon, UnivMonUpdateMode};
-
 
 /// UnivMon descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order

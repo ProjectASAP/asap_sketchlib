@@ -35,7 +35,13 @@ pub struct UnivMonPool {
 
 impl UnivMonPool {
     /// Creates a new pool with `initial_size` pre-allocated sketches.
-    pub fn new(initial_size: usize, heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self {
+    pub fn new(
+        initial_size: usize,
+        heap_size: usize,
+        rows: usize,
+        cols: usize,
+        layers: usize,
+    ) -> Self {
         let free_list: Vec<UnivMon> = (0..initial_size)
             .map(|_| UnivMon::new(heap_size, rows, cols, layers))
             .collect();

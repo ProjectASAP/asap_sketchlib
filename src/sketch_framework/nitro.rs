@@ -11,7 +11,7 @@ use rand::{Rng, SeedableRng, rng};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CountSketch, CountMinSketch, DataInput, DefaultXxHasher, FastPath, FastPathHasher,
+    CountMinSketch, CountSketch, DataInput, DefaultXxHasher, FastPath, FastPathHasher,
     LN_ONE_MINUS_U_TABLE, MatrixFastHash, Vector2D,
 };
 

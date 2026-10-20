@@ -47,10 +47,7 @@ mod delta;
 mod wire;
 pub use delta::HyperLogLogDelta;
 pub use wire::HllWireVariant;
-pub(crate) use wire::{
-    HllMetadata, HllPayloadHip, HllPayloadPlain,
-    standard_hll_metadata,
-};
+pub(crate) use wire::{HllMetadata, HllPayloadHip, HllPayloadPlain, standard_hll_metadata};
 
 /// Generic HyperLogLog sketch parameterized by estimation variant, register storage, and hasher.
 #[derive(Clone, Debug, Serialize, Deserialize)]

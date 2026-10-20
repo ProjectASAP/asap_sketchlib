@@ -27,8 +27,8 @@ use std::collections::HashMap;
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch as PortableCountMinSketch;
 use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch as PortableCountSketch;
 use asap_sketchlib::{
-    CountSketch, CountMinSketch, CountMinSketchFold, CountSketchFold, CountSketchWithL2Norm, DataInput,
-    DefaultXxHasher, FastPath, RegularPath, Vector2D,
+    CountMinSketch, CountMinSketchFold, CountSketch, CountSketchFold, CountSketchWithL2Norm,
+    DataInput, DefaultXxHasher, FastPath, RegularPath, Vector2D,
 };
 
 // ----------------------------------------------------------------- CountMinSketch
@@ -455,9 +455,10 @@ fn countsketch_both_paths_meet_the_l2_median_bound() {
     for trial in 0..BOUND_TRIALS {
         for (name, keys, to_input) in bound_streams(trial) {
             let mut truth = FreqTruth::default();
-            let mut regular = asap_sketchlib::CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(
-                BOUND_ROWS, BOUND_COLS,
-            );
+            let mut regular =
+                asap_sketchlib::CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(
+                    BOUND_ROWS, BOUND_COLS,
+                );
             let mut fast = asap_sketchlib::CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 BOUND_ROWS, BOUND_COLS,
             );
@@ -517,7 +518,8 @@ fn countsketch_error_stays_rank_independent_within_the_documented_empirical_band
 
     let stream = zipf_u64(200_000, 8192, 1.1, STREAM_SEED);
     let mut truth = FreqTruth::default();
-    let mut cs = asap_sketchlib::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
+    let mut cs =
+        asap_sketchlib::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
     for k in &stream {
         truth.observe(*k as i64);
         cs.update(&DataInput::I64(*k as i64));
@@ -861,7 +863,8 @@ fn countsketch_documented_vector_grid(
 ) {
     for rows in DOC_ROWS {
         for cols in DOC_COLS {
-            let mut regular = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut regular =
+                CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
             let mut fast = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for key in &input.keys {
                 let d = input.data(*key);

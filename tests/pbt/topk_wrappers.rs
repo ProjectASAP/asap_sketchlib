@@ -7,8 +7,8 @@
 
 use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, grid, keys};
 use asap_sketchlib::{
-    CountSketch, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap, CountSketchWithL2Norm,
-    DataInput, DefaultXxHasher, FastPath, RegularPath, TopKHeap, Vector2D,
+    CountMinSketch, CountMinSketchWithHeap, CountSketch, CountSketchWithHeap,
+    CountSketchWithL2Norm, DataInput, DefaultXxHasher, FastPath, RegularPath, TopKHeap, Vector2D,
     heap_count_from_estimate, heap_item_to_sketch_input,
 };
 use proptest::prelude::*;

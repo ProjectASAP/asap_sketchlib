@@ -20,8 +20,8 @@ use asap_sketchlib::message_pack_format::portable::countminsketch_topk::CountMin
 use asap_sketchlib::message_pack_format::portable::countsketch_topk::CountSketchWithHeap;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketch;
 use asap_sketchlib::{
-    Classic, CountSketch, CountMinSketch, DataInput, EnsembleSketch, Ertl, FastPath, HashSketchEnsemble,
-    HyperLogLog, HyperLogLogHip, UnivMonQ, UnivMonQConfig, Vector2D,
+    Classic, CountMinSketch, CountSketch, DataInput, EnsembleSketch, Ertl, FastPath,
+    HashSketchEnsemble, HyperLogLog, HyperLogLogHip, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
 const ROWS: usize = 3;

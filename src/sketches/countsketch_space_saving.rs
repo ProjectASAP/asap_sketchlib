@@ -5,8 +5,8 @@
 use crate::sketches::countminsketch_space_saving::{CandidateCounter, rank_candidates};
 use crate::sketches::countsketch::CountSketchCounter;
 use crate::{
-    CountSketch, DataInput, DefaultXxHasher, MatrixStorage, OwnedDataInput, RegularPath, SketchHasher,
-    SpaceSaving, Vector2D,
+    CountSketch, DataInput, DefaultXxHasher, MatrixStorage, OwnedDataInput, RegularPath,
+    SketchHasher, SpaceSaving, Vector2D,
 };
 
 mod wire;

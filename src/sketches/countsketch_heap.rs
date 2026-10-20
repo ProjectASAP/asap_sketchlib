@@ -1062,12 +1062,7 @@ impl CountSketchWithL2Norm {
     /// Shared with the OctoSketch worker sketches so a worker and its parent can
     /// never disagree about which cell a key lands in.
     #[inline(always)]
-    pub fn cell_for_row(
-        hashed_val: u128,
-        row: usize,
-        cols: usize,
-        mask_bits: u32,
-    ) -> (usize, i64) {
+    pub fn cell_for_row(hashed_val: u128, row: usize, cols: usize, mask_bits: u32) -> (usize, i64) {
         let mask = (1u128 << mask_bits) - 1;
         let hashed = (hashed_val >> (row * mask_bits as usize)) & mask;
         let col = (hashed as usize) % cols;
@@ -1172,7 +1167,8 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     pub fn update_weighted_with_hash(&mut self, hashed_val: u128, c: i64) {
         let mask_bits = self.counts.mask_bits();
         for i in 0..self.rows {
-            let (idx, sign_bit) = CountSketchWithL2Norm::cell_for_row(hashed_val, i, self.cols, mask_bits);
+            let (idx, sign_bit) =
+                CountSketchWithL2Norm::cell_for_row(hashed_val, i, self.cols, mask_bits);
             let old_value = self.counts.query_one_counter(i, idx);
             self.write_counter(i, idx, old_value + sign_bit * c);
         }

@@ -1,5 +1,5 @@
 use asap_sketchlib::{
-    Bloom, Classic, CountSketch, CountMinSketch, DataInput, DdSketch, FastPath, HyperLogLog, Kll,
+    Bloom, Classic, CountMinSketch, CountSketch, DataInput, DdSketch, FastPath, HyperLogLog, Kll,
     RegularPath, SpaceSaving, Vector2D, hash64_seeded, hash128_seeded,
 };
 

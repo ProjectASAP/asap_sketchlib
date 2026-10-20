@@ -964,7 +964,7 @@ Wire tests: [`src/sketch_framework/univmon/wire.rs`](../src/sketch_framework/uni
 | `merge_combines_weight_l2_and_evicted_candidate_counts` | Merge sums the weights and folds both sides' candidate counts into the layer. | For two `new(1, 3, 1024, 1)` sketches fed `Str("x")` at `100` on the left and `Str("x")` at `5` plus `Str("y")` at `10` on the right, verifies the merged `total_weight` is `115`, layer 0's `l2()` is `sqrt(105^2 + 10^2)` within `1e-9`, the single heap slot holds `x` at count `105`, and `estimate_entropy()` is finite and at or above `0.0`. |
 | `standard_and_terminal_merges_match_one_pass_with_complete_candidates` | A merge of two halves matches one pass over the whole stream on both update paths. | For `new(128, 5, 2048, 10)`, splits 2,000 updates over the 64 keys `U64(i % 64)` by parity into two sketches, merges them, and verifies `total_weight` equals the one-pass sketch's exactly and `estimate_l1`, `estimate_l2`, `estimate_cardinality`, and `estimate_entropy` all agree within `1e-9`, run once through `update` and once through `fast_insert`. |
 
-### UnivMon Optimized
+### Two-tier UnivMon
 
 Test file: [`src/sketch_framework/univmon_two_tier.rs`](../src/sketch_framework/univmon_two_tier.rs)
 

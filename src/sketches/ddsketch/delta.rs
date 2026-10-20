@@ -7,15 +7,14 @@ use std::ops::RangeInclusive;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::DDSKETCH_DELTA;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::check_cells;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::DDSKETCH_DELTA;
 
 use super::wire::{check_alpha, decode_metadata, encode_metadata};
 use super::{Buckets, DdSketch, GROW_CHUNK, ddsketch_indexable_bounds};
-
 
 /// A change to a [`DdSketch`] state of relative accuracy `alpha`: each count of
 /// `deltas` is added to the positive-store bucket its position names in

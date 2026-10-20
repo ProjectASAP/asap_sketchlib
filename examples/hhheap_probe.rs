@@ -81,8 +81,7 @@ impl IndexedHeap {
         let retained_every_key = self.data.len() < self.k;
         if self.data.len() < self.k {
             let idx = self.data.len();
-            self.data
-                .push(HeapEntry::new(input_to_owned(key), count));
+            self.data.push(HeapEntry::new(input_to_owned(key), count));
             self.slots.push(slot);
             self.register(slot, idx);
             self.bubble_up(idx);
@@ -219,8 +218,7 @@ impl ScanHeap {
 
         let retained_every_key = self.data.len() < self.k;
         if self.data.len() < self.k {
-            self.data
-                .push(HeapEntry::new(input_to_owned(key), count));
+            self.data.push(HeapEntry::new(input_to_owned(key), count));
             self.bubble_up(self.data.len() - 1);
             return retained_every_key;
         }

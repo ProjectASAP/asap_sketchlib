@@ -34,16 +34,15 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
-use crate::message_pack_format::kind::UNIVMON_Q;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::UNIVMON_Q;
 use crate::{HashProfile, SketchHasher};
 
 use super::{
     Counters, HashLayout, Layer, OrderedOccurrence, PackedCountSketch, UnivMonQ, UnivMonQConfig,
     decode_error, layer_cols, validate_config,
 };
-
 
 /// UnivMon-Q descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
@@ -846,7 +845,9 @@ mod tests {
         };
         let cases = [
             shaped(config_with(|config| config.layers = 63)),
-            shaped(config_with(|config| config.top_layer_cols = u32::MAX as usize)),
+            shaped(config_with(|config| {
+                config.top_layer_cols = u32::MAX as usize
+            })),
             shaped(config_with(|config| config.layers = 1)),
             shaped(config_with(|config| config.rows = 4)),
             shaped(config_with(|config| config.heap_size = 0)),

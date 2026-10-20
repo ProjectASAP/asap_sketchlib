@@ -1045,7 +1045,8 @@ mod tests {
 
         for n in 1..=8u64 {
             let mut sketches = Vec::new();
-            let mut standard = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut standard =
+                CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
             for epoch in 0..n {
                 let mut sk: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);

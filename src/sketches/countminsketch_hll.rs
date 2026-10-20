@@ -515,7 +515,8 @@ mod tests {
             sk.update(&k, &val(i));
         }
         let bytes = sk.serialize_to_bytes().expect("serialize");
-        let restored = CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let restored =
+            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
 
         assert_eq!(sk.rows(), restored.rows());
         assert_eq!(sk.cols(), restored.cols());
@@ -656,7 +657,8 @@ mod tests {
     fn deserialize_recomputes_derived_fields() {
         let sk = CountMinHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
         let bytes = sk.serialize_to_bytes().expect("serialize");
-        let restored = CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
+        let restored =
+            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
         assert_eq!(restored.p_mask, (1u64 << 8) - 1);
         // Column routing is owned by the storage and rebuilt from `cols`.
         assert_eq!(restored.as_storage().mask_bits(), 5); // 32.ilog2()

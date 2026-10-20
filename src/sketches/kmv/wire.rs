@@ -28,13 +28,12 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
-use crate::message_pack_format::kind::KMV;
-use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
+use crate::message_pack_format::kind;
+use crate::message_pack_format::kind::KMV;
 use crate::{CommonHeap, HashProfile, RetainSmallest, SketchHasher};
 
 use super::Kmv;
-
 
 /// KMV descriptor metadata (ASAPv1 §2), a msgpack **map** (`to_vec_named`) with
 /// keys in this declaration order — the canonical order the wire spec fixes (Go
