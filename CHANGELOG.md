@@ -381,6 +381,9 @@ signals a backwards-compatible change.
   their own seed. Count-Min, Count Sketch, their WithHeap and WithSpaceSaving
   forms, Elastic, Hydra and UnivMon build any row count in memory; `to_asapv1`
   refuses more than `MATRIX_MAX_ROWS`.
+- **ASAPv1 `seed_derivation` is `"seed_list_index_scaled"`** (breaking, wire),
+  naming `seed_for_index`. Bytes carrying `"seed_list_index_wrap"` no longer
+  decode. The golden fixtures are regenerated.
 
 ### Removed
 

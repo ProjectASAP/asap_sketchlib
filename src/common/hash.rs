@@ -114,7 +114,7 @@ pub trait HashProfile {
     const PROFILE_ID: &'static str;
     /// Hash algorithm identifier, e.g. `"xxh3_64_128"`.
     const ALGORITHM: &'static str;
-    /// Seed-derivation scheme, e.g. `"seed_list_index_wrap"`.
+    /// Seed-derivation scheme, e.g. `"seed_list_index_scaled"`.
     const SEED_DERIVATION: &'static str;
     /// Input-encoding identifier, e.g. `"projectasap.input.v1"`.
     const INPUT_ENCODING: &'static str;
@@ -136,7 +136,7 @@ pub struct DefaultXxHasher;
 impl HashProfile for DefaultXxHasher {
     const PROFILE_ID: &'static str = "projectasap.xxh3.seedlist.v1";
     const ALGORITHM: &'static str = "xxh3_64_128";
-    const SEED_DERIVATION: &'static str = "seed_list_index_wrap";
+    const SEED_DERIVATION: &'static str = "seed_list_index_scaled";
     const INPUT_ENCODING: &'static str = "projectasap.input.v1";
     fn seed_list() -> Vec<u64> {
         SEED_LIST.to_vec()

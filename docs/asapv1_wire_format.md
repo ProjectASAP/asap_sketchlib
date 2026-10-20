@@ -296,7 +296,7 @@ The two tables below are the field-by-field detail of each group.
 | `metadata_version` | u8 | yes | schema version of *this block* (`1`). Independent of envelope `version`. |
 | `hash_profile_id` | string | yes | stable global id `"projectasap.xxh3.seedlist.v1"`; authoritative |
 | `hash_algorithm` | string | yes | `"xxh3_64_128"` |
-| `seed_derivation` | string | yes | `"seed_list_index_wrap"` |
+| `seed_derivation` | string | yes | `"seed_list_index_scaled"` |
 | `input_encoding` | string | yes | `"projectasap.input.v1"` |
 | `seed_list` | `array<u64>` | **yes (inlined)** | the 20 seeds, carried inline so the bytes self-describe the hash |
 | `canonical_seed_index` | u32 | **per-sketch** | index into `seed_list` (`5`); HLL, KMV and Hydra's HLL counter use it |
@@ -395,7 +395,7 @@ The `seedlist` in `hash_profile_id`'s value is part of the fixed id and does not
 metadata_version = 1
 hash_profile_id  = "projectasap.xxh3.seedlist.v1"
 hash_algorithm   = "xxh3_64_128"
-seed_derivation  = "seed_list_index_wrap"
+seed_derivation  = "seed_list_index_scaled"
 input_encoding   = "projectasap.input.v1"
 seed_list        = [0xcafe3553, 0xade3415118, 0x8cc70208, 0x2f024b2b, 0x451a3df5,
                     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f,

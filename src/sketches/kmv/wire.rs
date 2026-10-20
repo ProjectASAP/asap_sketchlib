@@ -575,7 +575,7 @@ mod tests {
     impl HashProfile for AltHasher {
         const PROFILE_ID: &'static str = "test.alt.profile.v1";
         const ALGORITHM: &'static str = "xxh3_64_128";
-        const SEED_DERIVATION: &'static str = "seed_list_index_wrap";
+        const SEED_DERIVATION: &'static str = "seed_list_index_scaled";
         const INPUT_ENCODING: &'static str = "projectasap.input.v1";
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
