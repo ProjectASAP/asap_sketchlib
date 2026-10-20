@@ -48,9 +48,7 @@ fn update_batch(&mut self, pairs: &[(&DataInput, &DataInput)])
 Two hash calls per insert regardless of row count: one `hash128_seeded(0, ..)`
 over the key, which `Vector3D` slices into one column index per row, and one
 `hash64_seeded` over the value for the register index and rank. The value
-hash uses a fixed non-zero seed index — not one derived from `rows`, since
-`SEED_LIST` indices wrap and a row count equal to its length would have
-selected the column hash's own seed.
+hash uses a fixed non-zero seed index, independent of `rows`.
 
 ## Query
 

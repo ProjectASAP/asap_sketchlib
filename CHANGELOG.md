@@ -12,6 +12,12 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`Hydra::query_group_total(key)`** returns a subpopulation's total mass
+  (`count by (g)`) from Count-Min cells, with an error bound, or KLL cells,
+  approximately; **`HydraCounter::total_mass()`** gives one cell's. No wire
+  change.
+- **`UnivMon::check_shape`** accepts exactly the pyramid shapes `UnivMon::new`
+  builds, so a caller can refuse a configuration without catching a panic.
 - **`TupleKey` and `KeyColumn`**, a heap key of typed columns (null, bool,
   `i64`, `f64`, string) encoded into one canonical byte string, so a GROUP BY
   over several columns keeps one CountMinSketchWithHeap or CountSketchWithHeap candidate per tuple under
@@ -114,9 +120,35 @@ signals a backwards-compatible change.
   summaries, and panics on a dimension, admission-rate or capacity mismatch.
   ASAPv1 kinds `0x1e 0x00` and `0x1f 0x00` (spec §3.24, §3.25) for `i32`,
   `i64` and `f64` `Vector2D` matrices on either path, with no delta kind.
+- **`Kll::memory_bytes` and `KllDynamic::memory_bytes`**: the bytes the
+  sketch holds now.
+- **`Kmv::memory_bytes`**: the struct plus the hash slots the heap has
+  allocated.
+- **`TopKHeap::estimated_memory_bytes(heap_size, key)`**: the bytes a heap
+  of that capacity holds in steady state once keys shaped like `key` churn
+  through it.
+- **`check_shape(rows, cols)`** on `CountMinSketch`, `CountSketch`, their
+  WithHeap and WithSpaceSaving forms: the shapes their constructors build,
+  both dimensions non-zero and `rows * cols` within `usize`. Each is defined
+  on the type with its default parameters, so `CountMinSketch::check_shape(3, 64)`
+  names no storage, path or hasher.
+- **`clear`** on `CountMinSketch`, `CountSketch` and their WithHeap forms:
+  zeroes the counters (and empties the heap) and returns the Nitro sampler to
+  its start, keeping shape and allocation. With it, `Nitro::reset` and
+  `MatrixStorage::reset_sampler` (a no-op by default; `Vector2D` resets its
+  Nitro).
+- **`memory_bytes`** on `CountMinSketch` and `CountSketch`: the struct plus
+  its counters. **`CountMinF64`** is re-exported from the crate root and
+  `sketches`.
+- **`TopKHeap::memory_bytes`**, and **`memory_bytes` and
+  `estimated_memory_bytes(rows, cols, heap_size, key)`** on
+  `CountMinSketchWithHeap` and `CountSketchWithHeap`.
 
 ### Changed
 
+- **`UnivMon::estimate_g_sum` and `UnivMonTwoTier::estimate_g_sum` take
+  `count_every_key`** (breaking), was `heavy_only`. `true` now counts every
+  heap key; `heavy_only = true` applied the `L2 / sqrt(heap_size)` threshold.
 - **The legacy MessagePack wrappers leave the crate root** (breaking).
   `CountMinSketch`, `CountMinSketchDelta`, `CountMinSketchWithHeap`,
   `CmsHeapItem`, `CountSketch`, `CountSketchDelta`,
@@ -328,6 +360,30 @@ signals a backwards-compatible change.
   `total_weight` is the total inserted weight; UnivMon's `estimate_entropy` is
   in bits and UnivMon-Q's in nats. Spec §3.15 / §3.16 rule 3 bounds `layers`
   by 19 (`UNIVMON_MAX_LAYERS`), the seed-table ceiling the code enforces.
+- **`Kll` allocates its item buffer as items arrive.** The buffer starts
+  empty, then holds 16 items and doubles up to the sketch's full capacity; a
+  decoded sketch holds just its retained items. Retained items, coin tosses,
+  quantiles, merges and ASAPv1 bytes do not depend on the buffer's size.
+- **`Kmv::estimate` takes `&self` and `Kmv::merge` takes `&Kmv`.** A full
+  sketch turns away a hash at or above its largest retained one before
+  scanning for a duplicate; the retained set is unchanged.
+- **`UnivMonQ::estimated_memory_bytes(&self)` is `UnivMonQ::memory_bytes`**
+  (breaking) and counts what the instance holds now. Across the crate,
+  `memory_bytes(&self)` is what an instance holds and
+  `estimated_memory_bytes(<shape>)` prices a shape before building.
+- **`CountMinSketch`, `CountSketch`, their WithHeap and WithSpaceSaving forms
+  refuse a zero dimension and a counter count past `usize`** (breaking): their
+  constructors and `from_storage` panic on such a shape.
+- **Seed index `i` hashes with `seed_for_index(i)`** (new, public):
+  `SEED_LIST[i % 20] * (i / 20 + 1) + i / 20` in wrapping `u64` arithmetic.
+  Indexes below 20 keep their seed; an index past 20 draws its own, so matrix
+  rows past 20 hash independently and UnivMon-Q's occurrence priorities hash at
+  their own seed. Count-Min, Count Sketch, their WithHeap and WithSpaceSaving
+  forms, Elastic, Hydra and UnivMon build any row count in memory; `to_asapv1`
+  refuses more than `MATRIX_MAX_ROWS`.
+- **ASAPv1 `seed_derivation` is `"seed_list_index_scaled"`** (breaking, wire),
+  naming `seed_for_index`. Bytes carrying `"seed_list_index_wrap"` no longer
+  decode. The golden fixtures are regenerated.
 
 ### Removed
 
@@ -355,6 +411,14 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- `UnivMonTwoTier` gets `UnivMon`'s estimator fixes: `estimate_cardinality`
+  counts every heap key, `estimate_l2` reads layer 0's Count Sketch F2 estimate
+  (terminal mode: the summed strata's), and new `top_layer_complete()`.
+- `UnivMon::estimate_cardinality` counts every heap key, zero-weight keys and
+  keys with a nonpositive Count Sketch estimate included. `estimate_l2` reads
+  layer 0's Count Sketch F2 estimate (terminal mode: the summed strata's), not
+  the heap recurrence. New `top_layer_complete()`; the error bounds, stated
+  jointly with `top_layer_complete()`, are in `docs/api/api_univmon.md`.
 - `KLLDynamic` panicked on every quantile query once a NaN had entered the
   stream: the CDF was sorted with `partial_cmp(..).unwrap()`. It sorts with
   `total_cmp`, as the three sibling sorts beside it already did.

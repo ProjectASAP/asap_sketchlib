@@ -1293,18 +1293,11 @@ mod documented_matrix {
         );
     }
 
-    /// UnivMon answers cardinality from its recursive-sampling pyramid, and the
-    /// pyramid has to be deep enough for the sampled key set to shrink to
-    /// something the top-level heap can enumerate: layer `l` keeps roughly
-    /// `F0 / 2^l` keys, so the deepest layer only carries a recoverable
-    /// heavy-hitter set once `heap * 2^layers` reaches the stream's distinct
-    /// count. The document's 16 layers reach 2 million keys, which covers every
-    /// numbered input; at 8 layers they reach 8192 and `(1)`'s 99515 distinct
-    /// keys never arrive, which
-    /// `a_pyramid_too_shallow_for_the_stream_cannot_recover_its_cardinality`
-    /// pins.
+    /// 16 layers of heap 128 reach `128 * 2^16` keys, covering every numbered input.
+    /// The 30% band is checked jointly with `top_layer_complete()`, the event the
+    /// distinct-count bound in `docs/api/api_univmon.md` is stated with.
     fn univmon_documented_cardinality(id: u8) {
-        const HEAP: usize = 32;
+        const HEAP: usize = 128;
         const ROWS: usize = 5;
         const COLS: usize = 2_048;
         const LAYERS: usize = 16;
@@ -1327,6 +1320,10 @@ mod documented_matrix {
             um.estimate_l1(),
             input.keys.len() as f64,
             "UnivMon L1 must be exact. {context}"
+        );
+        assert!(
+            um.top_layer_complete(),
+            "the top layer must hold every key it received for the bound to apply. {context}"
         );
         let card = um.estimate_cardinality();
         let rel = (card - distinct) / distinct;

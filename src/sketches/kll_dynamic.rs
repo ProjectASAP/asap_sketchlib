@@ -1,8 +1,8 @@
 //! KLL quantile sketch (dynamic / insert-optimized variant).
 //!
-//! This variant uses a dynamically-growing `Vector1D` buffer instead of a
-//! pre-allocated fixed-size array. Insertion and compaction follow the compact
-//! KLL layout from:
+//! This variant appends items to a `Vector1D` and shifts them during
+//! compaction, instead of `Kll`'s leftward-grown buffer. Insertion and
+//! compaction follow the compact KLL layout from:
 //! "Insert-optimized implementation of streaming data sketches" (Pfeil et al., 2025).
 //! CDF construction follows the pattern described in dgryski/go-kll, based on the
 //! weighted CDF approach from the original KLL paper (Karnin, Lang & Liberty, FOCS 2016).
@@ -33,9 +33,9 @@ pub struct DynamicCdfEntry {
 
 /// KLL quantile sketch using a dynamic, insert-optimized layout.
 ///
-/// Unlike [`Kll`](super::kll::Kll), which pre-allocates a fixed buffer and
-/// grows downward, `KllDynamic` appends items to a growable `Vector1D` and
-/// shifts elements during compaction.
+/// Unlike [`Kll`](super::kll::Kll), which grows its buffer downward,
+/// `KllDynamic` appends items to a growable `Vector1D` and shifts elements
+/// during compaction.
 #[derive(Clone, Debug)]
 pub struct KllDynamic<T: NumericalValue = f64> {
     items: Vector1D<T>, // compactors, packed
@@ -261,6 +261,14 @@ impl<T: NumericalValue> KllDynamic<T> {
 
         // Sync last pointer just in case (should be covered by loop, but ensures safety)
         levels_slice[self.num_levels] = self.items.len();
+    }
+
+    /// Bytes this sketch holds: the struct, its item buffer and its level
+    /// bounds.
+    pub fn memory_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.items.capacity() * std::mem::size_of::<T>()
+            + self.level_bounds_top_down.capacity() * std::mem::size_of::<usize>()
     }
 
     /// Reset the sketch to its initial state, preserving `k`, `m`, and the
@@ -596,6 +604,21 @@ mod tests {
     use crate::test_utils::{sample_uniform_f64, sample_zipf_f64};
 
     const SKETCH_K: i32 = 200;
+
+    /// A new sketch holds its 3k-item reservation and two level bounds.
+    #[test]
+    fn memory_bytes_counts_the_reservation() {
+        let mut sk = KllDynamic::<f64>::with_seed(200, 8, 3);
+        let fresh = sk.memory_bytes();
+        assert_eq!(
+            fresh,
+            std::mem::size_of::<KllDynamic<f64>>() + 600 * 8 + 2 * 8
+        );
+        for i in 0..10_000 {
+            sk.update(&f64::from(i));
+        }
+        assert!(sk.memory_bytes() > fresh);
+    }
 
     // return element from input with given quantile
     fn quantile_from_sorted(data: &[f64], quantile: f64) -> f64 {

@@ -20,7 +20,11 @@ and `i128`. Each entry's count is the sketch's estimate, unrounded.
 fn new(rows: usize, cols: usize, heap_size: usize) -> Self
 fn from_storage(storage: S, heap_size: usize) -> Self
 fn default() -> Self
+fn check_shape(rows: usize, cols: usize) -> Result<(), String>
 ```
+
+`check_shape` is `CountMinSketch::check_shape`; `new` and `from_storage` panic on a
+shape it refuses.
 
 ## Insert/Update
 
@@ -29,7 +33,11 @@ fn update(&mut self, key: &DataInput)
 fn update_weighted(&mut self, key: &DataInput, weight: S::Counter)
 fn update_batch(&mut self, values: &[DataInput])
 fn clear_heap(&mut self)
+fn clear(&mut self)
 ```
+
+`clear_heap` empties the heap; `clear` also zeroes the counters and restarts the
+Nitro sampler. Both keep the shape and allocations.
 
 ## Query
 
@@ -40,6 +48,17 @@ fn cols(&self) -> usize
 fn count_min_sketch(&self) -> &CountMinSketch<S, M, H>
 fn heap(&self) -> &TopKHeap<C>
 ```
+
+## Memory
+
+```rust
+fn memory_bytes(&self) -> usize
+fn estimated_memory_bytes(rows: usize, cols: usize, heap_size: usize, key: &DataInput) -> usize // Vector2D storage
+```
+
+`memory_bytes` is what the instance holds now: the struct, `rows * cols`
+counters and `TopKHeap::memory_bytes`. `estimated_memory_bytes` prices a
+`new(rows, cols, heap_size)` whose heap is full of keys shaped like `key`.
 
 ## Merge
 
@@ -67,11 +86,9 @@ carries `rows`, `cols`, `counter_type`, `mode`, the heap capacity `heap_size`
 and the heap's `key_type`, and the payload is `[counts, keys, heap_counts]`,
 with `heap_counts` `f64` under `counter_type` `"f64"` and `i64` otherwise. The
 heap's digest index is rebuilt on load, so no index reaches the wire, and
-`heap_size` never sizes an allocation on decode. The base matrix is bound by
-the same `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length) the
-stand-alone sketch is: past that, the regular path gives row `r` and row
-`r + 20` the same seed and identical counters, so a wider matrix is refused on
-both sides in either mode.
+`heap_size` never sizes an allocation on decode. The base matrix carries
+the stand-alone sketch's wire bound, `1 <= rows <= 20` (`MATRIX_MAX_ROWS`),
+refused past it on both sides in either mode.
 
 Heap keys are `OwnedDataInput`s, so the key type is a runtime property: `key_type`
 names the **exact** variant (`"i32"` stays `"i32"`, never widened to `"i64"`)

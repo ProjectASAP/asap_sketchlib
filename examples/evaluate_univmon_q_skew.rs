@@ -72,7 +72,7 @@ fn main() {
     }
     let q_reserved_bytes = UnivMonQ::new(base_config)
         .expect("evaluation config must be valid")
-        .estimated_memory_bytes();
+        .memory_bytes();
 
     println!("UnivMon versus UnivMon-Q large synthetic skew evaluation");
     println!("n={n}, trials={trials}, domain={domain}, shards={SHARDS}");
@@ -282,7 +282,7 @@ fn estimated_q_memory(mut config: UnivMonQConfig, candidates: usize) -> usize {
     config.heap_size = candidates;
     UnivMonQ::new(config)
         .expect("candidate search must preserve a valid config")
-        .estimated_memory_bytes()
+        .memory_bytes()
 }
 
 fn evaluate_trial(
@@ -361,7 +361,7 @@ fn evaluate_trial(
         q_prepare_us: prepare_ns / 1_000.0,
         q_warm_ns: warm_ns,
         um_query_us,
-        q_memory_mib: q_merged_tree.estimated_memory_bytes() as f64 / (1024.0 * 1024.0),
+        q_memory_mib: q_merged_tree.memory_bytes() as f64 / (1024.0 * 1024.0),
         q_wire_kib: q_wire.len() as f64 / 1024.0,
         um_wire_kib: um_wire.len() as f64 / 1024.0,
         q_violations,

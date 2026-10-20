@@ -296,7 +296,7 @@ The two tables below are the field-by-field detail of each group.
 | `metadata_version` | u8 | yes | schema version of *this block* (`1`). Independent of envelope `version`. |
 | `hash_profile_id` | string | yes | stable global id `"projectasap.xxh3.seedlist.v1"`; authoritative |
 | `hash_algorithm` | string | yes | `"xxh3_64_128"` |
-| `seed_derivation` | string | yes | `"seed_list_index_wrap"` |
+| `seed_derivation` | string | yes | `"seed_list_index_scaled"` |
 | `input_encoding` | string | yes | `"projectasap.input.v1"` |
 | `seed_list` | `array<u64>` | **yes (inlined)** | the 20 seeds, carried inline so the bytes self-describe the hash |
 | `canonical_seed_index` | u32 | **per-sketch** | index into `seed_list` (`5`); HLL, KMV and Hydra's HLL counter use it |
@@ -395,7 +395,7 @@ The `seedlist` in `hash_profile_id`'s value is part of the fixed id and does not
 metadata_version = 1
 hash_profile_id  = "projectasap.xxh3.seedlist.v1"
 hash_algorithm   = "xxh3_64_128"
-seed_derivation  = "seed_list_index_wrap"
+seed_derivation  = "seed_list_index_scaled"
 input_encoding   = "projectasap.input.v1"
 seed_list        = [0xcafe3553, 0xade3415118, 0x8cc70208, 0x2f024b2b, 0x451a3df5,
                     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f,
@@ -406,6 +406,8 @@ matrix_seed_index               = 0
 ```
 
 The block is in wire order, which is the hash-spec table's order above: `seed_derivation` and `input_encoding` before `seed_list`, the seed indices after it. The table is the order authority for the hash-spec keys, and each kind's Section 3 subsection is the authority for the structural params that follow them (Section 4).
+
+Seed index `i` hashes with seed `seed_list[i % 20] * (i / 20 + 1) + i / 20`, in wrapping `u64` arithmetic, so an index below 20 hashes with its `seed_list` entry.
 
 The seed list also holds the two indices the algorithms fix for themselves — `HYDRA_SEED_INDEX` at `6` and `UNIVMON_BOTTOM_LAYER_SEED_INDEX` at `19`. Neither is a `HashProfile` constant and neither reaches the metadata as a key: a sketch hashing at a fixed index carries no seed-index key at all (see above).
 
@@ -480,15 +482,12 @@ Both modes, `FastPath` and `RegularPath`, serialize directly (you'd only "conver
 What that costs depends on who owns the storage. The block is **live state** in exactly two places, the only two with a Nitro insert path: the fast-path `Vector2D<i32>` Count-Min here and the fast-path `Vector2D<i32>` Count Sketch (§3.6). There, a decoded sketch resumes at a different point in the skip schedule than the uninterrupted run would have. Everywhere else a `Vector2D` carries the block and nothing reads it — Elastic's regular-path light layer (§3.11), Coco's table (§3.12), CountSketchWithL2Norm (§3.19) and the top-k sketches' base matrices (§3.7, §3.10) — so nothing observable is lost there at all.
 
 **Wire-eligible geometries.** `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length) and `cols` non-zero.
-The bound is a seed-list bound: where a row draws its own seed, that seed is `SEED_LIST[r % 20]`, so row `r` and row `r + 20` share it and fold every key into the same column, holding identical counters.
-On the **regular** path every row draws its own hash, so that is exactly what happens.
+On the **regular** path row `r` draws its own hash at seed index `r`.
 On the **fast** path one hash serves the whole matrix wherever it can: the layout reserves `ceil_log2(cols) + 1` bits per row and takes a single 64-bit hash while `rows` of them fit 64 bits, a single 128-bit hash while they fit 128, and only past that falls back to one seeded hash per row.
-In the two packed layouts the rows are **bit fields of one hash**, not independent draws, and the seed-list bound does not bind — but `rows <= 20` is declared and enforced on **both** doors whichever layout a geometry selects, so one geometry rule covers the format.
+In the two packed layouts the rows are **bit fields of one hash**, not independent draws. `rows <= 20` is declared and enforced on **both** doors whichever layout a geometry selects, so one geometry rule covers the format.
 `with_dimensions` is free to build a wider matrix in memory; such a sketch is rejected on **both** sides, so the format never emits bytes it would refuse to read back.
 
 The same `1 <= rows <= 20` bound is declared by **every matrix-shaped payload**, under whichever name that payload's rows carry: Bloom's slices (`0x17 0x00`, §3.4, as `BLOOM_MAX_SLICES`), Count Sketch (`0x04 0x00`, §3.6), CountMinSketchWithHeap (`0x03 0x00`), CountSketchWithHeap (`0x0a 0x00`), CountMinSketchWithSpaceSaving (`0x1e 0x00`) and CountSketchWithSpaceSaving (`0x1f 0x00`) with their base matrix, CountSketchWithL2Norm (`0x19 0x00`), Coco's table (`0x0c 0x00`), Elastic's light layer (`0x0b 0x00`), Hydra's grid and its matrix counters (`0x07 0x01` / `0x07 0x02`), and every UnivMon (`0x10 0x00`) and Two-tier UnivMon (`0x11 0x00`) layer.
-Two of them earn the bound outright, on every geometry: Coco's row `i` hashes at seed index `i`, and Elastic's light layer is fixed to the regular path.
-The rest inherit it from the paragraph above — the regular path always, the fast path once the packed layouts run out of bits.
 
 **CountSketchWithL2Norm never draws per row**, and neither do the UnivMon layers built from it. One `hash128_seeded(seed_index, key)` supplies every row: the column bits at `r * ceil_log2(cols)` and the sign at bit `127 - r`. It still declares `rows <= 20`, and it carries the second bound the packed layout makes binding — `(ceil_log2(cols) + 1) * rows <= 128`, the bits one 128-bit hash has to give out (§3.19).
 
@@ -1039,7 +1038,7 @@ UnivMon carries the hash-spec group — it hashes, and a consumer must reproduce
 `update_mode` and `candidate_complete` are both **carried**:
 
 - `update_mode` is acquired from the first update rather than configured, and it selects the query recurrence (`calc_terminal_g_sum` versus the standard layer recurrence). A decoder that guessed it would answer entropy and cardinality from the wrong reconstruction.
-- `candidate_complete` is not derivable. `len < heap_size` implies complete, but a full heap is ambiguous — exactly-filled-never-evicted and evicted-since look identical — and `mark_candidates_incomplete`, the OctoSketch delta path, lowers the flag with no observable trace. A decoder that re-derived it from heap fullness would call an evicted-from layer complete, which sends `heavy_threshold` down the permissive branch (threshold `0` instead of `l2 / sqrt(heap_size)`) and counts every candidate including noise: overstated `estimate_cardinality` and `estimate_entropy`, with nothing anywhere to indicate a problem.
+- `candidate_complete` is not derivable. `len < heap_size` implies complete, but a full heap is ambiguous — exactly-filled-never-evicted and evicted-since look identical — and `mark_candidates_incomplete`, the OctoSketch delta path, lowers the flag with no observable trace. A decoder that re-derived it from heap fullness would call an evicted-from layer complete: `top_layer_complete()` would report it, and terminal-mode g-sums with `count_every_key = false` (entropy) would drop their `l2 / sqrt(heap_size)` threshold.
 
 `bucket_size` is the exact L1 and is not recoverable from the counters, so it is carried. Everything else UnivMon reports — `estimate_l2`, `estimate_entropy`, `estimate_cardinality` — is recomputed from the layers and appears nowhere.
 
@@ -1051,7 +1050,7 @@ UnivMon carries the hash-spec group — it hashes, and a consumer must reproduce
 
 1. `kind_id` is `0x10 0x00`; any other id is rejected.
 2. The hash-spec group matches `DefaultXxHasher`'s `HashProfile`. `layers`, `rows`, `cols`, `heap_size` and `key_type` are properties of the stored sketch, so they are echoed back rather than pinned.
-3. `layers`, `rows`, `cols` and `heap_size` are **all non-zero**, and `layers <= 19` (`UNIVMON_MAX_LAYERS`). All of it is checked **before** the per-layer geometry vector is built, so it is the first thing standing between a declared shape and an allocation. The ceiling is a seed bound: layer `i` hashes at seed index `i`, and the layer finder hashes at `UNIVMON_BOTTOM_LAYER_SEED_INDEX` (19), so a 20th layer would share the finder's seed and later ones would wrap onto layer 0's. The ceiling is checked on **both** doors; the four non-zero checks are the decode door's, since only a decoder is handed a shape it did not build.
+3. `layers`, `rows`, `cols` and `heap_size` are **all non-zero**, and `layers <= 19` (`UNIVMON_MAX_LAYERS`). All of it is checked **before** the per-layer geometry vector is built, so it is the first thing standing between a declared shape and an allocation. The ceiling is a seed bound: layer `i` hashes at seed index `i`, and the layer finder hashes at `UNIVMON_BOTTOM_LAYER_SEED_INDEX` (19), so a 20th layer would share the finder's seed. The ceiling is checked on **both** doors; the four non-zero checks are the decode door's, since only a decoder is handed a shape it did not build.
 4. `key_type` is one of §3.5's fourteen names; the `keys` array is read **as** that type, with §3.5 rule 3's relabel limits; and `keys` and `heap_counts` have equal length. A pyramid whose heaps hold no key requires `key_type` `"u64"`.
 5. `rows * layers == len(l2)` exactly, with checked arithmetic, and checked **before** the layer geometry is built. Together with rule 3's ceiling this is what makes a declared `layers` far larger than the payload carries cost nothing: `rows >= 1`, so the equality caps `layers` at `len(l2)`, and the ceiling caps it at 64 regardless.
 6. `len(heap_lens) == len(candidate_complete) == layers`; every layer's `rows` and `cols` are non-zero and `rows <= 20` (`MATRIX_MAX_ROWS`, §3.2 — a layer is a CountSketchWithL2Norm matrix; `cols.ilog2()` panics on zero) and its geometry fits the 128-bit key hash, `(ceil_log2(cols) + 1) * rows <= 128` (§3.19); the layers' total cell count and total accumulator count are computed with checked arithmetic and must equal `len(counts)` and `len(l2)`; and `len(keys) == len(heap_counts) == sum(heap_lens)`.
@@ -1224,7 +1223,7 @@ The encode side re-splits the bytes the variant produced and rejects an id that 
 5. `len(counts) == rows * cols` exactly, checked **before** the allocation, so crafted dimensions cannot drive a huge reserve.
 6. `len(l2) == rows`.
 7. Every `l2[i] >= 0` — a negative accumulator is not a state a sum of squares reaches. This is the whole of what `l2` is checked for, and it is the **strongest sound predicate** there is: `l2` is deliberately *not* cross-checked against `counts`, in either direction, because no sound relation holds. `update_weighted_with_hash_without_l2` moves counters without touching the accumulator, so a run of those on a fresh sketch leaves `l2` **below** `sum(counts[row]^2)`; the same call used to decrement after ordinary inserts leaves it **above**; and the accumulator clamps to `[0, i64::MAX]`, which pushes it below the true sum when a run would overflow and above it when a run would go negative. So neither `l2[i] <= sum(counts[i]^2)` nor its converse describes a reachable-state boundary, and a decoder that enforced either would reject sketches the algorithm produces. Non-negativity is what survives, and it is what both doors check.
-8. `seed_index` is **less than the declared `seed_list`'s length**. Seed selection wraps (`seed_index % seed_list.len()`), so an out-of-range index is a second encoding of a state the in-range index already encodes: two sketches that hash every key identically would carry different bytes and compare unequal. This is the stand-alone sketch's rule, on both doors. It does not reach an **inlined** UnivMon layer, whose index is its own position (§3.15) and is checked against that instead: a pyramid may hold up to 64 layers over a seed list of 20, so the deeper layers legitimately wrap.
+8. `seed_index` is **less than the declared `seed_list`'s length**. This is the stand-alone sketch's rule, on both doors. It does not reach an **inlined** UnivMon layer, whose index is its own position (§3.15) and is checked against that instead.
 
 Rules 3 to 8 are enforced on the **encode** side too — a matrix whose cell count disagrees with its own dimensions fails to serialize, as Count Sketch's does, and so do a geometry that outruns the 128-bit hash budget and a seed index past the hasher's seed list — so the format never emits bytes it would refuse to read back.
 

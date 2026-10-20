@@ -16,6 +16,8 @@ use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
 
+#[cfg(test)]
+mod eager_reference;
 mod wire;
 pub(crate) use wire::{
     KllCoinWire, KllPayload, KllWireItem, kll_metadata, split_and_validate_meta,
@@ -30,6 +32,9 @@ pub(crate) const MAX_K: usize = 26_602;
 pub const DEFAULT_M: usize = 8;
 const CAPACITY_DECAY: f64 = 2.0 / 3.0;
 const DEFAULT_K: i32 = 200;
+/// Items the buffer holds at its first allocation; it then doubles, up to
+/// the sketch's `max_capacity`.
+const INITIAL_BUFFER_ITEMS: usize = 16;
 
 /// Coin generates deterministic pseudo-random coin flips while amortizing
 /// calls to the RNG by consuming one bit at a time from a 64-bit buffer.
@@ -114,8 +119,8 @@ pub struct CdfEntry {
 }
 
 /// Computes the maximum number of items the sketch can hold across all
-/// levels for the given `k` and `m`. The buffer is pre-allocated to this
-/// size so that no dynamic reallocation ever occurs.
+/// levels for the given `k` and `m`. The buffer grows as items arrive, up to
+/// this size.
 fn compute_max_capacity(k: usize, m: usize) -> usize {
     let mut total = 0;
     let mut scale = 1.0_f64;
@@ -235,6 +240,10 @@ pub(crate) fn merge_sorted_runs<T: NumericalValue>(
 /// ```
 ///
 /// `levels[h]` = start of level h.  `levels[h+1] - levels[h]` = size of level h.
+///
+/// The buffer starts empty and doubles (from 16 items, up to `max_capacity`)
+/// when L0 reaches its front; a full buffer compacts only at `max_capacity`,
+/// so retained items and coin tosses do not depend on the buffer's size.
 #[derive(Clone, Debug)]
 pub struct Kll<T: NumericalValue = f64> {
     items: Box<[T]>,
@@ -306,13 +315,8 @@ impl<T: NumericalValue> Kll<T> {
         }
         let max_cap = compute_max_capacity(norm_k, norm_m);
         let mut s = Self {
-            items: vec![T::default(); max_cap].into_boxed_slice(),
-            levels: {
-                let mut v = vec![0usize; MAX_LEVELS + 1];
-                v[0] = max_cap;
-                v[1] = max_cap;
-                v.into_boxed_slice()
-            },
+            items: Box::default(),
+            levels: vec![0usize; MAX_LEVELS + 1].into_boxed_slice(),
             k: norm_k,
             m: norm_m,
             num_levels: 1,
@@ -322,11 +326,45 @@ impl<T: NumericalValue> Kll<T> {
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
             level0_capacity: 0,
-            merge_buf: Vec::with_capacity(norm_k),
+            merge_buf: Vec::new(),
             cdf_cache: None,
         };
         s.rebuild_capacity_cache();
         s
+    }
+
+    /// Grows the item buffer to at least `min_len` items (at least double,
+    /// at most `max_capacity`), moving the retained items to the high end and
+    /// shifting every level boundary by the growth.
+    fn grow_buffer(&mut self, min_len: usize) {
+        let old_len = self.items.len();
+        let new_len = min_len
+            .max(old_len * 2)
+            .max(INITIAL_BUFFER_ITEMS)
+            .min(self.max_capacity);
+        if new_len <= old_len {
+            return;
+        }
+        let delta = new_len - old_len;
+        let used_start = self.levels[0];
+        let mut items = vec![T::default(); new_len].into_boxed_slice();
+        items[used_start + delta..].copy_from_slice(&self.items[used_start..]);
+        self.items = items;
+        for level in self.levels[..=self.num_levels].iter_mut() {
+            *level += delta;
+        }
+    }
+
+    /// Bytes this sketch holds: the struct, its item buffer, level array and
+    /// merge scratch space, and a memoized CDF when one is held.
+    pub fn memory_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + std::mem::size_of_val(&*self.items)
+            + std::mem::size_of_val(&*self.levels)
+            + self.merge_buf.capacity() * std::mem::size_of::<T>()
+            + self.cdf_cache.as_ref().map_or(0, |cdf| {
+                cdf.entries.capacity() * std::mem::size_of::<CdfEntry>()
+            })
     }
 
     /// Reconstruct a KLL directly from the retained `items` in level order
@@ -373,9 +411,10 @@ impl<T: NumericalValue> Kll<T> {
                 k
             ));
         }
+        s.grow_buffer(items.len());
         // Live data occupies the high end of the buffer; free space at the front.
-        let offset = s.max_capacity - items.len();
-        let max_cap = s.max_capacity;
+        let max_cap = s.items.len();
+        let offset = max_cap - items.len();
         s.items[offset..].clone_from_slice(items);
         for (dst, &src) in s.levels.iter_mut().zip(levels[..=num_levels].iter()) {
             *dst = src + offset;
@@ -393,12 +432,23 @@ impl<T: NumericalValue> Kll<T> {
     fn push_value(&mut self, value: T) {
         self.invalidate_cdf_cache();
         if self.levels[0] == 0 {
-            self.compress_while_updating();
+            self.make_room();
         }
         self.levels[0] -= 1;
         self.items[self.levels[0]] = value;
 
         if self.levels[1] - self.levels[0] > self.level0_capacity {
+            self.compress_while_updating();
+        }
+    }
+
+    /// The buffer is full: grow it, or compact once it is at `max_capacity`.
+    #[cold]
+    #[inline(never)]
+    fn make_room(&mut self) {
+        if self.items.len() < self.max_capacity {
+            self.grow_buffer(self.items.len() + 1);
+        } else {
             self.compress_while_updating();
         }
     }
@@ -667,13 +717,14 @@ impl<T: NumericalValue> Kll<T> {
             h += 1;
         }
 
-        // Write the compacted per-level vectors back into the fixed
-        // buffer, top level first (matches the buffer's grow-leftward
-        // layout). `total <= max_capacity` is guaranteed here because
-        // every level 0..self.num_levels now satisfies its own capacity
-        // bound — the same invariant a live KLL always maintains — and
-        // max_capacity is exactly the sum of all per-level capacities.
-        let mc = self.max_capacity;
+        // Write the compacted levels back top level first, growing the buffer
+        // if needed; every level is within its capacity, so the total is at
+        // most `max_capacity` (the sum of all per-level capacities).
+        let total: usize = work[..self.num_levels].iter().map(Vec::len).sum();
+        if total > self.items.len() {
+            self.grow_buffer(total);
+        }
+        let mc = self.items.len();
         let mut cursor = mc;
         for h in (0..self.num_levels).rev() {
             let len = work[h].len();
@@ -734,7 +785,7 @@ impl<T: NumericalValue> Kll<T> {
     /// `with_k_and_seed`), the coin is re-seeded from that seed so determinism
     /// survives `clear()` (and therefore window rotation in stateful aggregators).
     pub fn clear(&mut self) {
-        let mc = self.max_capacity;
+        let mc = self.items.len();
         self.invalidate_cdf_cache();
         self.levels[0] = mc;
         self.levels[1] = mc;
@@ -975,6 +1026,175 @@ mod tests {
     use super::*;
     use crate::test_utils::{sample_uniform_f64, sample_zipf_f64};
 
+    /// Each level's retained items, bottom level first, in buffer order.
+    fn levels_items(sk: &Kll<f64>) -> Vec<Vec<f64>> {
+        (0..sk.num_levels)
+            .map(|h| sk.items[sk.levels[h]..sk.levels[h + 1]].to_vec())
+            .collect()
+    }
+
+    /// The growing buffer holds the eager buffer's state: the same items per
+    /// level in the same order and the same coin, before and after a merge.
+    /// Decode-then-continue, merging into an empty and a one-item sketch, and
+    /// clear-then-continue each hold the eager buffer's state, at m = 2 and 8.
+    #[test]
+    fn lazy_allocation_matches_eager_across_lifecycle() {
+        use eager_reference::EagerKll;
+        let same = |lazy: &Kll<f64>, eager: &EagerKll<f64>, context: &str| {
+            assert_eq!(levels_items(lazy), eager.levels_items(), "{context}");
+            assert_eq!(lazy.coin.to_wire(), eager.coin.to_wire(), "{context}");
+        };
+        for m in [2usize, 8] {
+            for k in [16usize, 200] {
+                for n in [5usize, 3 * k, 40 * k] {
+                    let first = sample_uniform_f64(0.0, 1e6, n, (k * 31 + m) as u64);
+                    let later = sample_uniform_f64(-1e6, 1e6, n + 7, (k * 37 + m) as u64);
+                    let context = format!("m={m} k={k} n={n}");
+                    let mut lazy = Kll::<f64>::with_seed(k, m, 5);
+                    let mut eager = EagerKll::<f64>::with_seed(k, m, 5);
+                    for &v in &first {
+                        lazy.update(&v);
+                        eager.update(v);
+                    }
+
+                    let mut decoded = Kll::<f64>::from_asapv1(&lazy.to_asapv1().unwrap()).unwrap();
+                    let mut eager_continued = EagerKll::<f64>::with_seed(k, m, 5);
+                    for &v in first.iter().chain(&later) {
+                        eager_continued.update(v);
+                    }
+                    for &v in &later {
+                        decoded.update(&v);
+                    }
+                    same(&decoded, &eager_continued, &format!("{context} decoded"));
+
+                    for seeded in [0usize, 1] {
+                        let mut lazy_target = Kll::<f64>::with_seed(k, m, 9);
+                        let mut eager_target = EagerKll::<f64>::with_seed(k, m, 9);
+                        for _ in 0..seeded {
+                            lazy_target.update(&-1.0);
+                            eager_target.update(-1.0);
+                        }
+                        lazy_target.merge(&lazy);
+                        eager_target.merge(&eager);
+                        for &v in &later {
+                            lazy_target.update(&v);
+                            eager_target.update(v);
+                        }
+                        same(
+                            &lazy_target,
+                            &eager_target,
+                            &format!("{context} merged into {seeded}"),
+                        );
+                    }
+
+                    let mut cleared = lazy.clone();
+                    cleared.clear();
+                    let mut eager_fresh = EagerKll::<f64>::with_seed(k, m, 5);
+                    for &v in &later {
+                        cleared.update(&v);
+                        eager_fresh.update(v);
+                    }
+                    same(&cleared, &eager_fresh, &format!("{context} cleared"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lazy_allocation_matches_eager() {
+        use eager_reference::EagerKll;
+        for k in [8usize, 64, 200, 469, 1024] {
+            for n in [0usize, 1, 10, k - 1, k, k + 1, 3 * k, 10 * k, 50_000] {
+                for seed in [1u64, 7] {
+                    let values = if n == 0 {
+                        Vec::new()
+                    } else {
+                        sample_uniform_f64(0.0, 1e6, n, seed ^ ((k as u64) << 8))
+                    };
+                    let mut lazy = Kll::<f64>::with_seed(k, 8, seed);
+                    let mut eager = EagerKll::<f64>::with_seed(k, 8, seed);
+                    for &v in &values {
+                        lazy.update(&v);
+                        eager.update(v);
+                    }
+                    let context = format!("k={k} n={n} seed={seed}");
+                    assert_eq!(levels_items(&lazy), eager.levels_items(), "{context}");
+                    assert_eq!(lazy.coin.to_wire(), eager.coin.to_wire(), "{context}");
+
+                    let more = sample_uniform_f64(-1e6, 0.0, n / 2 + 3, seed + 100);
+                    let mut lazy_other = Kll::<f64>::with_seed(k, 8, seed + 1);
+                    let mut eager_other = EagerKll::<f64>::with_seed(k, 8, seed + 1);
+                    for &v in &more {
+                        lazy_other.update(&v);
+                        eager_other.update(v);
+                    }
+                    lazy.merge(&lazy_other);
+                    eager.merge(&eager_other);
+                    for &v in &more {
+                        lazy.update(&v);
+                        eager.update(v);
+                    }
+                    assert_eq!(
+                        levels_items(&lazy),
+                        eager.levels_items(),
+                        "{context} merged"
+                    );
+                    assert_eq!(
+                        lazy.coin.to_wire(),
+                        eager.coin.to_wire(),
+                        "{context} merged"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A sketch holding 10 items at k = 469 holds well under its full
+    /// capacity, and its memory grows as items arrive.
+    #[test]
+    fn memory_follows_the_items_held() {
+        let mut sk = Kll::<f64>::with_seed(469, 8, 3);
+        for i in 0..10 {
+            sk.update(&f64::from(i));
+        }
+        let small = sk.memory_bytes();
+        assert!(small < 2048, "10 items reported {small} bytes");
+        for i in 0..100_000 {
+            sk.update(&f64::from(i));
+        }
+        assert!(sk.memory_bytes() > small + 469 * std::mem::size_of::<f64>());
+        assert!(sk.items.len() <= sk.max_capacity);
+        assert!(
+            sk.merge_buf.capacity() > 0,
+            "compaction used the scratch space"
+        );
+        assert_eq!(
+            sk.memory_bytes(),
+            std::mem::size_of::<Kll<f64>>()
+                + (sk.items.len() + sk.merge_buf.capacity()) * 8
+                + sk.levels.len() * 8
+        );
+        let before = sk.memory_bytes();
+        let _ = sk.cdf_cached();
+        assert!(sk.memory_bytes() > before);
+    }
+
+    /// A decoded sketch's buffer holds just its retained items.
+    #[test]
+    fn decoded_sketch_holds_just_its_retained_items() {
+        let mut sk = Kll::<f64>::with_seed(200, 8, 4);
+        for i in 0..50_000 {
+            sk.update(&f64::from(i));
+        }
+        let retained = sk.buffer_size();
+        assert!(retained < sk.items.len());
+        let decoded = Kll::<f64>::from_asapv1(&sk.to_asapv1().unwrap()).unwrap();
+        assert_eq!(
+            decoded.memory_bytes(),
+            std::mem::size_of::<Kll<f64>>() + retained * 8 + decoded.levels.len() * 8
+        );
+    }
+
     /// The memoized CDF must agree with the from-scratch rebuild at every
     /// lifecycle stage: fresh, mid-stream, post-merge, and post-clear.
     #[test]
@@ -1048,7 +1268,7 @@ mod tests {
         // Extract the compacted form (levels[0]==0,
         // levels[num_levels]==items.len()).
         let off = src.levels[0];
-        let items: Vec<f64> = src.items[off..src.max_capacity].to_vec();
+        let items: Vec<f64> = src.items[off..].to_vec();
         let levels: Vec<usize> = (0..=src.num_levels).map(|h| src.levels[h] - off).collect();
         let n = src.num_levels;
 
@@ -1065,7 +1285,7 @@ mod tests {
         // An empty sketch round-trips to an empty sketch.
         let empty = Kll::<f64>::from_portable_state(k, &[], &[], 0).unwrap();
         assert_eq!(empty.num_levels, 1);
-        assert_eq!(empty.levels[0], empty.max_capacity);
+        assert_eq!(empty.levels[0], empty.items.len());
     }
 
     // Ensure each 64-bit chunk is consumed bit-by-bit before refilling.
@@ -1481,8 +1701,16 @@ mod tests {
         assert_eq!(sketch.num_levels, restored.num_levels);
         assert_eq!(sketch.top_height, restored.top_height);
         assert_eq!(sketch.level0_capacity, restored.level0_capacity);
+        // Boundaries relative to the first retained item: buffer sizes differ.
+        let relative = |sk: &Kll<f64>| -> Vec<usize> {
+            sk.levels[..=sk.num_levels]
+                .iter()
+                .map(|&l| l - sk.levels[0])
+                .collect()
+        };
         assert_eq!(
-            sketch.levels, restored.levels,
+            relative(&sketch),
+            relative(&restored),
             "level boundaries changed after round-trip"
         );
 

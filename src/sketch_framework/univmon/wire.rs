@@ -755,15 +755,16 @@ mod tests {
         assert!(UnivMon::from_asapv1(&encoded).is_ok());
     }
 
-    /// Every layer is a CountSketchWithL2Norm matrix, so a layer past the seed list's row
-    /// bound is refused on both sides.
+    /// A layer past `MATRIX_MAX_ROWS` rows builds in memory but is refused
+    /// when encoded and when decoded.
     #[test]
     fn univmon_rejects_too_many_layer_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
-        assert!(
-            UnivMon::new(4, rows, 16, 3).to_asapv1().is_err(),
-            "a layer past MATRIX_MAX_ROWS must not serialize"
-        );
+        let problem = UnivMon::new(4, rows, 16, 3)
+            .to_asapv1()
+            .expect_err("a layer past MATRIX_MAX_ROWS must not serialize")
+            .to_string();
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
 
         let um = populated();
         let encoded = um.to_asapv1().expect("serialize");
@@ -871,16 +872,16 @@ mod tests {
         assert_eq!(decoded.estimate_entropy(), terminal.estimate_entropy());
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), encoded);
 
-        // A layer marked incomplete keeps its widened threshold: flipping the
-        // flag changes what the pyramid reports.
+        // A layer marked incomplete stays incomplete: flipping the flag
+        // changes what the pyramid reports.
         let mut forged = payload_of::<u64>(&encoded);
         forged.candidate_complete.fill(true);
         let meta = metadata_of(&encoded);
         let relaxed = UnivMon::from_asapv1(&crafted(&meta, &forged)).expect("decode");
-        assert_ne!(
-            relaxed.estimate_cardinality(),
-            terminal.estimate_cardinality(),
-            "candidate_complete had no effect on a query"
+        assert!(!terminal.top_layer_complete());
+        assert!(
+            relaxed.top_layer_complete(),
+            "candidate_complete had no effect on what the pyramid reports"
         );
     }
 
@@ -934,7 +935,7 @@ mod tests {
     impl HashProfile for AltHasher {
         const PROFILE_ID: &'static str = "test.alt.profile.v1";
         const ALGORITHM: &'static str = "xxh3_64_128";
-        const SEED_DERIVATION: &'static str = "seed_list_index_wrap";
+        const SEED_DERIVATION: &'static str = "seed_list_index_scaled";
         const INPUT_ENCODING: &'static str = "projectasap.input.v1";
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
@@ -1191,7 +1192,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "at most UNIVMON_MAX_LAYERS")]
+    #[should_panic(expected = "exceeds UNIVMON_MAX_LAYERS")]
     fn univmon_refuses_constructing_past_the_shift_bound() {
         UnivMon::new(4, 2, 16, UNIVMON_MAX_LAYERS + 1);
     }

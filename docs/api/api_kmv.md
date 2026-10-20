@@ -29,13 +29,17 @@ fn update_with_hash(&mut self, hash_value: u64)
 ## Query
 
 ```rust
-fn estimate(&mut self) -> f64
+fn estimate(&self) -> f64
+fn memory_bytes(&self) -> usize
 ```
+
+`memory_bytes` is the struct plus the hash slots the heap has allocated: up to
+1024 at construction, growing toward `k` as distinct hashes arrive.
 
 ## Merge
 
 ```rust
-fn merge(&mut self, other: &mut Kmv<H>)
+fn merge(&mut self, other: &Kmv<H>)
 ```
 
 ## Serialization

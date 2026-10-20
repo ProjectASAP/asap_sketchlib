@@ -31,7 +31,7 @@ fn main() {
         println!(
             "profile={}: {:.3} MiB, top_layer_cols={}, halve/{}, heap_size={}, samples={}",
             profile.name,
-            empty.estimated_memory_bytes() as f64 / (1024.0 * 1024.0),
+            empty.memory_bytes() as f64 / (1024.0 * 1024.0),
             profile.config.top_layer_cols,
             profile.config.cols_halving_period,
             profile.config.heap_size,
@@ -176,7 +176,7 @@ fn largest_candidate_budget(config: UnivMonQConfig, target: usize) -> usize {
     let memory = |candidates| {
         let mut candidate = config;
         candidate.heap_size = candidates;
-        UnivMonQ::new(candidate).unwrap().estimated_memory_bytes()
+        UnivMonQ::new(candidate).unwrap().memory_bytes()
     };
     let mut low = config.heap_size;
     let mut high = low * 2;

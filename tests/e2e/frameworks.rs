@@ -1534,7 +1534,9 @@ fn univmon_weighted_metrics_and_update_weighted_terminal_parity() {
 
 #[test]
 fn univmon_two_tier_weighted_metrics() {
-    let mut up = UnivMonTwoTier::with_defaults();
+    // The default tiers with heap 128: the distinct count's standard deviation
+    // is at most `sqrt(2 / heap)` of F0, so the 20% band is over 1.6 of them.
+    let mut up = UnivMonTwoTier::new(128, 8, 3, 2048, 3, 512, 16);
     let mut truth = common::FreqTruth::default();
     let stream = zipf_u64(15_000, 800, 1.3, 4004);
     for (i, k) in stream.iter().enumerate() {
@@ -1555,6 +1557,10 @@ fn univmon_two_tier_weighted_metrics() {
         "pyramid L2",
     );
     let card_truth = truth.distinct() as f64;
+    assert!(
+        up.top_layer_complete(),
+        "the top layer must hold every key it received for the bound to apply"
+    );
     assert_between(
         up.estimate_cardinality(),
         card_truth * 0.80,
@@ -1763,9 +1769,15 @@ fn univmon_generic_g_sum_reproduces_every_named_estimator() {
     }
 
     assert_eq!(
-        um.estimate_g_sum(|x| x * x, false).sqrt(),
         um.estimate_l2(),
-        "g(x)=x^2 under a square root is the L2 estimator"
+        um.layer_sketches[0].l2(),
+        "the L2 estimator reads layer 0's Count Sketch, which sees every key"
+    );
+    assert_between(
+        um.estimate_g_sum(|x| x * x, false).sqrt(),
+        truth.f2().sqrt() * 0.85,
+        truth.f2().sqrt() * 1.15,
+        "g(x)=x^2 under a square root still tracks the exact L2",
     );
     assert_eq!(
         um.estimate_g_sum(|_| 1.0, true),

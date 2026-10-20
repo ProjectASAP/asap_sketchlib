@@ -353,17 +353,16 @@ mod tests {
         assert!(problem.contains("!= rows*cols"), "got {problem}");
     }
 
-    /// More rows than the seed list has seeds is outside the wire-eligible
-    /// subset, on both sides.
+    /// More than `MATRIX_MAX_ROWS` rows builds in memory but is refused by the
+    /// encoder and by the decoder.
     #[test]
     fn count_sketch_with_heap_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
-        assert!(
-            CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(rows, 8, 4)
-                .to_asapv1()
-                .is_err(),
-            "a matrix past MATRIX_MAX_ROWS must not serialize"
-        );
+        let problem = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(rows, 8, 4)
+            .to_asapv1()
+            .expect_err("a matrix past MATRIX_MAX_ROWS must not serialize")
+            .to_string();
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
 
         let problem = decode_error(&crafted(rows as u32, 8, 4, vec![0; rows * 8]));
         assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
@@ -535,7 +534,7 @@ mod tests {
     impl HashProfile for AltHasher {
         const PROFILE_ID: &'static str = "test.alt.profile.v1";
         const ALGORITHM: &'static str = "xxh3_64_128";
-        const SEED_DERIVATION: &'static str = "seed_list_index_wrap";
+        const SEED_DERIVATION: &'static str = "seed_list_index_scaled";
         const INPUT_ENCODING: &'static str = "projectasap.input.v1";
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]

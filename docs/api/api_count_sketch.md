@@ -17,6 +17,7 @@ Status: `Ready`
 fn default() -> Self
 fn with_dimensions(rows: usize, cols: usize) -> Self
 fn from_storage(counts: S) -> Self
+fn check_shape(rows: usize, cols: usize) -> Result<(), String>
 
 // CountSketchWithL2Norm
 fn default() -> Self
@@ -24,12 +25,19 @@ fn with_dimensions(rows: usize, cols: usize) -> Self
 fn with_dimensions_and_seed_index(rows: usize, cols: usize, seed_index: usize) -> Self
 ```
 
+`check_shape` is defined once for the type (`CountSketch::check_shape(3, 64)`
+needs no type parameters) and accepts any shape with both dimensions non-zero and
+`rows * cols` within `usize`; `with_dimensions` and `from_storage` panic on any
+other shape. Every row draws its own seed (`seed_for_index`), so any row count
+hashes independently.
+
 ## Insert/Update
 
 ```rust
 fn update(&mut self, value: &DataInput)
 fn update_weighted(&mut self, value: &DataInput, weight: S::Counter)
 fn update_with_hash(&mut self, hashed_val: &H::HashType)
+fn clear(&mut self)
 
 // CountSketchWithL2Norm
 fn update_weighted(&mut self, val: &DataInput, weight: i64)
@@ -37,11 +45,15 @@ fn update_weighted_with_hash(&mut self, hashed_val: u128, weight: i64)
 fn update_weighted_with_hash_without_l2(&mut self, hashed_val: u128, c: i64)
 ```
 
+`clear` zeroes every counter and returns the Nitro sampler to its start, keeping
+the shape, allocation and admission rate.
+
 ## Query
 
 ```rust
 fn estimate(&self, value: &DataInput) -> f64
 fn estimate_with_hash(&self, hashed_val: &H::HashType) -> f64
+fn memory_bytes(&self) -> usize
 
 // CountSketchWithL2Norm
 fn estimate(&self, val: &DataInput) -> f64
@@ -50,6 +62,9 @@ fn update_weighted_and_estimate(&mut self, val: &DataInput, weight: i64) -> f64
 fn l2(&self) -> f64
 fn l2_squared(&self) -> f64
 ```
+
+`memory_bytes` is the struct plus its `rows * cols` counters, exact for
+`Vector2D` storage.
 
 ## Merge
 
@@ -77,16 +92,15 @@ the metadata and pinned on decode, so `i32` bytes do not decode into an `i64`
 sketch, or the reverse — which is what lets a nested `Vector2D<i32>` Count
 Sketch (the variant `HydraCounter` and `EhBucketSketch` hold) round-trip back into
 its own type. `rows`/`cols` and the `mode` are carried in the metadata too; the
-payload is just `[counts]`, packed row-major with signed cells. The wire covers `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed
-list length): past that, the regular path gives row `r` and row `r + 20` the
-same seed and identical counters, so a wider matrix is refused on both sides in
+payload is just `[counts]`, packed row-major with signed cells. The wire covers `1 <= rows <= 20` (`MATRIX_MAX_ROWS`) and
+`cols <= u32::MAX`; `to_asapv1` and `from_asapv1` refuse a wider matrix in
 either mode.
 
 `CountSketchWithL2Norm` has its own ASAPv1 kind (`0x19 0x00`) and the same two methods,
 available for any `H: HashProfile`. Its counters are always `i64` and its
 column derivation is fixed by the algorithm, so the metadata carries no
-`counter_type` and no `mode` — only `seed_index`, `rows` and `cols`. Its rows
-are seeded per row too, so it carries the same `1 <= rows <= 20` bound. The
+`counter_type` and no `mode` — only `seed_index`, `rows` and `cols`. It
+carries the same `1 <= rows <= 20` wire bound. The
 payload is `[counts, l2]`: the matrix packed row-major, then one L2
 accumulator per row. `l2` is carried rather than recomputed, because
 `update_weighted_with_hash_without_l2` moves counters without it and the

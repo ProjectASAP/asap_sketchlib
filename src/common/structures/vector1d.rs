@@ -44,6 +44,11 @@ impl<T> Vector1D<T> {
         self.data.len()
     }
 
+    /// Returns the number of elements the vector holds memory for.
+    pub(crate) fn capacity(&self) -> usize {
+        self.data.capacity()
+    }
+
     /// Inserts `val` at `pos`, shifting later elements right.
     pub fn insert(&mut self, pos: usize, val: T) {
         self.data.insert(pos, val);

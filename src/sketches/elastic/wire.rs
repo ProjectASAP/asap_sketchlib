@@ -294,8 +294,8 @@ mod tests {
         DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, MATRIX_MAX_ROWS, RegularPath,
     };
 
-    /// The light layer is a Count-Min matrix, so it carries the same row bound:
-    /// more rows than the seed list has seeds is refused on both sides.
+    /// The light layer is a Count-Min matrix, so it carries the same wire row
+    /// bound: past `MATRIX_MAX_ROWS` it builds but is refused on both sides.
     #[test]
     fn elastic_rejects_too_many_light_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
@@ -752,7 +752,7 @@ mod tests {
     impl HashProfile for AltHasher {
         const PROFILE_ID: &'static str = "test.alt.profile.v1";
         const ALGORITHM: &'static str = "xxh3_64_128";
-        const SEED_DERIVATION: &'static str = "seed_list_index_wrap";
+        const SEED_DERIVATION: &'static str = "seed_list_index_scaled";
         const INPUT_ENCODING: &'static str = "projectasap.input.v1";
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]

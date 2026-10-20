@@ -63,6 +63,15 @@ fn value_at_interpolated(&self, p: f64) -> f64
 fn merge(&mut self, other: &Kll<T>)
 ```
 
+## Memory
+
+```rust
+fn memory_bytes(&self) -> usize
+```
+
+The bytes the sketch holds now: struct, item buffer, level array, merge
+scratch space and a memoized CDF. `KllDynamic` has the same method.
+
 ## Serialization
 
 ```rust
@@ -97,6 +106,8 @@ assert!(q50 >= 10.0);
 - `Kll<T>` is generic over numeric types implementing `NumericalValue`.
 - `update_data_input` exists only on `Kll<f64>` for type-erased `DataInput` call paths.
 - Query-side APIs still return `f64`.
+- The item buffer starts empty and doubles (from 16 items) up to the sketch's
+  full capacity; retained items and coin tosses do not depend on its size.
 
 ## Status
 

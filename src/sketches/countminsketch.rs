@@ -11,6 +11,7 @@
 use std::marker::PhantomData;
 
 use crate::asapv1::admission_rate::admit_all;
+use crate::common::hash::check_matrix_shape;
 use crate::common::structure_utils::AdmittedRows;
 use crate::octo_delta::{
     CountMinSketchCellDelta, KeyedCountMinSketchCellDelta, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
@@ -189,7 +190,12 @@ where
     T: Copy + Default + std::ops::AddAssign,
 {
     /// Creates a sketch with the requested number of rows and columns.
+    ///
+    /// Panics when [`CountMinSketch::check_shape`] refuses the shape.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
+        if let Err(problem) = check_matrix_shape("CMS", rows, cols) {
+            panic!("{problem}");
+        }
         CountMinSketch {
             counts: Vector2D::filled(rows, cols, T::default()),
             _mode: PhantomData,
@@ -199,10 +205,32 @@ where
     }
 }
 
+// Shape check; the rule is the same for every storage, path and hasher.
+impl CountMinSketch {
+    /// The shapes this sketch builds: both dimensions non-zero and
+    /// `rows * cols` within `usize`. The constructors panic on any other
+    /// shape; `to_asapv1` also needs `rows <= MATRIX_MAX_ROWS` and
+    /// `cols <= u32::MAX`.
+    ///
+    /// ```
+    /// use asap_sketchlib::CountMinSketch;
+    /// assert!(CountMinSketch::check_shape(3, 64).is_ok());
+    /// assert!(CountMinSketch::check_shape(0, 64).is_err());
+    /// ```
+    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
+        check_matrix_shape("CMS", rows, cols)
+    }
+}
+
 // Core CountMinSketch API for any storage.
 impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
     /// Creates a sketch from an existing matrix storage instance.
+    ///
+    /// Panics when [`Self::check_shape`] refuses the storage's shape.
     pub fn from_storage(counts: S) -> Self {
+        if let Err(problem) = CountMinSketch::check_shape(counts.rows(), counts.cols()) {
+            panic!("{problem}");
+        }
         Self {
             counts,
             _mode: PhantomData,
@@ -234,6 +262,12 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H> {
     #[inline(always)]
     pub fn cols(&self) -> usize {
         self.counts.cols()
+    }
+
+    /// Bytes this sketch holds: the struct and its `rows * cols` counters.
+    /// Exact for `Vector2D` storage.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() + self.rows() * self.cols() * size_of::<S::Counter>()
     }
 
     /// Exposes the backing matrix for inspection/testing.
@@ -496,6 +530,19 @@ impl<S: MatrixStorage, Mode, H: SketchHasher> CountMinSketch<S, Mode, H>
 where
     S::Counter: Copy + std::ops::AddAssign + From<i32>,
 {
+    /// Zeroes every counter and returns the Nitro sampler to its start,
+    /// keeping the shape, the allocation and the admission rate.
+    pub fn clear(&mut self) {
+        self.counts.reset_sampler();
+        let zero = S::Counter::from(0);
+        for r in 0..self.counts.rows() {
+            for c in 0..self.counts.cols() {
+                self.counts
+                    .update_one_counter(r, c, |cell: &mut S::Counter, z| *cell = z, zero);
+            }
+        }
+    }
+
     /// Applies a delta update to the sketch counters.
     pub fn apply_delta(&mut self, delta: CountMinSketchCellDelta) {
         self.counts.increment_by_row(
@@ -692,7 +739,108 @@ impl<H: SketchHasher> NitroTarget for CountMinSketch<Vector2D<i32>, FastPath, H>
 mod tests {
     use super::*;
     use crate::test_utils::{all_counter_zero_i32, counter_index};
-    use crate::{DataInput, hash64_seeded};
+    use crate::{DataInput, MATRIX_MAX_ROWS, hash64_seeded};
+    use std::panic::catch_unwind;
+
+    /// `with_dimensions` and `from_storage` panic on both paths exactly when
+    /// `check_shape` refuses the shape: a zero dimension or a counter count
+    /// past `usize`. Any row count builds.
+    #[test]
+    fn constructors_panic_exactly_when_check_shape_refuses() {
+        type Regular = CountMinSketch<Vector2D<i64>, RegularPath>;
+        type Fast = CountMinSketch<Vector2D<i64>, FastPath>;
+        for (rows, cols) in [
+            (0, 8),
+            (1, 0),
+            (1, 1),
+            (3, 64),
+            (MATRIX_MAX_ROWS, 7),
+            (MATRIX_MAX_ROWS + 1, 7),
+            (2 * MATRIX_MAX_ROWS, 64),
+        ] {
+            let accepted = CountMinSketch::check_shape(rows, cols).is_ok();
+            assert_eq!(accepted, rows >= 1 && cols >= 1);
+            let shape = format!("{rows}x{cols}");
+            assert_eq!(
+                catch_unwind(|| Regular::with_dimensions(rows, cols)).is_ok(),
+                accepted,
+                "{shape}"
+            );
+            assert_eq!(
+                catch_unwind(|| Fast::with_dimensions(rows, cols)).is_ok(),
+                accepted,
+                "{shape}"
+            );
+            let storage = || Vector2D::filled(rows, cols, 0i64);
+            assert_eq!(
+                catch_unwind(|| Regular::from_storage(storage())).is_ok(),
+                accepted,
+                "{shape}"
+            );
+            assert_eq!(
+                catch_unwind(|| Fast::from_storage(storage())).is_ok(),
+                accepted,
+                "{shape}"
+            );
+        }
+        let problem = CountMinSketch::check_shape(2, usize::MAX).expect_err("overflow");
+        assert!(problem.contains("overflow usize"), "got {problem}");
+        assert!(catch_unwind(|| Regular::with_dimensions(2, usize::MAX)).is_err());
+    }
+
+    /// `clear` returns the Nitro sampler to its start: a cleared sketch fed
+    /// more updates equals a fresh one fed only those.
+    #[test]
+    fn clear_restarts_the_nitro_sampler() {
+        for (rate, seed) in [(0.3, None), (0.25, Some(11u64))] {
+            let build = || {
+                let mut sketch = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(5, 128);
+                match seed {
+                    Some(seed) => sketch.enable_nitro_with_seed(rate, seed),
+                    None => sketch.enable_nitro(rate),
+                }
+                sketch
+            };
+            let mut cleared = build();
+            for i in 0..3_000u64 {
+                cleared.nitro_update(&DataInput::U64(i % 97));
+            }
+            cleared.clear();
+            let mut fresh = build();
+            for i in 0..3_000u64 {
+                let key = DataInput::U64(i.wrapping_mul(31) % 211);
+                cleared.nitro_update(&key);
+                fresh.nitro_update(&key);
+            }
+            assert_eq!(
+                cleared.as_storage().as_slice(),
+                fresh.as_storage().as_slice(),
+                "rate {rate}, seed {seed:?}"
+            );
+        }
+    }
+
+    /// `clear` zeroes every counter and keeps the shape and admission rate; a
+    /// cleared sketch then counts like a new one.
+    #[test]
+    fn clear_zeroes_the_counters_and_keeps_the_shape() {
+        let mut sketch = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(4, 64)
+            .with_admission_rate(0.5);
+        for i in 0..1_000u64 {
+            sketch.update(&DataInput::U64(i % 37));
+        }
+        sketch.clear();
+        assert_eq!((sketch.rows(), sketch.cols()), (4, 64));
+        assert_eq!(sketch.admission_rate(), 0.5);
+        assert!(sketch.as_storage().as_slice().iter().all(|&c| c == 0));
+        sketch.update(&DataInput::U64(5));
+        let mut fresh = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(4, 64);
+        fresh.update(&DataInput::U64(5));
+        assert_eq!(
+            sketch.as_storage().as_slice(),
+            fresh.as_storage().as_slice()
+        );
+    }
 
     #[test]
     fn countmin_update_emit_delta_emits_at_threshold_and_resets_period() {

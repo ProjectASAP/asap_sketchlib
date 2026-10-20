@@ -35,7 +35,7 @@ pub use hash::{
     UNIVMON_BOTTOM_LAYER_SEED_INDEX, hash_for_matrix, hash_for_matrix_generic,
     hash_for_matrix_seeded, hash_for_matrix_seeded_generic, hash_for_matrix_seeded_with_layout,
     hash_for_matrix_seeded_with_layout_generic, hash_layout_for_matrix, hash64_seeded,
-    hash64_seeded_owned, hash128_seeded, hash128_seeded_owned,
+    hash64_seeded_owned, hash128_seeded, hash128_seeded_owned, seed_for_index,
 };
 pub use heap::{HeapCount, HeapCounter, TopKHeap};
 pub use input::{DataInput, HeapEntry, OwnedDataInput};

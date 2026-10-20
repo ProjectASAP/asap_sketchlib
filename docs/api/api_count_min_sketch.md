@@ -16,7 +16,14 @@ Approximate frequency estimation with sub-linear memory.
 fn default() -> Self
 fn with_dimensions(rows: usize, cols: usize) -> Self
 fn from_storage(counts: S) -> Self
+fn check_shape(rows: usize, cols: usize) -> Result<(), String>
 ```
+
+`check_shape` is defined once for the type (`CountMinSketch::check_shape(3, 64)`
+needs no type parameters) and accepts any shape with both dimensions non-zero and
+`rows * cols` within `usize`; `with_dimensions` and `from_storage` panic on any
+other shape. Every row draws its own seed (`seed_for_index`), so any row count
+hashes independently.
 
 ## Insert/Update
 
@@ -27,7 +34,11 @@ fn update_batch(&mut self, values: &[DataInput])
 fn update_weighted_batch(&mut self, values: &[(DataInput, S::Counter)])
 fn update_with_hash(&mut self, hashed_val: &H::HashType)
 fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, weight: S::Counter)
+fn clear(&mut self)
 ```
+
+`clear` zeroes every counter and returns the Nitro sampler to its start, keeping
+the shape, allocation and admission rate.
 
 ## Query
 
@@ -38,7 +49,11 @@ fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn as_storage(&self) -> &S
 fn as_storage_mut(&mut self) -> &mut S
+fn memory_bytes(&self) -> usize
 ```
+
+`memory_bytes` is the struct plus its `rows * cols` counters, exact for
+`Vector2D` storage.
 
 ## Merge
 
@@ -68,9 +83,8 @@ on every `CountMinSketch`: the impl exists only for wire-eligible configs
 `i128` / other exotic-counter or non-`Vector2D` sketch must be converted to a
 wire-eligible storage first (only you know if the mapping is lossless).
 `rows`/`cols` are carried in the envelope metadata; the payload is just
-`[counts]`. The wire covers `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed
-list length): past that, the regular path gives row `r` and row `r + 20` the
-same seed and identical counters, so a wider matrix is refused on both sides in
+`[counts]`. The wire covers `1 <= rows <= 20` (`MATRIX_MAX_ROWS`) and
+`cols <= u32::MAX`; `to_asapv1` and `from_asapv1` refuse a wider matrix in
 either mode.
 
 ## Deltas

@@ -235,6 +235,10 @@ pub trait MatrixStorage {
 
     /// Reads one counter at `(row, col)`.
     fn query_one_counter(&self, row: usize, col: usize) -> Self::Counter;
+
+    /// Returns any update sampler the storage carries to its starting state;
+    /// a no-op for storage without one.
+    fn reset_sampler(&mut self) {}
 }
 
 /// A matrix storage that builds, with hasher `H`, the [`FastPath`](crate::FastPath)

@@ -94,8 +94,11 @@ fn quantiles(&self, quantiles: &[f64]) -> Vec<Option<f64>>
 fn get_value_at_quantile(&self, q: f64) -> Option<f64>
 fn cdf(&self) -> Vec<UnivMonQCdfEntry>
 fn prepare_queries(&self) -> UnivMonQQuery<'_, H>
-fn estimated_memory_bytes(&self) -> usize
+fn memory_bytes(&self) -> usize
 ```
+
+`memory_bytes` is the bytes the sketch holds now: struct, counters, candidate
+tables and heaps, and the ordered-sample heap.
 
 The public generic g-sum API preserves UnivMon's ability to evaluate compatible
 frequency functions. Super-quadratic moments such as F3 are deliberately not

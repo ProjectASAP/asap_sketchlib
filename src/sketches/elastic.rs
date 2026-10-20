@@ -121,6 +121,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
     /// Heavy table of `bucket_count` buckets over a `light_rows` by
     /// `light_cols` Count-Min. Bucket count sets the elephant collision rate;
     /// the light dimensions set the error carried by every non-resident flow.
+    /// Panics when [`CountMinSketch::check_shape`] refuses the light layer.
     pub fn with_heavy_and_light(bucket_count: i32, light_rows: usize, light_cols: usize) -> Self {
         assert!(
             bucket_count > 0,

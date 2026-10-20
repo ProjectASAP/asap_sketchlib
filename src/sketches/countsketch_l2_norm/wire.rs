@@ -111,9 +111,8 @@ pub(crate) fn check_dimensions(rows: usize, cols: usize) -> Result<(), String> {
     CountSketchWithL2Norm::check_hash_bits(rows, cols)
 }
 
-/// Rejects a seed index the hasher's seed list does not hold. Seed selection
-/// wraps (`seed_index % seed_list.len()`), so an out-of-range index would give a
-/// second encoding of a state the in-range index already encodes.
+/// Rejects a seed index the hasher's seed list does not hold: the wire
+/// carries seed indexes below the seed list's length.
 pub(crate) fn check_seed_index(seed_index: usize, seed_list_len: usize) -> Result<(), String> {
     if seed_index >= seed_list_len {
         return Err(format!(
@@ -428,7 +427,7 @@ mod tests {
     impl HashProfile for AltHasher {
         const PROFILE_ID: &'static str = "test.alt.profile.v1";
         const ALGORITHM: &'static str = "xxh3_64_128";
-        const SEED_DERIVATION: &'static str = "seed_list_index_wrap";
+        const SEED_DERIVATION: &'static str = "seed_list_index_scaled";
         const INPUT_ENCODING: &'static str = "projectasap.input.v1";
         fn seed_list() -> Vec<u64> {
             vec![1, 2, 3, 4, 5]
@@ -652,28 +651,27 @@ mod tests {
         );
     }
 
-    /// Seed selection wraps, so a seed index past the seed list is a second
-    /// encoding of a state an in-range index already encodes — and two such
-    /// sketches would refuse to merge. Neither door accepts it.
+    /// The wire carries seed indexes below the seed list's length; neither
+    /// door accepts one past it.
     #[test]
     fn count_sketch_with_l2_norm_rejects_a_seed_index_past_the_seed_list() {
         let seeds = <DefaultXxHasher as HashProfile>::seed_list().len();
-        let wrapped = seeds + 5;
+        let past = seeds + 5;
 
         let problem =
-            CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions_and_seed_index(2, 8, wrapped)
+            CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions_and_seed_index(2, 8, past)
                 .to_asapv1()
-                .expect_err("a wrapped seed index must not serialize")
+                .expect_err("a seed index past the seed list must not serialize")
                 .to_string();
         assert!(problem.contains("seed_index"), "got {problem}");
 
         let bytes = crafted(
-            &count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(wrapped as u32, 2, 8),
+            &count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(past as u32, 2, 8),
             vec![0; 16],
             vec![0; 2],
         );
         let problem = Std::from_asapv1(&bytes)
-            .expect_err("a wrapped seed index must not decode")
+            .expect_err("a seed index past the seed list must not decode")
             .to_string();
         assert!(problem.contains("seed_index"), "got {problem}");
 

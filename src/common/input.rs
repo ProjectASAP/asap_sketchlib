@@ -472,6 +472,24 @@ impl HydraCounter {
         }
     }
 
+    /// Mass inserted into this cell: a Count-Min cell's inner row sum (exact while
+    /// each counter stays below 2^31), a KLL cell's retained weight (approximate).
+    /// Count Sketch, HyperLogLog and UnivMon cells return an error.
+    pub fn total_mass(&self) -> Result<f64, String> {
+        match self {
+            HydraCounter::CountMinSketch(cm) => {
+                let storage = cm.as_storage();
+                if storage.rows() == 0 {
+                    return Ok(0.0);
+                }
+                let sum: i64 = storage.row_slice(0).iter().map(|&c| i64::from(c)).sum();
+                Ok(sum as f64)
+            }
+            HydraCounter::Kll(kll) => Ok(kll.count() as f64),
+            other => Err(format!("{other} does not answer a group total")),
+        }
+    }
+
     /// Merge another HydraCounter into this one
     /// Both counters must be of the same type
     pub fn merge(&mut self, other: &HydraCounter) -> Result<(), String> {

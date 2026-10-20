@@ -22,7 +22,7 @@
 
 use crate::Vector2D;
 use crate::input::{HydraCounter, HydraQuery};
-use crate::{DataInput, HYDRA_SEED_INDEX, hash_for_matrix_seeded};
+use crate::{DataInput, HYDRA_SEED_INDEX, MatrixHash, hash_for_matrix_seeded};
 
 mod wire;
 
@@ -307,19 +307,37 @@ impl Hydra {
         // clean error rather than a panic once per row inside the median closure.
         self.prototype.query(query)?;
 
-        let mut buffer = String::with_capacity(self.schema.encoded_capacity(&values));
-        self.schema.encode_subkey_into(&values, mask, &mut buffer);
-        let hashed_val = hash_for_matrix_seeded(
-            HYDRA_SEED_INDEX,
-            self.rows,
-            self.cols,
-            &DataInput::Str(&buffer),
-        );
+        let hashed_val = self.subkey_hash(&values, mask);
         Ok(self
             .cells
             .fast_query_median_with_key(&hashed_val, query, |counter, q, _, _| {
                 counter.query(q).unwrap_or(0.0)
             }))
+    }
+
+    /// Estimated total mass of a subpopulation (`count by (g)`), `key` as for
+    /// [`query_key`](Hydra::query_key): the row minimum of the subkey's cell
+    /// [`HydraCounter::total_mass`]. Count-Min and KLL only; see `docs/api/api_hydra.md`.
+    pub fn query_group_total(&self, key: &[Option<&str>]) -> Result<f64, String> {
+        let (mask, values) = self.schema.resolve_query(key)?;
+        self.prototype.total_mass()?;
+
+        let hashed_val = self.subkey_hash(&values, mask);
+        Ok(self.cells.fast_query_min(&hashed_val, |counter, _, _| {
+            counter.total_mass().unwrap_or(0.0)
+        }))
+    }
+
+    /// Grid hash of the subpopulation `{ labels[i] = values[i] : bit i of mask }`.
+    fn subkey_hash(&self, values: &[&str], mask: u32) -> MatrixHash {
+        let mut buffer = String::with_capacity(self.schema.encoded_capacity(values));
+        self.schema.encode_subkey_into(values, mask, &mut buffer);
+        hash_for_matrix_seeded(
+            HYDRA_SEED_INDEX,
+            self.rows,
+            self.cols,
+            &DataInput::Str(&buffer),
+        )
     }
 
     /// Convenience method for querying frequency (for CountMinSketch-based Hydra)
@@ -970,6 +988,153 @@ mod tests {
         assert!((median_failure_probability(3, 0.25) - 0.156_25).abs() < 1e-12);
         assert!((median_failure_probability(5, 0.0) - 0.0).abs() < 1e-12);
         assert!((median_failure_probability(5, 1.0) - 1.0).abs() < 1e-12);
+    }
+
+    /// Exact per-subpopulation totals of `(key, count)` rows over two columns.
+    fn exact_group_totals(
+        rows: &[([&str; 2], i32)],
+    ) -> std::collections::HashMap<(Option<String>, Option<String>), f64> {
+        let mut totals = std::collections::HashMap::new();
+        for (key, count) in rows {
+            let [a, b] = key.map(|s| Some(s.to_string()));
+            for group in [(a.clone(), None), (None, b.clone()), (a, b)] {
+                *totals.entry(group).or_insert(0.0) += f64::from(*count);
+            }
+        }
+        totals
+    }
+
+    fn group_total(h: &Hydra, group: &(Option<String>, Option<String>)) -> f64 {
+        h.query_group_total(&[group.0.as_deref(), group.1.as_deref()])
+            .expect("well-formed group-total query")
+    }
+
+    #[test]
+    fn hydra_group_total_matches_exact_totals() {
+        let rows: [([&str; 2], i32); 6] = [
+            (["us", "ios"], 1),
+            (["us", "ios"], 4),
+            (["us", "android"], 2),
+            (["eu", "ios"], 7),
+            (["eu", "web"], 1),
+            (["ap", "android"], 3),
+        ];
+        let exact = exact_group_totals(&rows);
+
+        let mut cm = Hydra::with_schema(3, 4096, ["region", "os"], small_cm_counter())
+            .expect("valid schema");
+        let mut kll =
+            Hydra::with_schema(3, 4096, ["region", "os"], HydraCounter::Kll(Kll::default()))
+                .expect("valid schema");
+        for (i, (key, count)) in rows.iter().enumerate() {
+            // Distinct items, so the total is not one item's frequency.
+            cm.update(key, &DataInput::I64(i as i64), Some(*count))
+                .expect("arity");
+            kll.update(key, &DataInput::F64(i as f64), Some(*count))
+                .expect("arity");
+        }
+
+        for (group, total) in &exact {
+            assert_eq!(group_total(&cm, group), *total, "CM group {group:?}");
+            assert_eq!(group_total(&kll, group), *total, "KLL group {group:?}");
+        }
+        assert_eq!(cm.query_group_total(&[Some("sa"), None]).unwrap(), 0.0);
+
+        let mut doubled = cm.clone();
+        doubled.merge(&cm).expect("same shape");
+        for (group, total) in &exact {
+            assert_eq!(group_total(&doubled, group), 2.0 * total);
+        }
+    }
+
+    #[test]
+    fn hydra_group_total_rejects_misuse() {
+        let cm = Hydra::with_schema(3, 64, ["a", "b"], small_cm_counter()).expect("valid schema");
+        assert!(cm.query_group_total(&[Some("x")]).is_err());
+        assert!(cm.query_group_total(&[None, None]).is_err());
+
+        for counter in [
+            count_counter(),
+            HydraCounter::Hll(HyperLogLog::<Ertl>::default()),
+            univmon_counter(),
+        ] {
+            let h = Hydra::with_schema(3, 64, ["a", "b"], counter).expect("valid schema");
+            assert!(h.query_group_total(&[Some("x"), None]).is_err());
+        }
+    }
+
+    /// A 5 x 64 grid with D = 2 and weighted updates, so cells collide.
+    /// Returns the grid, the exact group totals and the total mass `N`.
+    #[allow(clippy::type_complexity)]
+    fn narrow_weighted_grid() -> (
+        Hydra,
+        std::collections::HashMap<(Option<String>, Option<String>), f64>,
+        f64,
+    ) {
+        let mut h =
+            Hydra::with_schema(5, 64, ["g", "h"], small_cm_counter()).expect("valid schema");
+        let regions: Vec<String> = (0..60).map(|i| format!("r{i}")).collect();
+        let oses = ["ios", "android", "web"];
+        let mut rows: Vec<([&str; 2], i32)> = Vec::new();
+        for (i, region) in regions.iter().enumerate() {
+            for (j, os) in oses.iter().enumerate() {
+                rows.push(([region.as_str(), os], 1 + ((i * 7 + j * 13) % 11) as i32));
+            }
+        }
+        for (k, (key, count)) in rows.iter().enumerate() {
+            h.update(key, &DataInput::I64(k as i64), Some(*count))
+                .expect("arity");
+        }
+        let n = rows.iter().map(|(_, c)| f64::from(*c)).sum();
+        (h, exact_group_totals(&rows), n)
+    }
+
+    #[test]
+    fn hydra_group_total_takes_min_over_rows() {
+        let (h, exact, _) = narrow_weighted_grid();
+        let mut median_above_min = 0usize;
+        for (group, total) in &exact {
+            let (mask, values) = h
+                .schema
+                .resolve_query(&[group.0.as_deref(), group.1.as_deref()])
+                .expect("well-formed");
+            let hash = h.subkey_hash(&values, mask);
+            let mass = |c: &HydraCounter, _: usize, _: &MatrixHash| {
+                c.total_mass().expect("Count-Min cell")
+            };
+            let row_min: f64 = h.cells.fast_query_min(&hash, mass);
+            let row_median = h.cells.fast_query_median(&hash, mass);
+            assert_eq!(group_total(&h, group), row_min, "group {group:?}");
+            if row_median > row_min && row_min > *total {
+                median_above_min += 1;
+            }
+        }
+        // The grid must separate the two estimators for the check to bite.
+        assert!(median_above_min > 0, "no group has median > min > exact");
+    }
+
+    #[test]
+    fn hydra_group_total_obeys_documented_bound() {
+        let (h, exact, n) = narrow_weighted_grid();
+        // M = N * (2^D - 1); the min exceeds n_Q + 4M/w with probability <= (1/4)^r.
+        let bound = 4.0 * n * 3.0 / h.cols as f64;
+        let delta = 0.25_f64.powi(h.rows as i32);
+
+        let mut violations = 0usize;
+        let mut overestimated = 0usize;
+        for (group, total) in &exact {
+            let est = group_total(&h, group);
+            assert!(est >= *total, "group {group:?}: {est} < {total}");
+            if est > *total {
+                overestimated += 1;
+            }
+            if est > total + bound {
+                violations += 1;
+            }
+        }
+        assert!(overestimated > 0, "grid too wide to exercise collisions");
+        let rate = violations as f64 / exact.len() as f64;
+        assert!(rate <= delta, "violation rate {rate} > delta {delta}");
     }
 
     #[test]

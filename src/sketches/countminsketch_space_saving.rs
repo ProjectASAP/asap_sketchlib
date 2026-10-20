@@ -106,6 +106,8 @@ where
 {
     /// Creates a `rows x cols` sketch whose summary monitors at most
     /// `capacity` keys.
+    ///
+    /// Panics when [`Self::check_shape`] refuses `rows` x `cols`.
     pub fn new(rows: usize, cols: usize, capacity: usize) -> Self {
         CountMinSketchWithSpaceSaving {
             count_min_sketch: CountMinSketch::with_dimensions(rows, cols),
@@ -240,6 +242,14 @@ where
     /// first, ties broken by heap key order.
     pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, S::Counter)> {
         rank_candidates(&self.summary, k, |key| self.count_min_sketch.estimate(key))
+    }
+}
+
+// Shape check; the rule is the same for every storage, path and hasher.
+impl CountMinSketchWithSpaceSaving {
+    /// The shapes this sketch builds; see [`CountMinSketch::check_shape`].
+    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
+        CountMinSketch::check_shape(rows, cols)
     }
 }
 
