@@ -286,9 +286,10 @@ where
                 "KLL payload: {total} items exceed max_capacity {max_cap} for k={k}, m={m}"
             )));
         }
-        let offset = max_cap - total;
+        // The buffer holds just the retained items; it grows as more arrive.
+        let offset = 0;
 
-        let mut buf = vec![T::default(); max_cap].into_boxed_slice();
+        let mut buf = vec![T::default(); total].into_boxed_slice();
         let mut internal_levels = vec![0usize; MAX_LEVELS + 1].into_boxed_slice();
 
         // Place levels bottom-first into the buffer starting at `offset` (free
@@ -315,7 +316,7 @@ where
         // live sketch (which only writes `levels[num_levels]`), so a decoded
         // sketch's level array is identical to the source's.
         internal_levels[num_levels] = cursor;
-        debug_assert_eq!(cursor, max_cap);
+        debug_assert_eq!(cursor, total);
 
         let mut sketch = Kll {
             items: buf,
@@ -332,7 +333,7 @@ where
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
             level0_capacity: 0,
-            merge_buf: Vec::with_capacity(k),
+            merge_buf: Vec::new(),
             cdf_cache: None,
         };
         sketch.rebuild_capacity_cache();
