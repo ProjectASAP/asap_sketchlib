@@ -19,6 +19,8 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::COUNT_MIN_WITH_HEAP;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode};
@@ -30,8 +32,6 @@ use super::heap_wire::{
     wire_key_type,
 };
 
-/// CountMinSketchWithHeap kind_id: family `0x03`, single algorithm variant `0x00`.
-const CMS_HEAP_KIND: &[u8] = &[0x03, 0x00];
 
 // Wire serialization for the canonical CountMinSketchWithHeap configs only. `wire` is a
 // descendant of the sketch module, so this impl reads the private fields
@@ -77,7 +77,7 @@ where
             )));
         }
         let payload = encode_payload(key_type, counts.to_vec(), &entries)?;
-        Ok(envelope::encode(CMS_HEAP_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::COUNT_MIN_WITH_HEAP, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The matrix
@@ -92,9 +92,9 @@ where
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != CMS_HEAP_KIND {
+        if kind_id != kind::COUNT_MIN_WITH_HEAP {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CMSHeap kind_id mismatch: stored {kind_id:?}, expected {CMS_HEAP_KIND:?}"
+                "CMSHeap kind_id mismatch: stored {kind_id:?}, expected {COUNT_MIN_WITH_HEAP:?}"
             )));
         }
         let shape = decode_metadata::<H>("CMSHeap", metadata, T::COUNTER_TYPE, Mode::MODE)?;
@@ -292,7 +292,7 @@ mod tests {
     fn cms_heap_rejects_foreign_kind_ids() {
         let cs_heap = crate::CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
         let cms = crate::CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
-        let count = crate::Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
+        let count = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
 
         for (bytes, what) in [
             (cs_heap.to_asapv1().expect("CSHeap"), "CSHeap"),
@@ -319,7 +319,7 @@ mod tests {
             heap_counts: Vec::new(),
         })
         .expect("payload");
-        envelope::encode(CMS_HEAP_KIND, &metadata, &payload)
+        envelope::encode(kind::COUNT_MIN_WITH_HEAP, &metadata, &payload)
     }
 
     /// Fail closed (not panic) on a crafted envelope with a zero dimension:
@@ -491,7 +491,7 @@ mod tests {
             heap_counts: Vec::new(),
         })
         .expect("payload");
-        let bytes = envelope::encode(CMS_HEAP_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COUNT_MIN_WITH_HEAP, &metadata, &payload);
         assert!(
             CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes).is_err(),
             "an i64 sketch must reject an i32-labelled envelope"

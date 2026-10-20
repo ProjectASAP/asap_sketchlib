@@ -63,10 +63,10 @@ uniform insert/query API.
 Only sketches with a prehashed insertion path are accepted:
 
 - `CountMinSketch<_, FastPath, _>` — Count-Min Sketch (fast path)
-- `Count<_, FastPath, _>` — Count (Count Sketch, fast path)
+- `CountSketch<_, FastPath, _>` — Count (Count Sketch, fast path)
 - `HyperLogLog<Ertl>` / `HyperLogLog<Classic>` / `HyperLogLogHip`
 
-All matrix-backed sketches (CMS / `Count`) in one ensemble must share the same hash layout (rows × cols dimensions). HLL sketches can coexist with them because they only consume the lower 64 bits of the shared hash.
+All matrix-backed sketches (CMS / `CountSketch`) in one ensemble must share the same hash layout (rows × cols dimensions). HLL sketches can coexist with them because they only consume the lower 64 bits of the shared hash.
 
 ## Construction
 
@@ -86,7 +86,7 @@ use asap_sketchlib::sketch_framework::hashlayer::{EnsembleSketch, HashSketchEnse
 
 let ensemble = HashSketchEnsemble::<DefaultXxHasher>::new(vec![
     CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
-    Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+    CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
     HyperLogLog::<Ertl>::default().into(),
 ]).expect("compatible sketches");
 ```
@@ -116,7 +116,7 @@ fn update_batch_at_with_hashes(&mut self, indices: &[usize], hashes: &[H::HashTy
 
 ## Query
 
-Frequency and cardinality queries are split because CMS/`Count` and HLL answer fundamentally different questions.
+Frequency and cardinality queries are split because CMS/`CountSketch` and HLL answer fundamentally different questions.
 
 ### Frequency (CMS / Count only)
 

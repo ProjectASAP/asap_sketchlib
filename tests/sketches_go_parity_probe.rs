@@ -4,7 +4,7 @@
 //!
 //! Approach: reuse the exact same Go-golden envelopes that the
 //! `message_pack_format::portable` parity tests use, but build the
-//! matrix via `sketches::Count` / `sketches::CountMinSketch` with `FastPath`
+//! matrix via `sketches::CountSketch` / `sketches::CountMinSketch` with `FastPath`
 //! and `DefaultXxHasher`. Identical bytes confirm the shared FastPath
 //! math is sufficient — no hashspec bypass needed.
 
@@ -16,7 +16,7 @@ use asap_sketchlib::proto::sketchlib::{
     sketch_envelope::SketchState,
 };
 use asap_sketchlib::sketches::countminsketch::CountMinSketch;
-use asap_sketchlib::sketches::countsketch::Count;
+use asap_sketchlib::sketches::countsketch::CountSketch;
 use asap_sketchlib::sketches::ddsketch::DdSketch;
 use asap_sketchlib::sketches::hll::{Ertl, HyperLogLogImpl};
 use asap_sketchlib::{DefaultXxHasher, FastPath, Vector2D};
@@ -53,8 +53,8 @@ fn sketches_count_fastpath_matches_go_count_sketch_envelope() {
     let rows = 3usize;
     let cols = 512usize;
 
-    let mut sk: Count<Vector2D<i64>, FastPath, DefaultXxHasher> =
-        Count::with_dimensions(rows, cols);
+    let mut sk: CountSketch<Vector2D<i64>, FastPath, DefaultXxHasher> =
+        CountSketch::with_dimensions(rows, cols);
     for i in 0..25 {
         let key = format!("k-{}", (b'a' + (i % 5) as u8) as char);
         sk.update_weighted(&DataInput::String(key), 1i64);

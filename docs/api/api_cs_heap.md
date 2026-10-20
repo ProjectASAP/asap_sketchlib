@@ -38,7 +38,7 @@ fn clear_heap(&mut self)
 fn estimate(&self, key: &DataInput) -> f64
 fn rows(&self) -> usize
 fn cols(&self) -> usize
-fn cs(&self) -> &Count<S, M, H>
+fn cs(&self) -> &CountSketch<S, M, H>
 fn heap(&self) -> &TopKHeap<C>
 ```
 
@@ -138,7 +138,7 @@ assert!(sk.estimate(&DataInput::Str("flow")) >= 1.0);
   An `i128`-backed sketch can genuinely hold counts past `i64::MAX` —
   `update_weighted(key, i128)` accepts them, and the sketch keeps them — but its
   heap entry clamps. Above `2^53` the estimate has already lost precision
-  inside `Count::estimate`.
+  inside `CountSketch::estimate`.
 - Every storage backend is insertable, `i128` included: the bound is
   `S::Counter: CountSketchHeapCounter`, which `i32`, `i64`, `i128` and `f64` all satisfy.
   This is *not* true of `CountMinSketchWithHeap`; see its page.

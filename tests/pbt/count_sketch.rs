@@ -7,12 +7,12 @@ use crate::support::{
     PROBE_KEYS, edge_dimension, edge_rows, grid, keyed_updates, keys, matrices_close_at_mass,
 };
 use asap_sketchlib::message_pack_format::MessagePackCodec;
-use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
-use asap_sketchlib::{Count, DataInput, RegularPath, Vector2D};
+use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch as PortableCountSketch;
+use asap_sketchlib::{CountSketch, DataInput, RegularPath, Vector2D};
 use proptest::prelude::*;
 
-type Cs = Count<Vector2D<i32>, RegularPath>;
-type CsWire = Count<Vector2D<i64>, RegularPath>;
+type Cs = CountSketch<Vector2D<i32>, RegularPath>;
+type CsWire = CountSketch<Vector2D<i64>, RegularPath>;
 
 fn cs_cells(sketch: &Cs) -> Vec<i32> {
     grid(sketch.rows(), sketch.cols(), |r, c| {
@@ -29,8 +29,8 @@ fn weighted(max: usize) -> impl Strategy<Value = Vec<(u64, i32)>> {
     prop::collection::vec((0u64..512, 1i32..8), 0..max)
 }
 
-fn cs_of(rows: usize, cols: usize, updates: &[(String, f64)]) -> CountSketch {
-    let mut s = CountSketch::new(rows, cols);
+fn cs_of(rows: usize, cols: usize, updates: &[(String, f64)]) -> PortableCountSketch {
+    let mut s = PortableCountSketch::new(rows, cols);
     for (k, v) in updates {
         s.update(k, *v);
     }
@@ -164,7 +164,7 @@ proptest! {
         let s = cs_of(rows, cols, &updates);
 
         let bytes = s.to_msgpack().expect("encode");
-        let restored = CountSketch::from_msgpack(&bytes).expect("decode");
+        let restored = PortableCountSketch::from_msgpack(&bytes).expect("decode");
 
         prop_assert_eq!(restored.sketch(), s.sketch());
         for (k, _) in &updates {

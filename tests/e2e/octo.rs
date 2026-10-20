@@ -34,7 +34,7 @@ use crate::common;
 use asap_sketchlib::OCTO_DDSKETCH_DEFAULT_THRESHOLD;
 use asap_sketchlib::common::UNIVMON_BOTTOM_LAYER_SEED_INDEX;
 use asap_sketchlib::{
-    Classic, Count, CountMinSketch, CountMinSketchCellDelta, CountSketchCellDelta,
+    Classic, CountSketch, CountMinSketch, CountMinSketchCellDelta, CountSketchCellDelta,
     CountSketchWithL2NormWorker, DataInput, DdSketch, DdSketchWorker, Ertl, FastPath,
     HllRegisterDelta, HyperLogLog, HyperLogLogP12, HyperLogLogP16, L2HH,
     OCTO_COUNT_MIN_DEFAULT_THRESHOLD, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
@@ -50,8 +50,8 @@ use rand::seq::SliceRandom;
 
 type Cm = CountMinSketch<Vector2D<i32>, RegularPath>;
 type CmFast = CountMinSketch<Vector2D<i32>, FastPath>;
-type Cs = Count<Vector2D<i32>, RegularPath>;
-type CsFast = Count<Vector2D<i32>, FastPath>;
+type Cs = CountSketch<Vector2D<i32>, RegularPath>;
+type CsFast = CountSketch<Vector2D<i32>, FastPath>;
 
 const ROWS: usize = 5;
 const COLS: usize = 2048;

@@ -440,7 +440,7 @@ impl<H: SketchHasher> CountSketchFold<H> {
 mod tests {
     use super::*;
     use crate::test_utils::sample_zipf_u64;
-    use crate::{Count, OwnedDataInput, RegularPath, Vector2D};
+    use crate::{CountSketch, OwnedDataInput, RegularPath, Vector2D};
     use std::collections::HashMap;
 
     // -- CountSketchFold basic tests -------------------------------------------------
@@ -553,7 +553,7 @@ mod tests {
         let fold_level = 3; // 256/8 = 32 physical columns
 
         let mut fold: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);
-        let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+        let mut standard = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         let keys: Vec<DataInput> = (0..50).map(DataInput::I32).collect();
         for key in &keys {
@@ -579,7 +579,7 @@ mod tests {
         let fold_level = 3;
 
         let mut fold: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);
-        let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+        let mut standard = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         let keys: Vec<DataInput> = (0..50).map(DataInput::I32).collect();
         for key in &keys {
@@ -606,7 +606,7 @@ mod tests {
         let fold_level = 4;
 
         let mut fold: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);
-        let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+        let mut standard = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..30 {
             let key = DataInput::U64(i);
@@ -648,8 +648,8 @@ mod tests {
 
         let mut fa: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);
         let mut fb: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);
-        let mut sa = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-        let mut sb = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+        let mut sa = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+        let mut sb = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..20 {
             let key = DataInput::U64(i);
@@ -719,8 +719,8 @@ mod tests {
 
         let mut fa: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);
         let mut fb: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);
-        let mut sa = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-        let mut sb = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+        let mut sa = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+        let mut sb = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..40 {
             let key = DataInput::U64(i);
@@ -755,7 +755,7 @@ mod tests {
         let fold_level = 2; // 1024/4 = 256 physical cols
 
         let mut sketches = Vec::new();
-        let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+        let mut standard = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for epoch in 0..4u64 {
             let mut sk: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);
@@ -811,7 +811,7 @@ mod tests {
         let fold_level = 3;
 
         let mut fold: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);
-        let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+        let mut standard = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
         for i in 0..20 {
             let key = DataInput::I32(i);
@@ -1045,7 +1045,7 @@ mod tests {
 
         for n in 1..=8u64 {
             let mut sketches = Vec::new();
-            let mut standard = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut standard = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
 
             for epoch in 0..n {
                 let mut sk: CountSketchFold = CountSketchFold::new(rows, cols, fold_level, 10);

@@ -8,6 +8,8 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::COUNT_MIN_WITH_HEAP_DELTA;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::delta::{add_cells, check_cells};
 use crate::message_pack_format::envelope;
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode};
@@ -21,8 +23,6 @@ use super::heap_wire::{
     heap_entries, rebuild_heap, wire_key_type,
 };
 
-/// CountMinSketchWithHeap delta kind_id: the state's `0x03 0x00` with the variant's top bit set.
-const CMS_HEAP_DELTA_KIND: &[u8] = &[0x03, 0x80];
 
 /// A change to a `rows x cols` [`CountMinSketchWithHeap`] state: each value of `deltas` is
 /// added to the cell its position names in `indices`, a row-major index
@@ -91,16 +91,16 @@ where
             deltas: self.deltas.clone(),
         };
         let payload = encode_payload(key_type, cells, &entries)?;
-        Ok(envelope::encode(CMS_HEAP_DELTA_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::COUNT_MIN_WITH_HEAP_DELTA, &metadata, &payload))
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != CMS_HEAP_DELTA_KIND {
+        if kind_id != kind::COUNT_MIN_WITH_HEAP_DELTA {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CMSHeap delta kind_id mismatch: stored {kind_id:?}, expected {CMS_HEAP_DELTA_KIND:?}"
+                "CMSHeap delta kind_id mismatch: stored {kind_id:?}, expected {COUNT_MIN_WITH_HEAP_DELTA:?}"
             )));
         }
         let shape = decode_metadata::<H>("CMSHeap", metadata, T::COUNTER_TYPE, Mode::MODE)?;
@@ -163,7 +163,7 @@ mod tests {
                 .unwrap();
         let deltas = vec![1i64; indices.len()];
         let payload = rmp_serde::to_vec(&(indices, deltas, keys, heap_counts)).unwrap();
-        envelope::encode(CMS_HEAP_DELTA_KIND, &metadata, &payload)
+        envelope::encode(kind::COUNT_MIN_WITH_HEAP_DELTA, &metadata, &payload)
     }
 
     #[test]

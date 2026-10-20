@@ -11,7 +11,7 @@ use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 // `CountSketch` and `CountSketchDelta` below are the public-field,
 // proto-decode-friendly types consumed by the ASAP query engine
 // accumulators. The high-throughput in-process variant is
-// `crate::sketches::countsketch::Count`, which keeps its own design.
+// `crate::sketches::countsketch::CountSketch`, which keeps its own design.
 // =====================================================================
 
 // Count Sketch (a.k.a. Count-Min-style signed-counter sketch) —

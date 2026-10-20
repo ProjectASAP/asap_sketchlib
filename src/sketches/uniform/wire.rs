@@ -25,13 +25,13 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::UNIFORM_SAMPLING;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::{exact, exact_vec};
 
 use super::{SampleEntry, UniformSampling};
 
-/// UniformSampling kind_id: family `0x0d`, single algorithm variant `0x00`.
-const US_KIND: &[u8] = &[0x0d, 0x00];
 
 /// Metadata `item_type`: the sampler stores every retained sample as `f64`.
 const SAMPLE_ITEM_TYPE: &str = "f64";
@@ -128,7 +128,7 @@ impl UniformSampling {
             total_seen: self.total_seen,
             rng_state: self.rng_state,
         })?;
-        Ok(envelope::encode(US_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::UNIFORM_SAMPLING, &metadata, &payload))
     }
 
     /// Deserializes a sampler from an ASAPv1 MessagePack envelope. The rate is
@@ -137,9 +137,9 @@ impl UniformSampling {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != US_KIND {
+        if kind_id != kind::UNIFORM_SAMPLING {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "UniformSampling kind_id mismatch: stored {kind_id:?}, expected {US_KIND:?}"
+                "UniformSampling kind_id mismatch: stored {kind_id:?}, expected {UNIFORM_SAMPLING:?}"
             )));
         }
         let meta: UsMetadata = envelope::decode_block(metadata)?;
@@ -211,7 +211,7 @@ mod tests {
 
     fn crafted(metadata: &UsMetadata, payload: &UsPayload) -> Vec<u8> {
         envelope::encode(
-            US_KIND,
+            kind::UNIFORM_SAMPLING,
             &rmp_serde::to_vec_named(metadata).unwrap(),
             &rmp_serde::to_vec(payload).unwrap(),
         )
@@ -455,7 +455,7 @@ mod tests {
 
         // Valid envelope + valid metadata, garbage payload.
         let metadata = rmp_serde::to_vec_named(&us_metadata(0.5)).unwrap();
-        let bytes = envelope::encode(US_KIND, &metadata, &[0xc1, 0xc1, 0xc1]);
+        let bytes = envelope::encode(kind::UNIFORM_SAMPLING, &metadata, &[0xc1, 0xc1, 0xc1]);
         assert!(UniformSampling::from_asapv1(&bytes).is_err());
     }
 

@@ -29,7 +29,7 @@ pub enum EhBucketSketch {
     /// CountSketchWithL2Norm sketch.
     CountSketchWithL2Norm(CountSketchWithL2Norm),
     /// Count Sketch.
-    CountSketch(Count<Vector2D<i32>, FastPath>),
+    CountSketch(CountSketch<Vector2D<i32>, FastPath>),
     /// DDSketch.
     DdSketch(DdSketch),
     /// Elastic sketch.
@@ -318,7 +318,7 @@ mod tests {
 
     #[test]
     fn count_sketch_insert_and_query_round_trip() {
-        let mut cs = EhBucketSketch::CountSketch(Count::<Vector2D<i32>, FastPath>::default());
+        let mut cs = EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::default());
         let key = DataInput::I64(11);
         cs.update(&key);
         let est = cs.query(&key).expect("query CountSketch");
@@ -379,7 +379,7 @@ mod tests {
         assert!(count_l2hh.supports_norm(SketchNorm::L2));
         assert!(!count_l2hh.supports_norm(SketchNorm::L1));
 
-        let cs = EhBucketSketch::CountSketch(Count::<Vector2D<i32>, FastPath>::default());
+        let cs = EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::default());
         assert!(cs.supports_norm(SketchNorm::L1));
         assert!(!cs.supports_norm(SketchNorm::L2));
 

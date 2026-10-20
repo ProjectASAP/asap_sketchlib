@@ -80,7 +80,7 @@ mod tests {
     type HllRegisterDelta = HyperLogLogDelta<Classic, HllRegistersP14>;
     type Cms = CountMinSketch<Vector2D<i64>, RegularPath>;
     type CmsDelta = CountMinSketchDelta<i64, RegularPath>;
-    type Cs = Count<Vector2D<i64>, RegularPath>;
+    type Cs = CountSketch<Vector2D<i64>, RegularPath>;
     type CsDelta = CountSketchDelta<i64, RegularPath>;
 
     type Encoded = Result<Vec<u8>, rmp_serde::encode::Error>;
@@ -331,7 +331,7 @@ mod tests {
     #[test]
     fn a_sketch_nested_in_another_kind_holds_no_rate() {
         let cm = || CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(2, 4);
-        let cs = || Count::<Vector2D<i32>, FastPath>::with_dimensions(2, 4);
+        let cs = || CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(2, 4);
         let hll = HyperLogLog::<Ertl>::default;
         let dd = || DdSketch::new(0.01);
 

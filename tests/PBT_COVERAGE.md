@@ -153,7 +153,7 @@ Compared against: an exact `HashMap` count; each arrival adds its weight to exac
 Compared against: a bare sketch of the member's type on the same stream. The layer hashes once per insert from a cached layout; members decode Count-Min packed columns, Count column and sign bit, and HLL low 64 bits from that one hash. Member lists carry both matrix families and all three HLL variants.
 
 - member == bare sketch
-  - each frequency member == bare `CountMinSketch` / `Count` of its geometry; widths cycle through a pool, so one layer mixes widths on one hash
+  - each frequency member == bare `CountMinSketch` / `CountSketch` of its geometry; widths cycle through a pool, so one layer mixes widths on one hash
   - no matrix member, hashing at `DEFAULT_CANONICAL_SEED_INDEX`: each HLL member == bare HLL
 - entry points
   - `hash_input` + `update_batch_with_hashes == insert`; `estimate_with_hash == estimate`
@@ -330,7 +330,7 @@ Compared against: a bare target fed through its own `update`, not `NitroTarget::
 
 - rate 1.0
   - `CountMinSketch` target cells == bare `CountMinSketch`; via `update` and `update_batch_cached_step`
-  - same for a `Count` target
+  - same for a `CountSketch` target
   - `merge == bare S(xs ++ ys)`
 - the seed fixes the sample
   - same seed and stream: same cells, both paths, rates 1.0 down to 0.01

@@ -661,12 +661,12 @@ impl<H: SketchHasher> MicroCm<H> {
     }
 
     /// Serializes the sketch into MessagePack bytes.
-    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         to_vec_named(self)
     }
 
     /// Deserializes a sketch from MessagePack bytes.
-    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         from_slice(bytes)
     }
 }
@@ -1010,8 +1010,8 @@ mod tests {
         for i in 0..1_000u64 {
             sk.update(&key(i % 17));
         }
-        let bytes = sk.to_asapv1().expect("serialize");
-        let back = MicroCm::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
+        let bytes = sk.serialize_to_bytes().expect("serialize");
+        let back = MicroCm::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
         assert_eq!(back.sub_window(), sk.sub_window());
         assert_eq!(back.cell_bytes(), sk.cell_bytes());
         assert_eq!(back.as_storage().as_slice(), sk.as_storage().as_slice());
@@ -1052,7 +1052,7 @@ mod tests {
                 rounding: 1,
             };
             let bytes = rmp_serde::to_vec_named(&forged).expect("encode");
-            MicroCm::<DefaultXxHasher>::from_asapv1(&bytes)
+            MicroCm::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
                 .err()
                 .map(|e| e.to_string())
                 .unwrap_or_default()

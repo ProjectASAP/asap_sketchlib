@@ -31,14 +31,14 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::message_pack_format::kind::COUNT_SKETCH_WITH_L2_NORM;
+use crate::message_pack_format::kind;
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::{HashProfile, SketchHasher, Vector1D, Vector2D};
 
 use super::{CountSketchWithL2Norm, check_l2hh_hash_bits};
 
-/// CountSketchWithL2Norm kind_id: family `0x19`, single algorithm variant `0x00`.
-const L2HH_KIND: &[u8] = &[0x19, 0x00];
 
 /// CountSketchWithL2Norm descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
@@ -227,7 +227,7 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
             counts: counts.to_vec(),
             l2: l2.to_vec(),
         })?;
-        Ok(envelope::encode(L2HH_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::COUNT_SKETCH_WITH_L2_NORM, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The
@@ -237,9 +237,9 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != L2HH_KIND {
+        if kind_id != kind::COUNT_SKETCH_WITH_L2_NORM {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CountL2HH kind_id mismatch: stored {kind_id:?}, expected {L2HH_KIND:?}"
+                "CountL2HH kind_id mismatch: stored {kind_id:?}, expected {COUNT_SKETCH_WITH_L2_NORM:?}"
             )));
         }
         let meta: CountSketchWithL2NormMetadata = envelope::decode_block(metadata)?;
@@ -290,7 +290,7 @@ mod tests {
         let metadata = rmp_serde::to_vec_named(meta).expect("metadata");
         let payload =
             rmp_serde::to_vec(&CountSketchWithL2NormPayload { counts, l2 }).expect("payload");
-        envelope::encode(L2HH_KIND, &metadata, &payload)
+        envelope::encode(kind::COUNT_SKETCH_WITH_L2_NORM, &metadata, &payload)
     }
 
     /// More rows than the seed list has seeds is outside the wire-eligible
@@ -459,7 +459,7 @@ mod tests {
     /// Count Sketch envelope.
     #[test]
     fn count_l2hh_rejects_foreign_kind_ids() {
-        let count_sketch = crate::Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
+        let count_sketch = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
             .to_asapv1()
             .expect("serialize Count Sketch");
         let univmon = crate::UnivMon::new(4, 2, 8, 2)

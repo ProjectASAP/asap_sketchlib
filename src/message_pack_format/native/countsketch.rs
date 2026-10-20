@@ -1,4 +1,4 @@
-//! Native MessagePack codec impl for [`crate::sketches::countsketch::Count`].
+//! Native MessagePack codec impl for [`crate::sketches::countsketch::CountSketch`].
 //!
 //! Only the canonical wire configs — `i32`, `i64` or `f64` counters
 //! (`CsWireCounter`) with a fast/regular mode (`CsWireMode`) — are
@@ -7,10 +7,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::message_pack_format::{Error, MessagePackCodec};
-use crate::sketches::countsketch::{Count, CountSketchCounter, CsWireCounter, CsWireMode};
+use crate::sketches::countsketch::{CountSketch, CountSketchCounter, CsWireCounter, CsWireMode};
 use crate::{HashProfile, SketchHasher, Vector2D};
 
-impl<T, Mode, H> MessagePackCodec for Count<Vector2D<T>, Mode, H>
+impl<T, Mode, H> MessagePackCodec for CountSketch<Vector2D<T>, Mode, H>
 where
     T: CsWireCounter
         + CountSketchCounter

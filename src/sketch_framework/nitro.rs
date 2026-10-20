@@ -11,7 +11,7 @@ use rand::{Rng, SeedableRng, rng};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Count, CountMinSketch, DataInput, DefaultXxHasher, FastPath, FastPathHasher,
+    CountSketch, CountMinSketch, DataInput, DefaultXxHasher, FastPath, FastPathHasher,
     LN_ONE_MINUS_U_TABLE, MatrixFastHash, Vector2D,
 };
 
@@ -105,14 +105,14 @@ impl NitroEstimate for CountMinSketch<Vector2D<i32>, FastPath> {
     }
 }
 
-impl NitroMerge for Count<Vector2D<i32>, FastPath> {
+impl NitroMerge for CountSketch<Vector2D<i32>, FastPath> {
     #[inline(always)]
     fn merge(&mut self, other: &Self) {
-        Count::merge(self, other);
+        CountSketch::merge(self, other);
     }
 }
 
-impl NitroEstimate for Count<Vector2D<i32>, FastPath> {
+impl NitroEstimate for CountSketch<Vector2D<i32>, FastPath> {
     #[inline(always)]
     fn estimate_median(&self, value: &DataInput) -> f64 {
         self.estimate(value)
@@ -567,7 +567,7 @@ mod tests {
             })
             .collect();
 
-        let cs = Count::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
+        let cs = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
         let mut batch = NitroBatch::with_target_and_seed(1.0, cs, NITRO_TEST_SEED);
         batch.update_batch(&data);
 

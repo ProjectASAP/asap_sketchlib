@@ -5,7 +5,7 @@
 
 use crate::common::structure_utils::ToF64;
 use crate::sketches::countsketch::CountSketchCounter;
-use crate::{Count, CountMinSketch, DataInput, FastPath, MatrixHash, RegularPath, SketchHasher};
+use crate::{CountSketch, CountMinSketch, DataInput, FastPath, MatrixHash, RegularPath, SketchHasher};
 use std::ops::AddAssign;
 
 /// Type-erased adapter for regular-path Count-Min sketches.
@@ -101,7 +101,7 @@ where
     }
 }
 
-impl<S> CountSketchRegularOps for Count<S, RegularPath>
+impl<S> CountSketchRegularOps for CountSketch<S, RegularPath>
 where
     S: crate::MatrixStorage + 'static,
     S::Counter: CountSketchCounter + 'static,
@@ -115,7 +115,7 @@ where
     }
 }
 
-impl<S, H> CountSketchFastOps for Count<S, FastPath, H>
+impl<S, H> CountSketchFastOps for CountSketch<S, FastPath, H>
 where
     H: SketchHasher<HashType = MatrixHash> + 'static,
     S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,

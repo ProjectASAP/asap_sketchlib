@@ -34,6 +34,8 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::UNIVMON_Q;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
 use crate::{HashProfile, SketchHasher};
 
@@ -42,8 +44,6 @@ use super::{
     decode_error, level_width, validate_config,
 };
 
-/// UnivMon-Q kind_id: family `0x1a`, single algorithm variant `0x00`.
-const UNIVMON_Q_KIND: &[u8] = &[0x1a, 0x00];
 
 /// UnivMon-Q descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
@@ -455,7 +455,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
             "i32" => pack!(I32),
             _ => pack!(I64),
         };
-        Ok(envelope::encode(UNIVMON_Q_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::UNIVMON_Q, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The whole
@@ -470,9 +470,9 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != UNIVMON_Q_KIND {
+        if kind_id != kind::UNIVMON_Q {
             return Err(decode_error(format!(
-                "UnivMon-Q kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_Q_KIND:?}"
+                "UnivMon-Q kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_Q:?}"
             )));
         }
         let meta: UnivMonQMetadata = envelope::decode_block(metadata)?;
@@ -612,7 +612,7 @@ mod tests {
     fn crafted(meta: &UnivMonQMetadata, payload: &UnivMonQPayload<i64>) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(meta).expect("metadata");
         let payload = rmp_serde::to_vec(payload).expect("payload");
-        envelope::encode(UNIVMON_Q_KIND, &metadata, &payload)
+        envelope::encode(kind::UNIVMON_Q, &metadata, &payload)
     }
 
     /// A config that differs from [`tiny_config`] in the named fields.
@@ -727,7 +727,7 @@ mod tests {
         relabelled.counter_type = "f64".to_string();
         let (_, _, payload) = envelope::split(&narrow_bytes).expect("split");
         let forged = envelope::encode(
-            UNIVMON_Q_KIND,
+            kind::UNIVMON_Q,
             &rmp_serde::to_vec_named(&relabelled).expect("metadata"),
             payload,
         );
@@ -810,7 +810,7 @@ mod tests {
     /// Count Sketch envelope.
     #[test]
     fn univmon_q_rejects_foreign_kind_ids() {
-        let count_sketch = crate::Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
+        let count_sketch = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
             .to_asapv1()
             .expect("serialize Count Sketch");
         let count_l2hh =

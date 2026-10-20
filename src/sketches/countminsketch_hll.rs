@@ -307,12 +307,12 @@ impl<H: SketchHasher> CountMinHll<H> {
     }
 
     /// Serializes the sketch into MessagePack bytes.
-    pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
+    pub fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError> {
         to_vec_named(self)
     }
 
     /// Deserializes a sketch from MessagePack bytes.
-    pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+    pub fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         from_slice(bytes)
     }
 }
@@ -514,8 +514,8 @@ mod tests {
         for i in 0..1500u64 {
             sk.update(&k, &val(i));
         }
-        let bytes = sk.to_asapv1().expect("serialize");
-        let restored = CountMinHll::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
+        let bytes = sk.serialize_to_bytes().expect("serialize");
+        let restored = CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
 
         assert_eq!(sk.rows(), restored.rows());
         assert_eq!(sk.cols(), restored.cols());
@@ -577,7 +577,7 @@ mod tests {
             let mut buckets: Vector3D<u8> = Vector3D::init(rows, cols, depth);
             buckets.fill(0);
             let bytes = rmp_serde::to_vec_named(&Forged { buckets, precision }).expect("encode");
-            CountMinHll::<DefaultXxHasher>::from_asapv1(&bytes)
+            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
                 .err()
                 .map(|e| e.to_string())
                 .unwrap_or_default()
@@ -628,7 +628,7 @@ mod tests {
             buckets.fill(0);
             buckets.as_mut_slice()[0] = rank;
             let bytes = rmp_serde::to_vec_named(&Forged { buckets, precision }).expect("encode");
-            CountMinHll::<DefaultXxHasher>::from_asapv1(&bytes)
+            CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes)
                 .err()
                 .map(|e| e.to_string())
         }
@@ -655,8 +655,8 @@ mod tests {
     #[test]
     fn deserialize_recomputes_derived_fields() {
         let sk = CountMinHll::<DefaultXxHasher>::with_dimensions(4, 32, 8);
-        let bytes = sk.to_asapv1().expect("serialize");
-        let restored = CountMinHll::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
+        let bytes = sk.serialize_to_bytes().expect("serialize");
+        let restored = CountMinHll::<DefaultXxHasher>::deserialize_from_bytes(&bytes).expect("decode");
         assert_eq!(restored.p_mask, (1u64 << 8) - 1);
         // Column routing is owned by the storage and rebuilt from `cols`.
         assert_eq!(restored.as_storage().mask_bits(), 5); // 32.ilog2()

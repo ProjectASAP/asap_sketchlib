@@ -342,7 +342,7 @@ impl Hydra {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Count, CountMinSketch, Ertl, FastPath, HyperLogLog, Kll, UnivMon, Vector2D};
+    use crate::{CountSketch, CountMinSketch, Ertl, FastPath, HyperLogLog, Kll, UnivMon, Vector2D};
 
     const EPSILON: f64 = 1e-6;
 
@@ -1014,7 +1014,7 @@ mod tests {
 
     // Helper to generate a default Count Sketch counter
     fn count_counter() -> HydraCounter {
-        HydraCounter::CountSketch(Count::<Vector2D<i32>, FastPath>::default())
+        HydraCounter::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::default())
     }
 
     // Helper to generate a default UnivMon counter

@@ -20,13 +20,13 @@
 
 use crate::support::keys;
 use asap_sketchlib::{
-    Classic, Count, CountMinSketch, DataInput, DefaultXxHasher, EnsembleSketch, Ertl, FastPath,
+    Classic, CountSketch, CountMinSketch, DataInput, DefaultXxHasher, EnsembleSketch, Ertl, FastPath,
     HashSketchEnsemble, HyperLogLog, HyperLogLogHip, Vector2D,
 };
 use proptest::prelude::*;
 
 type CmFast = CountMinSketch<Vector2D<i32>, FastPath>;
-type CsFast = Count<Vector2D<i32>, FastPath>;
+type CsFast = CountSketch<Vector2D<i32>, FastPath>;
 type Layer = HashSketchEnsemble<DefaultXxHasher>;
 
 /// The member families one layer accepts.

@@ -14,16 +14,22 @@ use proptest::prelude::*;
 /// cannot represent every state their constructor accepts. Silent corruption
 /// is not allowed.
 macro_rules! round_trip {
-    ($ty:ty, $sketch:expr, $($probe:expr),+ $(,)?) => {{
+    ($ty:ty, $sketch:expr, $($probe:expr),+ $(,)?) => {
+        round_trip!(@codec to_asapv1, from_asapv1, $ty, $sketch, $($probe),+)
+    };
+    (@raw_serde $ty:ty, $sketch:expr, $($probe:expr),+ $(,)?) => {
+        round_trip!(@codec serialize_to_bytes, deserialize_from_bytes, $ty, $sketch, $($probe),+)
+    };
+    (@codec $encode:ident, $decode:ident, $ty:ty, $sketch:expr, $($probe:expr),+) => {{
         let original = &$sketch;
-        if let Ok(bytes) = original.to_asapv1() {
-            let decoded = <$ty>::from_asapv1(&bytes)
+        if let Ok(bytes) = original.$encode() {
+            let decoded = <$ty>::$decode(&bytes)
                 .expect("bytes the encoder produced must decode");
             $(
                 prop_assert_eq!($probe(&decoded), $probe(original));
             )+
             prop_assert_eq!(
-                decoded.to_asapv1().expect("a decoded sketch must re-encode"),
+                decoded.$encode().expect("a decoded sketch must re-encode"),
                 bytes,
                 "the re-encode is not byte-identical"
             );

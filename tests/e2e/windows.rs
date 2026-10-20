@@ -27,7 +27,7 @@ use common::specs::{
 use common::{FreqTruth, NumericTruth, uniform_u64, zipf_u64};
 
 use asap_sketchlib::{
-    CocoSketch, Count, CountMinSketch, CountMinSketchFold, CountMinSketchFoldConfig,
+    CocoSketch, CountSketch, CountMinSketch, CountMinSketchFold, CountMinSketchFoldConfig,
     CountSketchFold, CountSketchFoldConfig, CountSketchWithL2Norm, DataInput, DdSketch,
     EhBucketSketch, ElasticSketch, Ertl, ExponentialHistogram, FastPath, HyperLogLog, Kll,
     KllConfig, SketchNorm, SketchPool, TumblingWindow, UnivMon, UnivMonQ, UnivMonQConfig, Vector2D,
@@ -107,7 +107,7 @@ fn every_eh_variant_selects_the_documented_merge_norm() {
         (
             "CS",
             asap_sketchlib::EhBucketSketch::CountSketch(
-                Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
+                CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS),
             ),
         ),
         (
@@ -191,7 +191,7 @@ fn eh_count_min_variant_conforms_to_the_count_min_model_over_the_retained_window
 #[test]
 fn eh_count_sketch_variant_conforms_to_the_l2_model_over_the_retained_window() {
     let (merged, truth, ctx) =
-        run_keyed_variant(asap_sketchlib::EhBucketSketch::CountSketch(Count::<
+        run_keyed_variant(asap_sketchlib::EhBucketSketch::CountSketch(CountSketch::<
             Vector2D<i32>,
             FastPath,
         >::with_dimensions(
@@ -709,7 +709,7 @@ fn every_eh_variant_can_merge_into_its_own_kind() {
         ),
         (
             "CS",
-            EhBucketSketch::CountSketch(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 256)),
+            EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 256)),
         ),
         (
             "COCO",

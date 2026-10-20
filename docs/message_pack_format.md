@@ -94,7 +94,7 @@ Converted:
   `i128` and non-`Vector2D` storage must be converted first. `rows`
   and `cols` live in the metadata; the payload is just `[counts]`.
 - **Count Sketch** (`src/sketches/countsketch/wire.rs`, kind `0x04 0x00`) — the
-  same shape as Count-Min: `Count<Vector2D<T>, Mode, H>` where `T` is `i32` or
+  same shape as Count-Min: `CountSketch<Vector2D<T>, Mode, H>` where `T` is `i32` or
   `i64` (`CsWireCounter`), `Mode` is `FastPath` or `RegularPath` (`CsWireMode`),
   and `H: HashProfile`. Counters must be signed and negatable, so there is no
   `f64` counterpart; `i128` and non-`Vector2D` storage must be converted first.

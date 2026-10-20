@@ -346,8 +346,8 @@ pub(crate) fn decode<C: DeserializeOwned, H: SketchHasher + HashProfile>(
 
 #[cfg(test)]
 mod tests {
+    use crate::message_pack_format::kind;
     use super::*;
-    use crate::sketches::countminsketch_space_saving::wire::CMS_SPACE_SAVING_KIND;
     use crate::{
         CountMinSketch, CountMinSketchWithHeap, CountMinSketchWithSpaceSaving,
         CountSketchWithSpaceSaving, DataInput, DefaultXxHasher, FastPath, MATRIX_MAX_ROWS,
@@ -437,7 +437,7 @@ mod tests {
                 discarded_max: self.discarded_max,
             })
             .expect("payload");
-            envelope::encode(CMS_SPACE_SAVING_KIND, &metadata, &payload)
+            envelope::encode(kind::COUNT_MIN_WITH_SPACE_SAVING, &metadata, &payload)
         }
     }
 
@@ -575,7 +575,7 @@ mod tests {
         meta.hash_profile_id = "test.alt.profile.v1".to_string();
         let (_, _, payload) = envelope::split(&bytes).expect("split");
         let relabelled = envelope::encode(
-            CMS_SPACE_SAVING_KIND,
+            kind::COUNT_MIN_WITH_SPACE_SAVING,
             &rmp_serde::to_vec_named(&meta).expect("metadata"),
             payload,
         );

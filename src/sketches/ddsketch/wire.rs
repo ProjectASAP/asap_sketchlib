@@ -29,6 +29,8 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::DDSKETCH;
+use crate::message_pack_format::kind;
 use crate::common::structures::Vector1D;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
@@ -36,8 +38,6 @@ use crate::message_pack_format::wire_key::exact;
 
 use super::{Buckets, DdSketch, DdSketchState};
 
-/// DDSketch kind_id: family `0x05`, single algorithm variant `0x00`.
-const DD_KIND: &[u8] = &[0x05, 0x00];
 
 /// DDSketch descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
@@ -238,7 +238,7 @@ impl DdSketch {
             negative_offset: state.negative_store.offset,
             zero_count: self.zero_count,
         })?;
-        Ok(envelope::encode(DD_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::DDSKETCH, &metadata, &payload))
     }
 
     /// Deserializes a DDSketch from an ASAPv1 MessagePack envelope. The index
@@ -247,9 +247,9 @@ impl DdSketch {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != DD_KIND {
+        if kind_id != kind::DDSKETCH {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "DDSketch kind_id mismatch: stored {kind_id:?}, expected {DD_KIND:?}"
+                "DDSketch kind_id mismatch: stored {kind_id:?}, expected {DDSKETCH:?}"
             )));
         }
         let (alpha, admission_rate) = decode_metadata(metadata)?;
@@ -309,7 +309,7 @@ mod tests {
     fn crafted_payload(alpha: f64, payload: &DdPayload) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(&dd_metadata(alpha, None)).unwrap();
         let payload = rmp_serde::to_vec(payload).unwrap();
-        envelope::encode(DD_KIND, &metadata, &payload)
+        envelope::encode(kind::DDSKETCH, &metadata, &payload)
     }
 
     fn crafted(alpha: f64, counts: Vec<u64>, offset: i32, sum: f64, min: f64, max: f64) -> Vec<u8> {
@@ -498,7 +498,7 @@ mod tests {
                 admission_rate: None,
             })
             .unwrap();
-            let err = decode_error(&envelope::encode(DD_KIND, &metadata, &payload));
+            let err = decode_error(&envelope::encode(kind::DDSKETCH, &metadata, &payload));
             assert!(
                 err.contains("metadata mismatch"),
                 "version {version}: {err}"
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn ddsketch_checks_alpha_before_the_payload() {
         let metadata = rmp_serde::to_vec_named(&dd_metadata(2.0, None)).unwrap();
-        let err = decode_error(&envelope::encode(DD_KIND, &metadata, &[0xc1]));
+        let err = decode_error(&envelope::encode(kind::DDSKETCH, &metadata, &[0xc1]));
         assert!(err.contains("alpha"), "got {err}");
     }
 

@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind;
 use crate::message_pack_format::{Error as MsgPackError, MessagePackCodec};
 use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, hash64_seeded};
 
@@ -26,7 +27,7 @@ use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, hash64_seeded};
 
 use crate::message_pack_format::envelope;
 use crate::sketches::hll::{
-    HLL_KIND_CLASSIC, HLL_KIND_ERTL_MLE, HLL_KIND_HIP, HllMetadata, HllPayloadHip, HllPayloadPlain,
+    HllMetadata, HllPayloadHip, HllPayloadPlain,
     standard_hll_metadata,
 };
 
@@ -38,9 +39,9 @@ const HLL_WRAPPER_MAGIC: &[u8; 6] = b"ASAPv1";
 /// a placeholder with no wire form.
 fn wire_kind_id(variant: HllVariant) -> Result<&'static [u8], MsgPackError> {
     match variant {
-        HllVariant::Regular => Ok(HLL_KIND_CLASSIC),
-        HllVariant::Datafusion => Ok(HLL_KIND_ERTL_MLE),
-        HllVariant::Hip => Ok(HLL_KIND_HIP),
+        HllVariant::Regular => Ok(kind::HLL_CLASSIC),
+        HllVariant::Datafusion => Ok(kind::HLL_ERTL),
+        HllVariant::Hip => Ok(kind::HLL_HIP),
         HllVariant::Unspecified => Err(MsgPackError::Decode(
             rmp_serde::decode::Error::Uncategorized(
                 "ASAPv1 HLL: the Unspecified variant is not serializable".to_string(),
@@ -551,11 +552,11 @@ impl MessagePackCodec for HllSketch {
             ));
         }
 
-        let variant = if kind_id == HLL_KIND_CLASSIC {
+        let variant = if kind_id == kind::HLL_CLASSIC {
             HllVariant::Regular
-        } else if kind_id == HLL_KIND_ERTL_MLE {
+        } else if kind_id == kind::HLL_ERTL {
             HllVariant::Datafusion
-        } else if kind_id == HLL_KIND_HIP {
+        } else if kind_id == kind::HLL_HIP {
             HllVariant::Hip
         } else {
             return Err(MsgPackError::Decode(

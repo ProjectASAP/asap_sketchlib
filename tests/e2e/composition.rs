@@ -20,7 +20,7 @@ use asap_sketchlib::message_pack_format::portable::countminsketch_topk::CountMin
 use asap_sketchlib::message_pack_format::portable::countsketch_topk::CountSketchWithHeap;
 use asap_sketchlib::message_pack_format::portable::kll::KllSketch;
 use asap_sketchlib::{
-    Classic, Count, CountMinSketch, DataInput, EnsembleSketch, Ertl, FastPath, HashSketchEnsemble,
+    Classic, CountSketch, CountMinSketch, DataInput, EnsembleSketch, Ertl, FastPath, HashSketchEnsemble,
     HyperLogLog, HyperLogLogHip, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 
@@ -56,7 +56,7 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
         EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
-        EnsembleSketch::from(Count::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
         EnsembleSketch::from(HyperLogLog::<Ertl>::new()),
@@ -66,7 +66,7 @@ fn ensemble_members_match_standalone_sketches_fed_the_same_stream() {
     .expect("all matrix members share dimensions");
 
     let mut ref_cm = CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
-    let mut ref_cs = Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut ref_cs = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
     let mut ref_ertl = HyperLogLog::<Ertl>::new();
     let mut ref_classic = HyperLogLog::<Classic>::new();
     let mut ref_hip = HyperLogLogHip::new();
@@ -175,7 +175,7 @@ fn ensemble_members_stay_inside_their_own_error_models() {
         EnsembleSketch::from(CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
-        EnsembleSketch::from(Count::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
         EnsembleSketch::from(HyperLogLog::<Ertl>::new()),
@@ -259,7 +259,7 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
             ROWS,
             COLS / 2,
         )),
-        EnsembleSketch::from(Count::<Vector2D<i32>, FastPath>::with_dimensions(
+        EnsembleSketch::from(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
             ROWS, COLS,
         )),
     ])
@@ -313,7 +313,7 @@ fn ensemble_composes_by_hash_layout_and_rejects_incompatible_members() {
     assert!(
         mixed
             .push(EnsembleSketch::from(
-                Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS + 2, COLS)
+                CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS + 2, COLS)
             ))
             .is_err(),
         "push must reject a member with a different row count"

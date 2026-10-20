@@ -36,6 +36,8 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::message_pack_format::kind::ELASTIC;
+use crate::message_pack_format::kind;
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
@@ -43,8 +45,6 @@ use crate::{CountMinSketch, HashProfile, SketchHasher, Vector2D};
 
 use super::{ElasticSketch, HeavyBucket};
 
-/// Elastic kind_id: family `0x0b`, single algorithm variant `0x00`.
-const ELASTIC_KIND: &[u8] = &[0x0b, 0x00];
 
 /// Metadata `light_counter_type`: the light layer is `Vector2D<i32>`, carried
 /// at its own width.
@@ -208,7 +208,7 @@ impl<H: SketchHasher + HashProfile> ElasticSketch<H> {
             stale_copies: self.stale_copies,
             light_counts: counts.to_vec(),
         })?;
-        Ok(envelope::encode(ELASTIC_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::ELASTIC, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. Both
@@ -217,9 +217,9 @@ impl<H: SketchHasher + HashProfile> ElasticSketch<H> {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != ELASTIC_KIND {
+        if kind_id != kind::ELASTIC {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "Elastic kind_id mismatch: stored {kind_id:?}, expected {ELASTIC_KIND:?}"
+                "Elastic kind_id mismatch: stored {kind_id:?}, expected {ELASTIC:?}"
             )));
         }
         let meta: ElasticMetadata = envelope::decode_block(metadata)?;
@@ -319,7 +319,7 @@ mod tests {
             light_counts: vec![0; rows * 256],
         })
         .unwrap();
-        let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::ELASTIC, &metadata, &payload);
         let problem = ElasticSketch::<DefaultXxHasher>::from_asapv1(&bytes)
             .expect_err("light rows past MATRIX_MAX_ROWS must be rejected")
             .to_string();
@@ -484,7 +484,7 @@ mod tests {
             let metadata =
                 rmp_serde::to_vec_named(&elastic_metadata::<DefaultXxHasher>(heavy, rows, cols))
                     .unwrap();
-            let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
+            let bytes = envelope::encode(kind::ELASTIC, &metadata, &payload);
             assert!(
                 ElasticSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
                 "zero-dimension metadata must be rejected, not panic"
@@ -511,7 +511,7 @@ mod tests {
             light_counts: vec![0, 0, 0],
         })
         .unwrap();
-        let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::ELASTIC, &metadata, &payload);
         assert!(
             ElasticSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "payload lengths must match the declared geometry"
@@ -529,7 +529,7 @@ mod tests {
             light_counts: vec![0; 8],
         })
         .unwrap();
-        let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::ELASTIC, &metadata, &payload);
         assert!(
             ElasticSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "light_counts must match light_rows*light_cols"
@@ -555,7 +555,7 @@ mod tests {
                 light_counts: vec![0, 0],
             })
             .unwrap();
-            let bytes = envelope::encode(ELASTIC_KIND, &metadata, &payload);
+            let bytes = envelope::encode(kind::ELASTIC, &metadata, &payload);
             assert!(
                 ElasticSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
                 "occupancy must agree between flow_ids and vote_pos"

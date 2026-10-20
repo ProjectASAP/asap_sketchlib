@@ -10,17 +10,14 @@ use std::collections::HashSet;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::portable::delta_set_aggregator::SetAggregatorDelta;
 use crate::message_pack_format::wire_key::WireString;
 
 use super::SetAggregator;
 
-/// SetAggregator kind_id: family `0x08`, variant `0x00`.
-const SET_AGGREGATOR_KIND: &[u8] = &[0x08, 0x00];
 
-/// SetAggregator delta kind_id: the delta bit set on variant `0x00`.
-const SET_AGGREGATOR_DELTA_KIND: &[u8] = &[0x08, 0x80];
 
 /// The metadata map both kinds carry, a msgpack **map** (`to_vec_named`).
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -105,12 +102,12 @@ impl SetAggregator {
         let payload = rmp_serde::to_vec(&SetPayload {
             values: ascending(&self.values),
         })?;
-        Ok(envelope::encode(SET_AGGREGATOR_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::SET_AGGREGATOR, &metadata, &payload))
     }
 
     /// Deserializes a set from an ASAPv1 MessagePack envelope.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let payload = open(bytes, SET_AGGREGATOR_KIND, "SetAggregator")?;
+        let payload = open(bytes, kind::SET_AGGREGATOR, "SetAggregator")?;
         let p: SetPayload<WireString> = envelope::decode_block(payload)?;
         Ok(SetAggregator {
             values: read_ascending("SetAggregator values", p.values)?,
@@ -130,7 +127,7 @@ impl SetAggregatorDelta {
             removed: ascending(&self.removed),
         })?;
         Ok(envelope::encode(
-            SET_AGGREGATOR_DELTA_KIND,
+            kind::SET_AGGREGATOR_DELTA,
             &metadata,
             &payload,
         ))
@@ -138,7 +135,7 @@ impl SetAggregatorDelta {
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let payload = open(bytes, SET_AGGREGATOR_DELTA_KIND, "DeltaResult")?;
+        let payload = open(bytes, kind::SET_AGGREGATOR_DELTA, "DeltaResult")?;
         let p: DeltaPayload<WireString> = envelope::decode_block(payload)?;
         let added = read_ascending("DeltaResult added", p.added)?;
         let removed = read_ascending("DeltaResult removed", p.removed)?;
@@ -164,7 +161,7 @@ mod tests {
             values: values.to_vec(),
         })
         .unwrap();
-        envelope::encode(SET_AGGREGATOR_KIND, &metadata_bytes(), &payload)
+        envelope::encode(kind::SET_AGGREGATOR, &metadata_bytes(), &payload)
     }
 
     fn crafted_delta(added: &[&str], removed: &[&str]) -> Vec<u8> {
@@ -173,7 +170,7 @@ mod tests {
             removed: removed.to_vec(),
         })
         .unwrap();
-        envelope::encode(SET_AGGREGATOR_DELTA_KIND, &metadata_bytes(), &payload)
+        envelope::encode(kind::SET_AGGREGATOR_DELTA, &metadata_bytes(), &payload)
     }
 
     #[test]
@@ -187,7 +184,7 @@ mod tests {
     fn a_bin_member_is_rejected() {
         let bin = || vec![serde_bytes::Bytes::new(b"a")];
         let set = rmp_serde::to_vec(&SetPayload { values: bin() }).unwrap();
-        let bytes = envelope::encode(SET_AGGREGATOR_KIND, &metadata_bytes(), &set);
+        let bytes = envelope::encode(kind::SET_AGGREGATOR, &metadata_bytes(), &set);
         assert!(SetAggregator::from_asapv1(&bytes).is_err());
 
         let delta = rmp_serde::to_vec(&DeltaPayload {
@@ -195,7 +192,7 @@ mod tests {
             removed: bin(),
         })
         .unwrap();
-        let bytes = envelope::encode(SET_AGGREGATOR_DELTA_KIND, &metadata_bytes(), &delta);
+        let bytes = envelope::encode(kind::SET_AGGREGATOR_DELTA, &metadata_bytes(), &delta);
         assert!(SetAggregatorDelta::from_asapv1(&bytes).is_err());
     }
 
@@ -219,7 +216,7 @@ mod tests {
             .unwrap(),
         ];
         for meta in metas {
-            let bytes = envelope::encode(SET_AGGREGATOR_KIND, &meta, &payload);
+            let bytes = envelope::encode(kind::SET_AGGREGATOR, &meta, &payload);
             assert!(SetAggregator::from_asapv1(&bytes).is_err());
         }
     }
@@ -231,9 +228,9 @@ mod tests {
         let set = crafted_set(&["a"]);
         let delta = crafted_delta(&["a"], &[]);
         let (_, metadata, payload) = envelope::split(&set).unwrap();
-        let bytes = envelope::encode(SET_AGGREGATOR_DELTA_KIND, metadata, payload);
+        let bytes = envelope::encode(kind::SET_AGGREGATOR_DELTA, metadata, payload);
         assert!(SetAggregator::from_asapv1(&bytes).is_err());
-        for kind in [SET_AGGREGATOR_KIND, &[0x09, 0x00]] {
+        for kind in [kind::SET_AGGREGATOR, &[0x09, 0x00]] {
             let (_, metadata, payload) = envelope::split(&delta).unwrap();
             let bytes = envelope::encode(kind, metadata, payload);
             assert!(SetAggregatorDelta::from_asapv1(&bytes).is_err());

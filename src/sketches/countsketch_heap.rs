@@ -1,6 +1,6 @@
 //! Top-k heavy-hitter variants of the Count Sketch family.
 //!
-//! - [`CountSketchWithHeap`]: pairs a [`Count`] sketch with an [`TopKHeap`] for automatic top-k tracking.
+//! - [`CountSketchWithHeap`]: pairs a [`CountSketch`] sketch with an [`TopKHeap`] for automatic top-k tracking.
 //!   Every insertion updates both the frequency sketch and the heap, mirroring
 //!   the pattern used by `CountMinSketchWithHeap` but with Count Sketch (median estimator).
 //! - [`CountSketchWithL2Norm`]: Count Sketch augmented with per-row L2 norm tracking for
@@ -13,7 +13,7 @@ use crate::common::structures::matrix_storage::cols_mask_bits;
 use crate::octo_delta::CountSketchCellDelta;
 use crate::sketches::countsketch::CountSketchCounter;
 use crate::{
-    Count, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher,
+    CountSketch, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher,
     FastPath, FixedMatrix, HeapCounter, MatrixStorage, QuickMatrixI64, QuickMatrixI128,
     RegularPath, SketchHasher, TopKHeap, Vector1D, Vector2D, compute_median_inline_f64,
     heap_item_to_sketch_input,
@@ -28,7 +28,7 @@ pub use delta::CountSketchWithHeapDelta;
 /// The count a `CountSketchWithHeap` entry over integer counters carries for a Count Sketch
 /// estimate.
 ///
-/// `Count::estimate` returns the row **median** as `f64`, because a Count
+/// `CountSketch::estimate` returns the row **median** as `f64`, because a Count
 /// Sketch estimate is signed and is a median rather than a counter read. The
 /// integer counters' heap stores `i64`, so a conversion is unavoidable and its
 /// semantics are part of the API rather than an accident of a cast:
@@ -44,7 +44,7 @@ pub use delta::CountSketchWithHeapDelta;
 ///   count can produce.
 ///
 /// Above `2^53` the estimate has already lost precision in `f64` inside
-/// `Count::estimate`, so an `i128` sketch's heap entries are exact only up to
+/// `CountSketch::estimate`, so an `i128` sketch's heap entries are exact only up to
 /// that magnitude. Both limits are asserted in
 /// `tests/e2e/matrix_instances.rs`.
 #[inline]
@@ -95,7 +95,7 @@ const DEFAULT_COLS: usize = 4096;
 
 /// A Count Sketch paired with a top-k heavy-hitter heap.
 ///
-/// Generic over the same type parameters as [`Count`]. The heap's counts are
+/// Generic over the same type parameters as [`CountSketch`]. The heap's counts are
 /// `f64` over `f64` counters and `i64` otherwise ([`CountSketchHeapCounter`]).
 #[derive(Clone)]
 pub struct CountSketchWithHeap<
@@ -105,7 +105,7 @@ pub struct CountSketchWithHeap<
 > where
     S::Counter: HeapCounter,
 {
-    cs: Count<S, Mode, H>,
+    cs: CountSketch<S, Mode, H>,
     heap: TopKHeap<HeapCountOf<S>>,
 }
 
@@ -118,7 +118,7 @@ where
     /// Creates a new `CountSketchWithHeap` with the given CS dimensions and heap capacity.
     pub fn new(rows: usize, cols: usize, top_k: usize) -> Self {
         CountSketchWithHeap {
-            cs: Count::with_dimensions(rows, cols),
+            cs: CountSketch::with_dimensions(rows, cols),
             heap: TopKHeap::new(top_k),
         }
     }
@@ -133,7 +133,7 @@ where
     /// Creates a `CountSketchWithHeap` from a pre-built storage backend.
     pub fn from_storage(storage: S, top_k: usize) -> Self {
         CountSketchWithHeap {
-            cs: Count::from_storage(storage),
+            cs: CountSketch::from_storage(storage),
             heap: TopKHeap::new(top_k),
         }
     }
@@ -248,12 +248,12 @@ where
     S::Counter: CountSketchHeapCounter,
 {
     /// Returns a reference to the internal Count Sketch.
-    pub fn cs(&self) -> &Count<S, M, H> {
+    pub fn cs(&self) -> &CountSketch<S, M, H> {
         &self.cs
     }
 
     /// Returns a mutable reference to the internal Count Sketch.
-    pub fn cs_mut(&mut self) -> &mut Count<S, M, H> {
+    pub fn cs_mut(&mut self) -> &mut CountSketch<S, M, H> {
         &mut self.cs
     }
 

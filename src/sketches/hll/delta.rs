@@ -16,12 +16,6 @@ use crate::{DefaultXxHasher, HashProfile, SketchHasher};
 use super::HyperLogLogImpl;
 use super::wire::{HllWireVariant, check_register_range, encode_metadata, validated_hll_payload};
 
-/// The delta kind_id of a variant: its state kind_id with the variant's top bit
-/// set.
-fn delta_kind<V: HllWireVariant>() -> [u8; 2] {
-    [V::WIRE_KIND_ID[0], V::WIRE_KIND_ID[1] | 0x80]
-}
-
 /// A change to a [`HyperLogLogImpl`] state: each value of `registers` is a new
 /// value for the register its position names in `indices`. Indices are strictly
 /// ascending and below `2^precision`; each value is non-zero and at most the
@@ -76,7 +70,7 @@ where
             registers: self.registers.clone(),
         })?;
         Ok(envelope::encode(
-            &delta_kind::<Variant>(),
+            Variant::WIRE_DELTA_KIND_ID,
             &metadata,
             &payload,
         ))
@@ -86,7 +80,7 @@ where
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (payload, admission_rate) = validated_hll_payload::<H>(
             bytes,
-            &delta_kind::<Variant>(),
+            Variant::WIRE_DELTA_KIND_ID,
             Registers::PRECISION as u32,
         )?;
         let p: HllDeltaPayload = envelope::decode_block(payload)?;
@@ -132,7 +126,7 @@ mod tests {
             registers: registers.to_vec(),
         })
         .unwrap();
-        envelope::encode(&delta_kind::<Classic>(), &metadata, &payload)
+        envelope::encode(Classic::WIRE_DELTA_KIND_ID, &metadata, &payload)
     }
 
     #[test]

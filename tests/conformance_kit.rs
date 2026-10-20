@@ -73,7 +73,7 @@ impl FrequencyOps<i64> for SpaceSavingAdapter {
     }
 }
 
-struct CountSketchAdapter(asap_sketchlib::Count<Vector2D<i64>, RegularPath>);
+struct CountSketchAdapter(asap_sketchlib::CountSketch<Vector2D<i64>, RegularPath>);
 
 impl FrequencyOps<i64> for CountSketchAdapter {
     fn ingest(&mut self, key: &i64) {
@@ -270,7 +270,7 @@ fn countsketch_passes_signed_frequency_conformance() {
     };
     let make = || {
         CountSketchAdapter(
-            asap_sketchlib::Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, 4096),
+            asap_sketchlib::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(5, 4096),
         )
     };
 

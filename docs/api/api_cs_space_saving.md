@@ -20,7 +20,7 @@ of `k`.
 
 ```rust
 fn new(rows: usize, cols: usize, capacity: usize) -> Self
-fn from_parts(cs: Count<S, M, H>, space_saving: SpaceSaving<H>) -> Self
+fn from_parts(cs: CountSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self
 ```
 
 ## Insert/Update
@@ -43,7 +43,7 @@ fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, f64)>
 fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn capacity(&self) -> usize
-fn cs(&self) -> &Count<S, M, H>
+fn cs(&self) -> &CountSketch<S, M, H>
 fn space_saving(&self) -> &SpaceSaving<H>
 ```
 

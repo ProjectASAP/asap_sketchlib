@@ -855,7 +855,7 @@ seed_list, matrix_seed_index, rows, cols, counter_type, mode, heap_size, key_typ
 
 Wire counter types are the base Count Sketch's: **`"i32"`, `"i64"` and `"f64"`** (§3.6, Q-CS). `i32` is carried at its own width and the decoder pins it: i32 bytes do not decode into an i64 sketch, or the reverse.
 
-**Both signed columns.** Cells and heap counts carry a sign, so a decoder must not assume monotonicity. A CountSketchWithHeap entry's count is `Count::estimate`, the **median of signed cells**: under `"i32"` and `"i64"` truncated toward zero and saturating at the `i64` bounds, under `"f64"` not rounded (§3.7).
+**Both signed columns.** Cells and heap counts carry a sign, so a decoder must not assume monotonicity. A CountSketchWithHeap entry's count is `CountSketch::estimate`, the **median of signed cells**: under `"i32"` and `"i64"` truncated toward zero and saturating at the `i64` bounds, under `"f64"` not rounded (§3.7).
 
 **Emitted order (cross-language contract).** §3.7's.
 
@@ -1170,7 +1170,7 @@ The `kind_id` is carried rather than a name, because Section 1's registry is alr
 | ---------------- | ------------- | -------- | ----- |
 | `0x01 0x02` | HLL Ertl-MLE | `HLL(HyperLogLog<Ertl>)` | always |
 | `0x02 0x00` | Count-Min | `CM(CountMinSketch<Vector2D<i32>, FastPath>)` | always |
-| `0x04 0x00` | Count Sketch | `CS(Count<Vector2D<i32>, FastPath>)` | always |
+| `0x04 0x00` | Count Sketch | `CS(CountSketch<Vector2D<i32>, FastPath>)` | always |
 | `0x05 0x00` | DDSketch | `DDS(DdSketch)` | always |
 | `0x06 0x00` | KLL compact | `Kll(Kll)` | always |
 | `0x0b 0x00` | Elastic | `ELASTIC(ElasticSketch)` | always |

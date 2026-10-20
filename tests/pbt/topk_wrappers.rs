@@ -7,7 +7,7 @@
 
 use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, grid, keys};
 use asap_sketchlib::{
-    Count, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap, CountSketchWithL2Norm,
+    CountSketch, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap, CountSketchWithL2Norm,
     DataInput, DefaultXxHasher, FastPath, RegularPath, TopKHeap, Vector2D,
     heap_count_from_estimate, heap_item_to_sketch_input, l2hh_cell_for_row,
 };
@@ -15,7 +15,7 @@ use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 type Cm = CountMinSketch<Vector2D<i32>, RegularPath>;
-type Cs = Count<Vector2D<i32>, RegularPath>;
+type Cs = CountSketch<Vector2D<i32>, RegularPath>;
 type CmHeap = CountMinSketchWithHeap<Vector2D<i32>, RegularPath>;
 type CsHeap = CountSketchWithHeap<Vector2D<i32>, RegularPath>;
 type CmHeapWire = CountMinSketchWithHeap<Vector2D<i64>, FastPath>;

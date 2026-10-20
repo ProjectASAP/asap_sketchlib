@@ -25,13 +25,13 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::message_pack_format::kind::BLOOM;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
 use crate::{BitMatrix, HashProfile, SketchHasher};
 
 use super::{BLOOM_MAX_BITS, BLOOM_MAX_SLICES, Bloom, BloomMode};
 
-/// Bloom kind_id: family `0x17`, single algorithm variant `0x00`.
-const BLOOM_KIND: &[u8] = &[0x17, 0x00];
 
 /// Bits packed into one storage word of the bit grid.
 const BITS_PER_WORD: usize = u64::BITS as usize;
@@ -144,7 +144,7 @@ where
             words: self.bits.words().to_vec(),
             inserted: self.inserted,
         })?;
-        Ok(envelope::encode(BLOOM_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::BLOOM, &metadata, &payload))
     }
 
     /// Deserializes a filter from an ASAPv1 MessagePack envelope. The grid
@@ -154,9 +154,9 @@ where
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != BLOOM_KIND {
+        if kind_id != kind::BLOOM {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "Bloom kind_id mismatch: stored {kind_id:?}, expected {BLOOM_KIND:?}"
+                "Bloom kind_id mismatch: stored {kind_id:?}, expected {BLOOM:?}"
             )));
         }
         let meta: BloomMetadata = envelope::decode_block(metadata)?;
@@ -260,7 +260,7 @@ mod tests {
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
-        // Literal, not `BLOOM_KIND`: the constant compared against itself pins
+        // Literal, not `kind::BLOOM`: the constant compared against itself pins
         // nothing, and these bytes are what a Go reader dispatches on.
         assert_eq!(&bytes[8..10], &[0x17, 0x00]);
         let (kind_id, metadata, _) = envelope::split(&bytes).expect("split");
@@ -449,7 +449,7 @@ mod tests {
         let metadata =
             rmp_serde::to_vec_named(&bloom_metadata::<DefaultXxHasher>(rows, cols, mode)).unwrap();
         let payload = rmp_serde::to_vec(&BloomPayload { words, inserted }).unwrap();
-        envelope::encode(BLOOM_KIND, &metadata, &payload)
+        envelope::encode(kind::BLOOM, &metadata, &payload)
     }
 
     /// The message a rejected decode fails with, so a test can pin *which*

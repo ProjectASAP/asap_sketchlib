@@ -112,8 +112,8 @@ clocks would add unrelated sub-windows. `self` is untouched on error.
 ## Serialization
 
 ```rust
-fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
-fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
+fn serialize_to_bytes(&self) -> Result<Vec<u8>, RmpEncodeError>
+fn deserialize_from_bytes(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
 Plain MessagePack, **not** an ASAPv1 envelope: no `kind_id` is allocated while

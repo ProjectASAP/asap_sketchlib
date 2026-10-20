@@ -205,7 +205,7 @@ mod tests {
             };
         }
         type Cms = CountMinSketch<Vector2D<i64>, RegularPath>;
-        type Cs = Count<Vector2D<i64>, RegularPath>;
+        type Cs = CountSketch<Vector2D<i64>, RegularPath>;
         type CmsHeap = CountMinSketchWithHeap<Vector2D<i64>, RegularPath>;
         type CsHeap = CountSketchWithHeap<Vector2D<i64>, RegularPath>;
         type HllClassic = HyperLogLogP12<Classic>;

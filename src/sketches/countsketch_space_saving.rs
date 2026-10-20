@@ -1,11 +1,11 @@
-//! CountSketchWithSpaceSaving: a [`Count`] sketch beside a [`SpaceSaving`] summary. Every
+//! CountSketchWithSpaceSaving: a [`CountSketch`] sketch beside a [`SpaceSaving`] summary. Every
 //! update reaches both; top-k ranks the summary's keys by their Count Sketch
 //! estimate. The summary's `capacity` is independent of `k`.
 
 use crate::sketches::countminsketch_space_saving::{CandidateCounter, rank_candidates};
 use crate::sketches::countsketch::CountSketchCounter;
 use crate::{
-    Count, DataInput, DefaultXxHasher, MatrixStorage, OwnedDataInput, RegularPath, SketchHasher,
+    CountSketch, DataInput, DefaultXxHasher, MatrixStorage, OwnedDataInput, RegularPath, SketchHasher,
     SpaceSaving, Vector2D,
 };
 
@@ -19,7 +19,7 @@ pub struct CountSketchWithSpaceSaving<
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
 > {
-    cs: Count<S, Mode, H>,
+    cs: CountSketch<S, Mode, H>,
     summary: SpaceSaving<H>,
 }
 
@@ -31,7 +31,7 @@ where
     /// `capacity` keys.
     pub fn new(rows: usize, cols: usize, capacity: usize) -> Self {
         CountSketchWithSpaceSaving {
-            cs: Count::with_dimensions(rows, cols),
+            cs: CountSketch::with_dimensions(rows, cols),
             summary: SpaceSaving::with_capacity(capacity),
         }
     }
@@ -42,7 +42,7 @@ where
     S::Counter: CountSketchCounter,
 {
     /// Pairs an existing matrix with an existing summary.
-    pub fn from_parts(cs: Count<S, M, H>, space_saving: SpaceSaving<H>) -> Self {
+    pub fn from_parts(cs: CountSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self {
         CountSketchWithSpaceSaving {
             cs,
             summary: space_saving,
@@ -50,7 +50,7 @@ where
     }
 
     /// The Count Sketch matrix.
-    pub fn cs(&self) -> &Count<S, M, H> {
+    pub fn cs(&self) -> &CountSketch<S, M, H> {
         &self.cs
     }
 

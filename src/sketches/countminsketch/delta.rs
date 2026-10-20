@@ -7,6 +7,8 @@ use std::marker::PhantomData;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::COUNT_MIN_DELTA;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::{add_cells, check_cells};
 use crate::message_pack_format::envelope;
@@ -16,8 +18,6 @@ use crate::{DefaultXxHasher, HashProfile, RegularPath, SketchHasher, Vector2D};
 use super::CountMinSketch;
 use super::wire::{CmsWireCounter, CmsWireMode, check_geometry, decode_metadata, encode_metadata};
 
-/// Count-Min delta kind_id: the state's `0x02 0x00` with the variant's top bit set.
-const CMS_DELTA_KIND: &[u8] = &[0x02, 0x80];
 
 /// A change to a `rows x cols` [`CountMinSketch`] state: each value of `deltas` is
 /// added to the cell its position names in `indices`, a row-major index
@@ -84,16 +84,16 @@ where
             indices: self.indices.clone(),
             deltas: self.deltas.clone(),
         })?;
-        Ok(envelope::encode(CMS_DELTA_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::COUNT_MIN_DELTA, &metadata, &payload))
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != CMS_DELTA_KIND {
+        if kind_id != kind::COUNT_MIN_DELTA {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CMS delta kind_id mismatch: stored {kind_id:?}, expected {CMS_DELTA_KIND:?}"
+                "CMS delta kind_id mismatch: stored {kind_id:?}, expected {COUNT_MIN_DELTA:?}"
             )));
         }
         let (rows, cols, admission_rate) = decode_metadata::<T, Mode, H>(metadata)?;
@@ -140,7 +140,7 @@ mod tests {
     fn delta_bytes(indices: &[u64], deltas: &[i64]) -> Vec<u8> {
         let metadata = encode_metadata::<i64, RegularPath, DefaultXxHasher>(2, 3, 1.0).unwrap();
         let payload = rmp_serde::to_vec(&(indices, deltas)).unwrap();
-        envelope::encode(CMS_DELTA_KIND, &metadata, &payload)
+        envelope::encode(kind::COUNT_MIN_DELTA, &metadata, &payload)
     }
 
     #[test]

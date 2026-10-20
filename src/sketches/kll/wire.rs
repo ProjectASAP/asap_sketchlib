@@ -29,6 +29,7 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind;
 use crate::common::numerical::NumericalValue;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact_vec;
@@ -37,11 +38,6 @@ use super::{
     CAPACITY_CACHE_LEN, Coin, Kll, MAX_K, MAX_LEVELS, checked_weighted_count, compute_max_capacity,
 };
 
-const KLL_KIND_FAMILY: u8 = 0x06;
-/// kind_id for the compact, fixed-buffer [`Kll`] (`0x06 0x00`).
-pub(crate) const KLL_KIND_COMPACT: &[u8] = &[KLL_KIND_FAMILY, 0x00];
-/// kind_id for the dynamic-buffer `KllDynamic` (`0x06 0x01`).
-pub(crate) const KLL_KIND_DYNAMIC: &[u8] = &[KLL_KIND_FAMILY, 0x01];
 
 /// Names the wire item type carried in the KLL metadata (`item_type`).
 /// Implemented only for the two wire-eligible retained-sample types; an exotic
@@ -247,14 +243,14 @@ where
                 remaining_bits,
             },
         })?;
-        Ok(envelope::encode(KLL_KIND_COMPACT, &metadata, &payload))
+        Ok(envelope::encode(kind::KLL, &metadata, &payload))
     }
 
     /// Deserializes a compact KLL from an ASAPv1 MessagePack envelope. Bytes
     /// whose metadata does not match this item type are rejected (fail closed),
     /// as are inconsistent level layouts.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let (meta, payload_bytes) = split_and_validate_meta::<T>(bytes, KLL_KIND_COMPACT)?;
+        let (meta, payload_bytes) = split_and_validate_meta::<T>(bytes, kind::KLL)?;
         let payload: KllPayload<T> = envelope::decode_block(payload_bytes)?;
         let num_levels = validate_kll_payload(&payload.levels, &payload.items, &payload.coin)?;
         Self::from_wire_top_first(
@@ -368,7 +364,7 @@ mod tests {
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
-        assert_eq!(&bytes[8..10], KLL_KIND_COMPACT);
+        assert_eq!(&bytes[8..10], kind::KLL);
 
         let decoded = Kll::<f64>::from_asapv1(&bytes).expect("decode");
         // Byte-stable round trip.
@@ -403,7 +399,7 @@ mod tests {
             sketch.update(&v);
         }
         let bytes = sketch.to_asapv1().expect("serialize");
-        assert_eq!(&bytes[8..10], KLL_KIND_COMPACT);
+        assert_eq!(&bytes[8..10], kind::KLL);
         let decoded = Kll::<i64>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
         assert_eq!(decoded.count(), sketch.count());
@@ -458,7 +454,7 @@ mod tests {
             },
         })
         .unwrap();
-        let bytes = envelope::encode(KLL_KIND_COMPACT, &metadata, &payload);
+        let bytes = envelope::encode(kind::KLL, &metadata, &payload);
         assert!(
             Kll::<f64>::from_asapv1(&bytes).is_err(),
             "inconsistent level layout must be rejected, not panic"
@@ -484,7 +480,7 @@ mod tests {
         };
         for (k, m) in [(u32::MAX, u32::MAX), (MAX_K as u32 + 1, 8), (200, 1)] {
             let metadata = rmp_serde::to_vec_named(&kll_metadata::<f64>(k, m, None)).unwrap();
-            let bytes = envelope::encode(KLL_KIND_COMPACT, &metadata, &empty_payload());
+            let bytes = envelope::encode(kind::KLL, &metadata, &empty_payload());
             assert!(
                 Kll::<f64>::from_asapv1(&bytes).is_err(),
                 "k={k}, m={m} must be rejected, not allocated"
@@ -583,7 +579,7 @@ mod tests {
             },
         })
         .unwrap();
-        let bytes = envelope::encode(KLL_KIND_COMPACT, &metadata, &payload);
+        let bytes = envelope::encode(kind::KLL, &metadata, &payload);
         assert!(
             Kll::<f64>::from_asapv1(&bytes).is_err(),
             "a level layout that overflows the weighted count must be rejected"
@@ -604,7 +600,7 @@ mod tests {
             },
         })
         .unwrap();
-        let bytes = envelope::encode(KLL_KIND_DYNAMIC, &metadata, &payload);
+        let bytes = envelope::encode(kind::KLL_DYNAMIC, &metadata, &payload);
         assert!(
             Kll::<f64>::from_asapv1(&bytes).is_err(),
             "dynamic kind_id must be rejected by the compact decoder"

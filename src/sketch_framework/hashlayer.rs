@@ -13,7 +13,7 @@
 //! Only sketches with a true prehashed insertion path are accepted:
 //!
 //! * `CountMinSketch<_, FastPath, _>` — Count-Min Sketch (fast path)
-//! * `Count<_, FastPath, _>` — Count Sketch (fast path)
+//! * `CountSketch<_, FastPath, _>` — Count Sketch (fast path)
 //! * `HyperLogLog<Ertl>` / `HyperLogLog<Classic>` / `HyperLogLogHip`
 //!
 //! All matrix-backed sketches (CMS / Count) in one layer must agree on the
@@ -31,7 +31,7 @@
 //! * [`HashSketchEnsemble::cardinality`] — distinct-count estimate (HLL only).
 
 use crate::{
-    Classic, Count, CountMinSketch, DataInput, DefaultXxHasher, Ertl, FastPath, HyperLogLog,
+    Classic, CountSketch, CountMinSketch, DataInput, DefaultXxHasher, Ertl, FastPath, HyperLogLog,
     HyperLogLogHip, MatrixHash, MatrixHashLayout, SketchHasher, Vector1D,
     hash_for_matrix_seeded_with_layout_generic, hash_layout_for_matrix,
     sketch_framework::sketch_catalog::{CountMinFastOps, CountSketchFastOps},
@@ -153,13 +153,13 @@ where
     }
 }
 
-impl<S, H> From<Count<S, FastPath, H>> for EnsembleSketch
+impl<S, H> From<CountSketch<S, FastPath, H>> for EnsembleSketch
 where
     H: SketchHasher<HashType = MatrixHash> + 'static,
     S: crate::MatrixStorage + crate::FastPathHasher<H> + 'static,
     S::Counter: crate::sketches::countsketch::CountSketchCounter + 'static,
 {
-    fn from(value: Count<S, FastPath, H>) -> Self {
+    fn from(value: CountSketch<S, FastPath, H>) -> Self {
         EnsembleSketch::CountSketchFast(Box::new(value))
     }
 }
@@ -426,7 +426,7 @@ mod tests {
     fn default_layer() -> HashSketchEnsemble<DefaultXxHasher> {
         HashSketchEnsemble::new(vec![
             CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
-            Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
+            CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into(),
         ])
         .expect("compatible sketches")
     }
@@ -575,7 +575,7 @@ mod tests {
     fn test_custom_dimensions() {
         let mut layer: HashSketchEnsemble<DefaultXxHasher> = HashSketchEnsemble::new(vec![
             CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
-            Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
+            CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into(),
         ])
         .expect("compatible sketches");
         assert_eq!(layer.len(), 2);
@@ -623,7 +623,7 @@ mod tests {
         ])
         .expect("single CMS");
 
-        let result = layer.push(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into());
+        let result = layer.push(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 4096).into());
         assert!(result.is_ok());
         assert_eq!(layer.len(), 2);
     }
@@ -635,7 +635,7 @@ mod tests {
         ])
         .expect("single CMS");
 
-        let result = layer.push(Count::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into());
+        let result = layer.push(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(5, 2048).into());
         assert!(result.is_err());
     }
 }

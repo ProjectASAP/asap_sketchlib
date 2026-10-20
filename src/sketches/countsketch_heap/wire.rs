@@ -22,6 +22,8 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::COUNT_SKETCH_WITH_HEAP;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 use crate::sketches::countminsketch_heap::heap_wire::{
@@ -29,19 +31,17 @@ use crate::sketches::countminsketch_heap::heap_wire::{
     wire_key_type,
 };
 use crate::sketches::countsketch::{CsWireCounter, CsWireMode};
-use crate::{Count, HashProfile, SketchHasher, Vector2D};
+use crate::{CountSketch, HashProfile, SketchHasher, Vector2D};
 
 use super::{CountSketchHeapCounter, CountSketchWithHeap};
 
-/// CountSketchWithHeap kind_id: family `0x0a`, single algorithm variant `0x00`.
-const CS_HEAP_KIND: &[u8] = &[0x0a, 0x00];
 
 // Wire serialization for the canonical CountSketchWithHeap configs only. `wire` is a
 // descendant of the sketch module, so this impl reads the private fields
 // directly.
 impl<T, Mode, H> CountSketchWithHeap<Vector2D<T>, Mode, H>
 where
-    // `CountSketchHeapCounter` carries `Count::from_storage`'s `CountSketchCounter` and
+    // `CountSketchHeapCounter` carries `CountSketch::from_storage`'s `CountSketchCounter` and
     // the heap's `HeapCounter`; `AddAssign` is required by
     // `Vector2D<T>: MatrixStorage`.
     T: CsWireCounter
@@ -85,7 +85,7 @@ where
             )));
         }
         let payload = encode_payload(key_type, counts.to_vec(), &entries)?;
-        Ok(envelope::encode(CS_HEAP_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::COUNT_SKETCH_WITH_HEAP, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The matrix
@@ -100,9 +100,9 @@ where
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != CS_HEAP_KIND {
+        if kind_id != kind::COUNT_SKETCH_WITH_HEAP {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CSHeap kind_id mismatch: stored {kind_id:?}, expected {CS_HEAP_KIND:?}"
+                "CSHeap kind_id mismatch: stored {kind_id:?}, expected {COUNT_SKETCH_WITH_HEAP:?}"
             )));
         }
         let shape = decode_metadata::<H>("CSHeap", metadata, T::COUNTER_TYPE, Mode::MODE)?;
@@ -120,7 +120,7 @@ where
         let heap = rebuild_heap(shape.heap_size, entries)?;
         let storage = Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]);
         Ok(CountSketchWithHeap {
-            cs: Count::from_storage(storage),
+            cs: CountSketch::from_storage(storage),
             heap,
         })
     }
@@ -289,7 +289,7 @@ mod tests {
     fn cs_heap_rejects_foreign_kind_ids() {
         let cms_heap = crate::CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 4);
         let cms = crate::CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
-        let count = crate::Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
+        let count = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
 
         for (bytes, what) in [
             (cms_heap.to_asapv1().expect("CMSHeap"), "CMSHeap"),
@@ -316,7 +316,7 @@ mod tests {
             heap_counts: Vec::new(),
         })
         .expect("payload");
-        envelope::encode(CS_HEAP_KIND, &metadata, &payload)
+        envelope::encode(kind::COUNT_SKETCH_WITH_HEAP, &metadata, &payload)
     }
 
     /// Fail closed (not panic) on a crafted envelope with a zero dimension:
@@ -473,7 +473,7 @@ mod tests {
             heap_counts: Vec::new(),
         })
         .expect("payload");
-        let bytes = envelope::encode(CS_HEAP_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COUNT_SKETCH_WITH_HEAP, &metadata, &payload);
         assert!(
             CountSketchWithHeap::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes).is_err(),
             "an i64 sketch must reject an f64-labelled envelope"

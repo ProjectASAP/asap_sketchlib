@@ -19,7 +19,7 @@ use crate::{DataInput, Vector1D};
 
 mod wire;
 pub(crate) use wire::{
-    KLL_KIND_DYNAMIC, KllCoinWire, KllPayload, KllWireItem, kll_metadata, split_and_validate_meta,
+    KllCoinWire, KllPayload, KllWireItem, kll_metadata, split_and_validate_meta,
     validate_kll_payload,
 };
 

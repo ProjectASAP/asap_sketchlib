@@ -7,6 +7,8 @@ use std::ops::RangeInclusive;
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::DDSKETCH_DELTA;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::check_cells;
 use crate::message_pack_format::envelope;
@@ -14,9 +16,6 @@ use crate::message_pack_format::envelope;
 use super::wire::{check_alpha, decode_metadata, encode_metadata};
 use super::{Buckets, DdSketch, GROW_CHUNK, ddsketch_indexable_bounds};
 
-/// DDSketch delta kind_id: the state's `0x05 0x00` with the variant's top bit
-/// set.
-const DD_DELTA_KIND: &[u8] = &[0x05, 0x80];
 
 /// A change to a [`DdSketch`] state of relative accuracy `alpha`: each count of
 /// `deltas` is added to the positive-store bucket its position names in
@@ -122,16 +121,16 @@ impl DdSketchDelta {
             negative_deltas: self.negative_deltas.clone(),
             zero_count: self.zero_count,
         })?;
-        Ok(envelope::encode(DD_DELTA_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::DDSKETCH_DELTA, &metadata, &payload))
     }
 
     /// Deserializes a delta from an ASAPv1 MessagePack envelope.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != DD_DELTA_KIND {
+        if kind_id != kind::DDSKETCH_DELTA {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "DDSketch delta kind_id mismatch: stored {kind_id:?}, expected {DD_DELTA_KIND:?}"
+                "DDSketch delta kind_id mismatch: stored {kind_id:?}, expected {DDSKETCH_DELTA:?}"
             )));
         }
         let (alpha, admission_rate) = decode_metadata(metadata)?;
@@ -227,7 +226,7 @@ mod tests {
         let payload =
             rmp_serde::to_vec(&(positive.0, positive.1, negative.0, negative.1, zero_count))
                 .unwrap();
-        envelope::encode(DD_DELTA_KIND, &metadata, &payload)
+        envelope::encode(kind::DDSKETCH_DELTA, &metadata, &payload)
     }
 
     #[test]

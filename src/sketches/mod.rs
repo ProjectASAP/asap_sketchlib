@@ -3,7 +3,7 @@
 //! This module is the main entry point for the library's sketch algorithms.
 //! Broadly, the sketches fall into a few common use cases:
 //!
-//! - frequency estimation: [`CountMinSketch`], [`Count`]
+//! - frequency estimation: [`CountMinSketch`], [`CountSketch`]
 //! - cardinality estimation: [`HyperLogLog`]
 //! - quantiles and distributions: [`Kll`], [`DdSketch`]
 //! - specialized or composite structures: heap-backed, folded, and
@@ -13,7 +13,7 @@
 //! For most users:
 //!
 //! - choose [`CountMinSketch`] for fast approximate non-negative frequency queries
-//! - choose [`Count`] for Count Sketch style frequency estimation
+//! - choose [`CountSketch`] for Count Sketch style frequency estimation
 //! - choose [`HyperLogLog`] for distinct counts
 //! - choose [`Kll`] for general quantile estimation
 //! - choose [`DdSketch`] when relative-error quantiles are important
@@ -54,7 +54,7 @@ pub use bloom::{
 };
 
 pub mod countsketch;
-pub use countsketch::{Count, CountSketchDelta};
+pub use countsketch::{CountSketch, CountSketchDelta};
 
 /// Count-Min-shaped grid with a per-bucket HyperLogLog (distinct-count) sketch.
 #[cfg(feature = "experimental")]

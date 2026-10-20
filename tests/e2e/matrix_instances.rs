@@ -36,7 +36,7 @@ use common::specs::{CountMinSpec, CountSketchSpec, SIMULTANEOUS_LEVEL, Tally};
 use common::{FreqTruth, zipf_u64};
 
 use asap_sketchlib::{
-    Count, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap, DataInput,
+    CountSketch, CountMinSketch, CountMinSketchWithHeap, CountSketchWithHeap, DataInput,
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, FastPath, FixedMatrix, OwnedDataInput,
     QuickMatrixI64, QuickMatrixI128, RegularPath, Vector2D, hash_for_matrix,
     heap_count_from_estimate,
@@ -285,9 +285,9 @@ fn countmin_both_paths_are_exact_on_a_collision_free_workload() {
 
 macro_rules! count_instance {
     ($storage:ty, $path:ty, $stream:expr, $truth:expr) => {{
-        let mut single = Count::<$storage, $path>::default();
-        let mut left = Count::<$storage, $path>::default();
-        let mut right = Count::<$storage, $path>::default();
+        let mut single = CountSketch::<$storage, $path>::default();
+        let mut left = CountSketch::<$storage, $path>::default();
+        let mut right = CountSketch::<$storage, $path>::default();
         for (i, k) in $stream.iter().enumerate() {
             let d = DataInput::U64(*k);
             single.update(&d);
@@ -372,8 +372,8 @@ count_matrix_test!(
 fn countsketch_both_paths_are_exact_on_a_collision_free_workload() {
     macro_rules! exact {
         ($storage:ty) => {{
-            let mut regular = Count::<$storage, RegularPath>::default();
-            let mut fast = Count::<$storage, FastPath>::default();
+            let mut regular = CountSketch::<$storage, RegularPath>::default();
+            let mut fast = CountSketch::<$storage, FastPath>::default();
             let mut truth = FreqTruth::default();
             for (i, k) in COLLISION_FREE_KEYS.iter().enumerate() {
                 for _ in 0..(i + 1) * 10 {
@@ -671,7 +671,7 @@ heap_matrix_test!(
 /// estimate is the row **median** as `f64`. Two lossy steps are unavoidable and
 /// both are documented API rather than accidents:
 ///
-/// 1. `i128 -> f64` inside `Count::estimate`, exact only below `2^53`;
+/// 1. `i128 -> f64` inside `CountSketch::estimate`, exact only below `2^53`;
 /// 2. `f64 -> i64` in `heap_count_from_estimate`, which **saturates** at `i64::MAX`.
 ///
 /// Saturating is the chosen semantics. Wrapping would turn a huge positive
@@ -951,7 +951,7 @@ fn countmin_counter_widths_carry_the_mass_their_type_allows() {
 fn countsketch_counter_widths_carry_signed_mass_in_both_directions() {
     let key = DataInput::U64(0xDEAD_BEEF);
 
-    let mut cs32 = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+    let mut cs32 = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
     cs32.update_weighted(&key, i32::MAX / 2);
     cs32.update_weighted(&key, -(i32::MAX / 2));
     assert_eq!(
@@ -960,7 +960,7 @@ fn countsketch_counter_widths_carry_signed_mass_in_both_directions() {
         "i32 Count Sketch must cancel a half-range increment exactly"
     );
 
-    let mut cs64 = Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 64);
+    let mut cs64 = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 64);
     let big = i32::MAX as i64 * 4;
     cs64.update_weighted(&key, big);
     assert_eq!(cs64.estimate(&key), big as f64);
@@ -971,7 +971,7 @@ fn countsketch_counter_widths_carry_signed_mass_in_both_directions() {
         "i64 Count Sketch must reach the negative side of the i32 range"
     );
 
-    let mut cs128 = Count::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
+    let mut cs128 = CountSketch::<Vector2D<i128>, RegularPath>::with_dimensions(3, 64);
     let huge = i64::MAX as i128 * 4;
     cs128.update_weighted(&key, huge);
     assert_eq!(cs128.estimate(&key), huge as f64);
@@ -1085,8 +1085,8 @@ fn countsketch_holds_its_l2_contract_across_the_depth_and_width_axis() {
     for &rows in &COUNTSKETCH_DEPTH_AXIS {
         for &cols in &WIDTH_AXIS {
             let spec = CountSketchSpec::new(rows, cols);
-            let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-            let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            let mut regular = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for k in &stream {
                 regular.update(&DataInput::U64(*k));
                 fast.update(&DataInput::U64(*k));
@@ -1154,8 +1154,8 @@ fn countsketch_answers_a_non_power_of_two_width_on_both_paths() {
     let (stream, truth) = stream_and_truth();
     for &cols in &NON_POWER_OF_TWO_WIDTHS {
         let spec = CountSketchSpec::new(5, cols);
-        let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, cols);
-        let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(5, cols);
+        let mut regular = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(5, cols);
+        let mut fast = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(5, cols);
         for k in &stream {
             regular.update(&DataInput::U64(*k));
             fast.update(&DataInput::U64(*k));
@@ -1427,8 +1427,8 @@ fn countsketch_precomputed_hash_entry_points_match_the_value_entry_points() {
     const COLS: usize = 2_048;
     let (stream, truth) = stream_and_truth();
 
-    let mut by_value = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
-    let mut by_hash = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_value = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut by_hash = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     for k in &stream {
         by_value.update(&DataInput::U64(*k));
         by_hash.update_with_hash(&hash_for_matrix(ROWS, COLS, &DataInput::U64(*k)));
@@ -1450,7 +1450,7 @@ fn countsketch_precomputed_hash_entry_points_match_the_value_entry_points() {
         );
     }
 
-    let mut weighted = Count::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut weighted = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(ROWS, COLS);
     let hashed = hash_for_matrix(ROWS, COLS, &DataInput::U64(11));
     weighted.update_weighted_with_hash(&hashed, 6);
     assert_eq!(

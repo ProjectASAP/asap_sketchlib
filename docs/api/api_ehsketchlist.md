@@ -13,7 +13,7 @@ enum EhBucketSketch {
     CM(CountMinSketch<Vector2D<i32>, FastPath>),
     COCO(CocoSketch),
     COUNTL2HH(CountSketchWithL2Norm),
-    CS(Count<Vector2D<i32>, FastPath>),
+    CS(CountSketch<Vector2D<i32>, FastPath>),
     DDS(DdSketch),
     ELASTIC(ElasticSketch),
     HLL(HyperLogLog<Ertl>),

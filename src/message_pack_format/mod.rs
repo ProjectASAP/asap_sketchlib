@@ -21,6 +21,7 @@ pub(crate) mod admission_rate;
 pub mod codec;
 pub(crate) mod delta;
 pub(crate) mod envelope;
+pub(crate) mod kind;
 pub mod error;
 pub mod native;
 pub mod portable;

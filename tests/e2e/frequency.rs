@@ -25,9 +25,9 @@ use common::{FreqTruth, uniform_u64, zipf_u64};
 use std::collections::HashMap;
 
 use asap_sketchlib::message_pack_format::portable::countminsketch::CountMinSketch as PortableCountMinSketch;
-use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch;
+use asap_sketchlib::message_pack_format::portable::countsketch::CountSketch as PortableCountSketch;
 use asap_sketchlib::{
-    Count, CountMinSketch, CountMinSketchFold, CountSketchFold, CountSketchWithL2Norm, DataInput,
+    CountSketch, CountMinSketch, CountMinSketchFold, CountSketchFold, CountSketchWithL2Norm, DataInput,
     DefaultXxHasher, FastPath, RegularPath, Vector2D,
 };
 
@@ -134,8 +134,8 @@ fn count_vecbased_error_bound() {
 
     for r in ROWS {
         for c in COLS {
-            let mut reg = Count::<Vector2D<i64>, RegularPath>::with_dimensions(r, c);
-            let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(r, c);
+            let mut reg = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(r, c);
+            let mut fast = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(r, c);
             let mut truth = FreqTruth::default();
             let stream = zipf_u64(20_000, 512, 1.2, STREAM_SEED);
             for k in &stream {
@@ -239,8 +239,8 @@ fn count_matbased_error_bound() {
     macro_rules! assert_fixed_matrix {
         ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
             $({
-                let mut reg = Count::<$mat, RegularPath>::from_storage($mat::default());
-                let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
+                let mut reg = CountSketch::<$mat, RegularPath>::from_storage($mat::default());
+                let mut fast = CountSketch::<$mat, FastPath>::from_storage($mat::default());
                 for k in &stream {
                     reg.update(&DataInput::I64(*k as i64));
                     fast.update(&DataInput::I64(*k as i64));
@@ -455,10 +455,10 @@ fn countsketch_both_paths_meet_the_l2_median_bound() {
     for trial in 0..BOUND_TRIALS {
         for (name, keys, to_input) in bound_streams(trial) {
             let mut truth = FreqTruth::default();
-            let mut regular = asap_sketchlib::Count::<Vector2D<i32>, RegularPath>::with_dimensions(
+            let mut regular = asap_sketchlib::CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(
                 BOUND_ROWS, BOUND_COLS,
             );
-            let mut fast = asap_sketchlib::Count::<Vector2D<i32>, FastPath>::with_dimensions(
+            let mut fast = asap_sketchlib::CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(
                 BOUND_ROWS, BOUND_COLS,
             );
             for k in &keys {
@@ -517,7 +517,7 @@ fn countsketch_error_stays_rank_independent_within_the_documented_empirical_band
 
     let stream = zipf_u64(200_000, 8192, 1.1, STREAM_SEED);
     let mut truth = FreqTruth::default();
-    let mut cs = asap_sketchlib::Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
+    let mut cs = asap_sketchlib::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
     for k in &stream {
         truth.observe(*k as i64);
         cs.update(&DataInput::I64(*k as i64));
@@ -717,7 +717,7 @@ fn portable_cms_and_cs_string_keys_satisfy_their_own_bounds() {
     // and the two truths agree key for key.
     let mut truth = FreqTruth::default();
     let mut pcs = PortableCountMinSketch::new(CM_ROWS, COLS);
-    let mut pcss = CountSketch::new(CS_ROWS, COLS);
+    let mut pcss = PortableCountSketch::new(CS_ROWS, COLS);
     for k in &stream {
         truth.observe(*k as i64);
         let key = format!("k{k}");
@@ -861,8 +861,8 @@ fn countsketch_documented_vector_grid(
 ) {
     for rows in DOC_ROWS {
         for cols in DOC_COLS {
-            let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-            let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+            let mut regular = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+            let mut fast = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
             for key in &input.keys {
                 let d = input.data(*key);
                 regular.update(&d);
@@ -893,8 +893,8 @@ fn countsketch_documented_fixed_grid(
     macro_rules! assert_fixed_matrix {
         ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
             $({
-                let mut regular = Count::<$mat, RegularPath>::from_storage($mat::default());
-                let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
+                let mut regular = CountSketch::<$mat, RegularPath>::from_storage($mat::default());
+                let mut fast = CountSketch::<$mat, FastPath>::from_storage($mat::default());
                 for key in &input.keys {
                     let d = input.data(*key);
                     regular.update(&d);

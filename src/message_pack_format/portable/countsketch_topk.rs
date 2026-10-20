@@ -139,7 +139,7 @@ impl std::fmt::Debug for CountSketchWithHeap {
 
 impl Clone for CountSketchWithHeap {
     fn clone(&self) -> Self {
-        // Structural clone: `CSHeap` derives `Clone` (its `Count` +
+        // Structural clone: `CountSketchWithHeap` derives `Clone` (its `CountSketch` +
         // `TopKHeap` fields are `Clone`), so copy the backend directly
         // instead of extracting the matrix + heap to wire form and
         // rebuilding it.

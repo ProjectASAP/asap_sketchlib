@@ -48,7 +48,7 @@ mod wire;
 pub use delta::HyperLogLogDelta;
 pub use wire::HllWireVariant;
 pub(crate) use wire::{
-    HLL_KIND_CLASSIC, HLL_KIND_ERTL_MLE, HLL_KIND_HIP, HllMetadata, HllPayloadHip, HllPayloadPlain,
+    HllMetadata, HllPayloadHip, HllPayloadPlain,
     standard_hll_metadata,
 };
 

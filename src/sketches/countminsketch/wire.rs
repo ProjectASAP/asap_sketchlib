@@ -20,6 +20,8 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::COUNT_MIN;
+use crate::message_pack_format::kind;
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::delta::DeltaCounter;
@@ -29,8 +31,6 @@ use crate::{FastPath, HashProfile, RegularPath, SketchHasher, Vector2D};
 
 use super::CountMinSketch;
 
-/// CMS kind_id: family `0x02`, single algorithm variant `0x00`.
-const CMS_KIND: &[u8] = &[0x02, 0x00];
 
 /// Names the wire counter type carried in the metadata (`counter_type`).
 /// Implemented only for the wire-eligible counter types.
@@ -219,7 +219,7 @@ where
         let payload = rmp_serde::to_vec(&CmsPayload::<T> {
             counts: counts.to_vec(),
         })?;
-        Ok(envelope::encode(CMS_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::COUNT_MIN, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The matrix
@@ -228,9 +228,9 @@ where
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != CMS_KIND {
+        if kind_id != kind::COUNT_MIN {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "CMS kind_id mismatch: stored {kind_id:?}, expected {CMS_KIND:?}"
+                "CMS kind_id mismatch: stored {kind_id:?}, expected {COUNT_MIN:?}"
             )));
         }
         let (rows, cols, admission_rate) = decode_metadata::<T, Mode, H>(metadata)?;
@@ -379,7 +379,7 @@ mod tests {
         ))
         .unwrap();
         let payload = rmp_serde::to_vec(&CmsPayload::<i64> { counts: Vec::new() }).unwrap();
-        let bytes = envelope::encode(CMS_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COUNT_MIN, &metadata, &payload);
         assert!(
             CountMinSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes).is_err(),
             "zero-dimension metadata must be rejected, not panic"
@@ -410,7 +410,7 @@ mod tests {
             counts: vec![0; rows * 8],
         })
         .unwrap();
-        let bytes = envelope::encode(CMS_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COUNT_MIN, &metadata, &payload);
         let err = CountMinSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&bytes)
             .expect_err("rows past MATRIX_MAX_ROWS must be rejected");
         assert!(err.to_string().contains("MATRIX_MAX_ROWS"), "got {err}");

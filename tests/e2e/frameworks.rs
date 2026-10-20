@@ -12,7 +12,7 @@ use common::{FreqTruth, assert_between, zipf_u64};
 
 use asap_sketchlib::input::{HydraCounter, HydraQuery};
 use asap_sketchlib::{
-    Count, CountMinSketch, CountMinSketchFold, CountMinSketchFoldConfig, DataInput, EhBucketSketch,
+    CountSketch, CountMinSketch, CountMinSketchFold, CountMinSketchFoldConfig, DataInput, EhBucketSketch,
     ExponentialHistogram, FastPath, Hydra, Kll, TumblingWindow, UnivMon, UnivMonPool,
     UnivMonTwoTier, Vector2D,
 };
@@ -182,7 +182,7 @@ fn cell_cm() -> HydraCounter {
 }
 
 fn cell_cs() -> HydraCounter {
-    HydraCounter::CountSketch(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 64))
+    HydraCounter::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 64))
 }
 
 // ---------------------------------------------------------------------------

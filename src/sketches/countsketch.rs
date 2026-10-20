@@ -30,7 +30,7 @@ const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 /// A frequency-estimation sketch using random sign projections (Count Sketch).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound(serialize = "S: Serialize", deserialize = "S: Deserialize<'de>"))]
-pub struct Count<
+pub struct CountSketch<
     S: MatrixStorage = Vector2D<i32>,
     Mode = RegularPath,
     H: SketchHasher = DefaultXxHasher,
@@ -81,139 +81,139 @@ impl CountSketchCounter for f64 {
 }
 
 // Default Count sketch for Vector2D<i32> (RegularPath).
-impl Default for Count<Vector2D<i32>, RegularPath> {
+impl Default for CountSketch<Vector2D<i32>, RegularPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i32> (FastPath).
-impl Default for Count<Vector2D<i32>, FastPath> {
+impl Default for CountSketch<Vector2D<i32>, FastPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i64> (RegularPath).
-impl Default for Count<Vector2D<i64>, RegularPath> {
+impl Default for CountSketch<Vector2D<i64>, RegularPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i64> (FastPath).
-impl Default for Count<Vector2D<i64>, FastPath> {
+impl Default for CountSketch<Vector2D<i64>, FastPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i128> (RegularPath).
-impl Default for Count<Vector2D<i128>, RegularPath> {
+impl Default for CountSketch<Vector2D<i128>, RegularPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for Vector2D<i128> (FastPath).
-impl Default for Count<Vector2D<i128>, FastPath> {
+impl Default for CountSketch<Vector2D<i128>, FastPath> {
     fn default() -> Self {
         Self::with_dimensions(DEFAULT_ROWS, DEFAULT_COLS)
     }
 }
 
 // Default Count sketch for FixedMatrix (RegularPath).
-impl Default for Count<FixedMatrix, RegularPath> {
+impl Default for CountSketch<FixedMatrix, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(FixedMatrix::default())
+        CountSketch::from_storage(FixedMatrix::default())
     }
 }
 
 // Default Count sketch for FixedMatrix (FastPath).
-impl Default for Count<FixedMatrix, FastPath> {
+impl Default for CountSketch<FixedMatrix, FastPath> {
     fn default() -> Self {
-        Count::from_storage(FixedMatrix::default())
+        CountSketch::from_storage(FixedMatrix::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI32 (RegularPath).
-impl Default for Count<DefaultMatrixI32, RegularPath> {
+impl Default for CountSketch<DefaultMatrixI32, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI32::default())
+        CountSketch::from_storage(DefaultMatrixI32::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI32 (FastPath).
-impl Default for Count<DefaultMatrixI32, FastPath> {
+impl Default for CountSketch<DefaultMatrixI32, FastPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI32::default())
+        CountSketch::from_storage(DefaultMatrixI32::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI64 (RegularPath).
-impl Default for Count<DefaultMatrixI64, RegularPath> {
+impl Default for CountSketch<DefaultMatrixI64, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI64::default())
+        CountSketch::from_storage(DefaultMatrixI64::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI64 (FastPath).
-impl Default for Count<DefaultMatrixI64, FastPath> {
+impl Default for CountSketch<DefaultMatrixI64, FastPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI64::default())
+        CountSketch::from_storage(DefaultMatrixI64::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI128 (RegularPath).
-impl Default for Count<DefaultMatrixI128, RegularPath> {
+impl Default for CountSketch<DefaultMatrixI128, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI128::default())
+        CountSketch::from_storage(DefaultMatrixI128::default())
     }
 }
 
 // Default Count sketch for DefaultMatrixI128 (FastPath).
-impl Default for Count<DefaultMatrixI128, FastPath> {
+impl Default for CountSketch<DefaultMatrixI128, FastPath> {
     fn default() -> Self {
-        Count::from_storage(DefaultMatrixI128::default())
+        CountSketch::from_storage(DefaultMatrixI128::default())
     }
 }
 
 // Default Count sketch for QuickMatrixI64 (RegularPath).
-impl Default for Count<QuickMatrixI64, RegularPath> {
+impl Default for CountSketch<QuickMatrixI64, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(QuickMatrixI64::default())
+        CountSketch::from_storage(QuickMatrixI64::default())
     }
 }
 
 // Default Count sketch for QuickMatrixI64 (FastPath).
-impl Default for Count<QuickMatrixI64, FastPath> {
+impl Default for CountSketch<QuickMatrixI64, FastPath> {
     fn default() -> Self {
-        Count::from_storage(QuickMatrixI64::default())
+        CountSketch::from_storage(QuickMatrixI64::default())
     }
 }
 
 // Default Count sketch for QuickMatrixI128 (RegularPath).
-impl Default for Count<QuickMatrixI128, RegularPath> {
+impl Default for CountSketch<QuickMatrixI128, RegularPath> {
     fn default() -> Self {
-        Count::from_storage(QuickMatrixI128::default())
+        CountSketch::from_storage(QuickMatrixI128::default())
     }
 }
 
 // Default Count sketch for QuickMatrixI128 (FastPath).
-impl Default for Count<QuickMatrixI128, FastPath> {
+impl Default for CountSketch<QuickMatrixI128, FastPath> {
     fn default() -> Self {
-        Count::from_storage(QuickMatrixI128::default())
+        CountSketch::from_storage(QuickMatrixI128::default())
     }
 }
 
 // Count constructors for Vector2D-backed storage.
-impl<T, M, H: SketchHasher> Count<Vector2D<T>, M, H>
+impl<T, M, H: SketchHasher> CountSketch<Vector2D<T>, M, H>
 where
     T: CountSketchCounter,
 {
     /// Creates a sketch with the requested number of rows and columns.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
-        let mut sk = Count {
+        let mut sk = CountSketch {
             counts: Vector2D::init(rows, cols),
             row: rows,
             col: cols,
@@ -227,7 +227,7 @@ where
 }
 
 // Core Count API for any storage/counter.
-impl<S, C, Mode, H: SketchHasher> Count<S, Mode, H>
+impl<S, C, Mode, H: SketchHasher> CountSketch<S, Mode, H>
 where
     S: MatrixStorage<Counter = C>,
     C: CountSketchCounter,
@@ -307,7 +307,7 @@ where
 }
 
 // Regular-path Count operations.
-impl<S, C, H: SketchHasher> Count<S, RegularPath, H>
+impl<S, C, H: SketchHasher> CountSketch<S, RegularPath, H>
 where
     S: MatrixStorage<Counter = C>,
     C: CountSketchCounter,
@@ -377,7 +377,7 @@ where
 }
 
 // Fast-path Count operations using precomputed hashes.
-impl<S, H: SketchHasher> Count<S, FastPath, H>
+impl<S, H: SketchHasher> CountSketch<S, FastPath, H>
 where
     S: MatrixStorage + crate::FastPathHasher<H>,
     S::Counter: CountSketchCounter,
@@ -471,7 +471,7 @@ where
 }
 
 // Debug helpers for i32 Vector2D Count.
-impl<M, H: SketchHasher> Count<Vector2D<i32>, M, H> {
+impl<M, H: SketchHasher> CountSketch<Vector2D<i32>, M, H> {
     /// Human-friendly helper used by the serializer demo binaries.
     pub fn debug(&self) {
         for row in 0..self.counts.rows() {
@@ -481,7 +481,7 @@ impl<M, H: SketchHasher> Count<Vector2D<i32>, M, H> {
 }
 
 // Nitro sampling helpers for fast-path Count.
-impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
+impl<H: SketchHasher> CountSketch<Vector2D<i32>, FastPath, H> {
     /// Enables Nitro sampling with the provided rate.
     pub fn enable_nitro(&mut self, sampling_rate: f64) {
         self.counts.enable_nitro(sampling_rate);
@@ -527,7 +527,7 @@ impl<H: SketchHasher> Count<Vector2D<i32>, FastPath, H> {
 }
 
 // NitroTarget integration for fast-path Count.
-impl<H: SketchHasher> NitroTarget for Count<Vector2D<i32>, FastPath, H> {
+impl<H: SketchHasher> NitroTarget for CountSketch<Vector2D<i32>, FastPath, H> {
     #[inline(always)]
     fn rows(&self) -> usize {
         self.counts.rows()
@@ -570,7 +570,7 @@ use crate::octo_delta::{
     OCTO_MAX_PROMOTION_THRESHOLD,
 };
 
-impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> {
+impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountSketch<S, RegularPath, H> {
     /// Inserts a value, emitting a delta at every promotion of the default
     /// threshold `OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD`.
     #[inline(always)]
@@ -629,7 +629,7 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> Count<S, RegularPath, H> 
     }
 }
 
-impl<S, H: SketchHasher> Count<S, FastPath, H>
+impl<S, H: SketchHasher> CountSketch<S, FastPath, H>
 where
     S: MatrixStorage<Counter = i32> + FastPathHasher<H>,
 {
@@ -688,7 +688,7 @@ where
     }
 }
 
-impl<S: MatrixStorage, Mode, H: SketchHasher> Count<S, Mode, H>
+impl<S: MatrixStorage, Mode, H: SketchHasher> CountSketch<S, Mode, H>
 where
     S::Counter: Copy + std::ops::AddAssign + From<i32>,
 {
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn count_child_insert_emits_at_threshold() {
-        let mut child = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let mut child = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::U64(99);
         let mut deltas: Vec<CountSketchCellDelta> = Vec::new();
 
@@ -736,9 +736,9 @@ mod tests {
         exponent: f64,
         samples: usize,
         seed: u64,
-    ) -> (Count, HashMap<u64, i32>) {
+    ) -> (CountSketch, HashMap<u64, i32>) {
         let mut truth = HashMap::<u64, i32>::new();
-        let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
+        let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(rows, cols);
 
         for value in sample_zipf_u64(domain, exponent, samples, seed) {
             let key = DataInput::U64(value);
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn default_initializes_expected_dimensions() {
-        let cs = Count::<Vector2D<i32>, RegularPath>::default();
+        let cs = CountSketch::<Vector2D<i32>, RegularPath>::default();
         assert_eq!(cs.rows(), 3);
         assert_eq!(cs.cols(), 4096);
         all_counter_zero_i32(cs.as_storage());
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn with_dimensions_uses_custom_sizes() {
-        let cs = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 17);
+        let cs = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 17);
         assert_eq!(cs.rows(), 3);
         assert_eq!(cs.cols(), 17);
 
@@ -776,7 +776,7 @@ mod tests {
 
     #[test]
     fn insert_updates_signed_counters_per_row() {
-        let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::Str("alpha");
 
         sketch.update(&key);
@@ -794,7 +794,7 @@ mod tests {
 
     #[test]
     fn fast_insert_produces_consistent_estimates() {
-        let mut fast = Count::<Vector2D<i32>, FastPath>::with_dimensions(4, 128);
+        let mut fast = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(4, 128);
 
         let keys = vec![
             DataInput::Str("alpha"),
@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn insert_produces_consistent_estimates() {
-        let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
 
         let keys = vec![
             DataInput::Str("alpha"),
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn estimate_recovers_frequency_for_repeated_key() {
-        let mut sketch = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
+        let mut sketch = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 64);
         let key = DataInput::Str("theta");
 
         let repeats = 37;
@@ -861,7 +861,7 @@ mod tests {
 
     #[test]
     fn fast_path_recovers_repeated_insertions() {
-        let mut sketch = Count::<Vector2D<i32>, FastPath>::with_dimensions(4, 256);
+        let mut sketch = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(4, 256);
         let keys = vec![
             DataInput::Str("alpha"),
             DataInput::Str("beta"),
@@ -887,8 +887,8 @@ mod tests {
 
     #[test]
     fn merge_adds_counters_element_wise() {
-        let mut left = Count::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
-        let mut right = Count::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
+        let mut left = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
+        let mut right = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
         let key = DataInput::Str("delta");
 
         left.update(&key);
@@ -910,12 +910,12 @@ mod tests {
     #[test]
     fn f64_estimate_is_the_unrounded_median_and_takes_nan() {
         let key = DataInput::Str("alpha");
-        let mut sketch = Count::<Vector2D<f64>, RegularPath>::with_dimensions(3, 64);
+        let mut sketch = CountSketch::<Vector2D<f64>, RegularPath>::with_dimensions(3, 64);
         sketch.update_weighted(&key, 1.5);
         assert_eq!(sketch.estimate(&key), 1.5);
 
         let nan =
-            Count::<Vector2D<f64>, RegularPath>::from_storage(Vector2D::from_fn(3, 4, |_, _| {
+            CountSketch::<Vector2D<f64>, RegularPath>::from_storage(Vector2D::from_fn(3, 4, |_, _| {
                 f64::NAN
             }));
         assert!(nan.estimate(&key).is_nan());
@@ -924,8 +924,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "dimension mismatch while merging CountMin sketches")]
     fn merge_requires_matching_dimensions() {
-        let mut left = Count::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
-        let right = Count::<Vector2D<i32>, RegularPath>::with_dimensions(3, 32);
+        let mut left = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(2, 32);
+        let right = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(3, 32);
         left.merge(&right);
     }
 
@@ -954,7 +954,7 @@ mod tests {
 
     #[test]
     fn cs_regular_path_correctness() {
-        let mut sk = Count::<Vector2D<i32>, RegularPath>::default();
+        let mut sk = CountSketch::<Vector2D<i32>, RegularPath>::default();
         // Insert values 0..9 once using the regular path.
         for i in 0..10 {
             sk.update(&DataInput::I32(i));
@@ -998,7 +998,7 @@ mod tests {
 
     #[test]
     fn cs_fast_path_correctness() {
-        let mut sk = Count::<Vector2D<i32>, FastPath>::default();
+        let mut sk = CountSketch::<Vector2D<i32>, FastPath>::default();
         // Insert values 0..9 once using the fast path.
         for i in 0..10 {
             sk.update(&DataInput::I32(i));
@@ -1038,7 +1038,7 @@ mod tests {
         const DECILES: usize = 10;
 
         let mut truth = HashMap::<u64, i64>::new();
-        let mut cs = Count::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
+        let mut cs = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(ROWS, COLS);
         for value in sample_zipf_u64(DOMAIN, 1.1, SAMPLES, STREAM_SEED) {
             cs.update(&DataInput::U64(value));
             *truth.entry(value).or_insert(0) += 1;

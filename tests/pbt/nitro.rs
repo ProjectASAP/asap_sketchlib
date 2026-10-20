@@ -10,11 +10,11 @@
 //! below rate 1.0 are the ones sampling does not disturb.
 
 use crate::support::grid;
-use asap_sketchlib::{Count, CountMinSketch, DataInput, FastPath, NitroBatch, Vector2D};
+use asap_sketchlib::{CountSketch, CountMinSketch, DataInput, FastPath, NitroBatch, Vector2D};
 use proptest::prelude::*;
 
 type CmTarget = CountMinSketch<Vector2D<i32>, FastPath>;
-type CsTarget = Count<Vector2D<i32>, FastPath>;
+type CsTarget = CountSketch<Vector2D<i32>, FastPath>;
 
 fn cm_cells(sketch: &CmTarget) -> Vec<i32> {
     grid(sketch.rows(), sketch.cols(), |r, c| {

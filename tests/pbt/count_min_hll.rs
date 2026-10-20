@@ -305,7 +305,7 @@ macro_rules! shape_laws {
                     let probed: Vec<u64> = groups.iter().map(|(key, _)| *key).collect();
 
                     round_trip!(
-                        Sketch,
+                        @raw_serde Sketch,
                         sketch,
                         |s: &Sketch| s.as_storage().as_slice().to_vec(),
                         |s: &Sketch| (s.rows(), s.cols(), s.precision()),

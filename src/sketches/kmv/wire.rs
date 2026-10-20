@@ -28,13 +28,13 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::message_pack_format::kind::KMV;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
 use crate::{CommonHeap, HashProfile, RetainSmallest, SketchHasher};
 
 use super::Kmv;
 
-/// KMV kind_id: family `0x0e`, single algorithm variant `0x00`.
-const KMV_KIND: &[u8] = &[0x0e, 0x00];
 
 /// KMV descriptor metadata (ASAPv1 §2), a msgpack **map** (`to_vec_named`) with
 /// keys in this declaration order — the canonical order the wire spec fixes (Go
@@ -158,7 +158,7 @@ impl<H: SketchHasher + HashProfile> Kmv<H> {
         }
         let metadata = rmp_serde::to_vec_named(&kmv_metadata::<H>(k))?;
         let payload = rmp_serde::to_vec(&KmvPayload { hashes })?;
-        Ok(envelope::encode(KMV_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::KMV, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. `k` is
@@ -172,9 +172,9 @@ impl<H: SketchHasher + HashProfile> Kmv<H> {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != KMV_KIND {
+        if kind_id != kind::KMV {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "KMV kind_id mismatch: stored {kind_id:?}, expected {KMV_KIND:?}"
+                "KMV kind_id mismatch: stored {kind_id:?}, expected {KMV:?}"
             )));
         }
         let meta: KmvMetadata = envelope::decode_block(metadata)?;
@@ -437,7 +437,7 @@ mod tests {
     fn crafted(k: u32, hashes: Vec<u64>) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(&kmv_metadata::<DefaultXxHasher>(k)).expect("meta");
         let payload = rmp_serde::to_vec(&KmvPayload { hashes }).expect("payload");
-        envelope::encode(KMV_KIND, &metadata, &payload)
+        envelope::encode(kind::KMV, &metadata, &payload)
     }
 
     #[test]
@@ -466,7 +466,7 @@ mod tests {
         let metadata = rmp_serde::to_vec_named(&kmv_metadata::<DefaultXxHasher>(4)).expect("meta");
         // fixarray(1), array32 declaring 2^30 elements, then two of them.
         let payload = vec![0x91, 0xdd, 0x40, 0x00, 0x00, 0x00, 0x01, 0x02];
-        let bytes = envelope::encode(KMV_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::KMV, &metadata, &payload);
         assert!(
             Kmv::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "an over-declared hash count must be rejected, not allocated"

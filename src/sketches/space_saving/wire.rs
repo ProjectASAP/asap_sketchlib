@@ -46,6 +46,8 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::SPACE_SAVING;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HashProfile, OwnedDataInput, SketchHasher};
@@ -56,8 +58,6 @@ use super::parts::emitted_order;
 use super::{SpaceSaving, SpaceSavingState, key_order};
 use crate::sketches::countminsketch_heap::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
 
-/// Space-Saving kind_id: family `0x18`, single algorithm variant `0x00`.
-const SPACE_SAVING_KIND: &[u8] = &[0x18, 0x00];
 
 /// The metadata `key_type` naming a key's exact [`OwnedDataInput`] variant, or `None`
 /// for the 128-bit variants, which are not wire types.
@@ -379,7 +379,7 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
         let key_type = wire_key_type(&entries)?;
         let metadata = rmp_serde::to_vec_named(&space_saving_metadata::<H>(capacity, key_type))?;
         let payload = encode_payload(key_type, &entries, self.total, self.discarded_max)?;
-        Ok(envelope::encode(SPACE_SAVING_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::SPACE_SAVING, &metadata, &payload))
     }
 
     /// Deserializes a summary from an ASAPv1 MessagePack envelope. `capacity`
@@ -393,9 +393,9 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != SPACE_SAVING_KIND {
+        if kind_id != kind::SPACE_SAVING {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "Space-Saving kind_id mismatch: stored {kind_id:?}, expected {SPACE_SAVING_KIND:?}"
+                "Space-Saving kind_id mismatch: stored {kind_id:?}, expected {SPACE_SAVING:?}"
             )));
         }
         let meta: SpaceSavingMetadata = envelope::decode_block(metadata)?;
@@ -791,7 +791,7 @@ mod tests {
             let metadata =
                 rmp_serde::to_vec_named(&space_saving_metadata::<DefaultXxHasher>(4, claimed))
                     .expect("metadata");
-            let forged = envelope::encode(SPACE_SAVING_KIND, &metadata, payload);
+            let forged = envelope::encode(kind::SPACE_SAVING, &metadata, payload);
             assert!(
                 SpaceSaving::<DefaultXxHasher>::from_asapv1(&forged).is_err(),
                 "a payload relabelled {claimed} must be rejected"
@@ -923,7 +923,7 @@ mod tests {
             discarded_max,
         })
         .expect("payload");
-        envelope::encode(SPACE_SAVING_KIND, &metadata, &payload)
+        envelope::encode(kind::SPACE_SAVING, &metadata, &payload)
     }
 
     #[test]
@@ -983,7 +983,7 @@ mod tests {
                 "not in descending count, ties by key",
             ),
             (
-                envelope::encode(SPACE_SAVING_KIND, &unknown_meta, &unknown_payload),
+                envelope::encode(kind::SPACE_SAVING, &unknown_meta, &unknown_payload),
                 "is not an ASAPv1 wire key type",
             ),
             (
@@ -1029,7 +1029,7 @@ mod tests {
                 discarded_max: 0,
             })
             .expect("payload");
-            envelope::encode(SPACE_SAVING_KIND, &metadata, &payload)
+            envelope::encode(kind::SPACE_SAVING, &metadata, &payload)
         };
         let spec = encoded(vec![0, 1, i64::MIN, -1], vec![5; 4], "i64");
         let decoded = SpaceSaving::<DefaultXxHasher>::from_asapv1(&spec)
@@ -1066,7 +1066,7 @@ mod tests {
         })
         .expect("payload");
         let problem = SpaceSaving::<DefaultXxHasher>::from_asapv1(&envelope::encode(
-            SPACE_SAVING_KIND,
+            kind::SPACE_SAVING,
             &metadata,
             &payload,
         ))

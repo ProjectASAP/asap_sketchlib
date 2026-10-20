@@ -14,10 +14,11 @@
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 
+use crate::message_pack_format::kind;
 use crate::Vector1D;
 use crate::message_pack_format::envelope;
 use crate::sketches::kll::{
-    Coin, KLL_KIND_DYNAMIC, KllCoinWire, KllPayload, KllWireItem, kll_metadata,
+    Coin, KllCoinWire, KllPayload, KllWireItem, kll_metadata,
     split_and_validate_meta, validate_kll_payload,
 };
 
@@ -51,14 +52,14 @@ where
                 remaining_bits,
             },
         })?;
-        Ok(envelope::encode(KLL_KIND_DYNAMIC, &metadata, &payload))
+        Ok(envelope::encode(kind::KLL_DYNAMIC, &metadata, &payload))
     }
 
     /// Deserializes a `KllDynamic` from an ASAPv1 MessagePack envelope. Bytes
     /// whose metadata does not match this item type are rejected (fail closed),
     /// as are inconsistent level layouts.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let (meta, payload_bytes) = split_and_validate_meta::<T>(bytes, KLL_KIND_DYNAMIC)?;
+        let (meta, payload_bytes) = split_and_validate_meta::<T>(bytes, kind::KLL_DYNAMIC)?;
         let payload: KllPayload<T> = envelope::decode_block(payload_bytes)?;
         let num_levels = validate_kll_payload(&payload.levels, &payload.items, &payload.coin)?;
 
@@ -88,8 +89,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::message_pack_format::kind;
     use crate::message_pack_format::envelope;
-    use crate::sketches::kll::KLL_KIND_DYNAMIC;
     use crate::sketches::kll_dynamic::KllDynamic;
 
     fn build_dynamic(k: i32, n: u64) -> KllDynamic<f64> {
@@ -108,7 +109,7 @@ mod tests {
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
-        assert_eq!(&bytes[8..10], KLL_KIND_DYNAMIC);
+        assert_eq!(&bytes[8..10], kind::KLL_DYNAMIC);
 
         let decoded = KllDynamic::<f64>::from_asapv1(&bytes).expect("decode");
         assert_eq!(
@@ -140,7 +141,7 @@ mod tests {
             sketch.update(&v);
         }
         let bytes = sketch.to_asapv1().expect("serialize");
-        assert_eq!(&bytes[8..10], KLL_KIND_DYNAMIC);
+        assert_eq!(&bytes[8..10], kind::KLL_DYNAMIC);
         let decoded = KllDynamic::<i64>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }

@@ -24,7 +24,7 @@ implementations, and orchestration/windowing frameworks in one crate.
 
 ## Current State
 
-- **Ready**: Core sketch APIs marked `Ready` in [apis.md](./apis.md): `CountMinSketch`, `Count`, `HyperLogLog`, `Kll`, `DdSketch`, `CountMinSketchWithHeap`, `CountSketchWithHeap`, `SpaceSaving`, `Bloom`, `ElasticSketch`, `CocoSketch`
+- **Ready**: Core sketch APIs marked `Ready` in [apis.md](./apis.md): `CountMinSketch`, `CountSketch`, `HyperLogLog`, `Kll`, `DdSketch`, `CountMinSketchWithHeap`, `CountSketchWithHeap`, `SpaceSaving`, `Bloom`, `ElasticSketch`, `CocoSketch`
 - **Notice**: Core sketch APIs currently marked `Unstable`: `UniformSampling`, `Kmv`
 - Framework APIs marked `Ready`: `Hydra`, `HashSketchEnsemble`, `UnivMon`, `UnivMon Optimized`, `NitroBatch`, `ExponentialHistogram`, `EhBucketSketch`, `OctoSketch`
 - Framework APIs currently marked `Unstable`: `ExponentialHistogramUnivMon`

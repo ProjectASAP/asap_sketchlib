@@ -4,11 +4,11 @@ Status: `Ready`
 
 ## Purpose
 
-`Count` is this crate's Count Sketch implementation for approximate frequency estimation with signed counters and median aggregation.
+`CountSketch` is this crate's Count Sketch implementation for approximate frequency estimation with signed counters and median aggregation.
 
 ## Type/Struct
 
-- `Count<S = Vector2D<i32>, Mode = RegularPath, H = DefaultXxHasher>`
+- `CountSketch<S = Vector2D<i32>, Mode = RegularPath, H = DefaultXxHasher>`
 - `CountSketchWithL2Norm<H = DefaultXxHasher>`
 
 ## Constructors
@@ -67,8 +67,8 @@ fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 
 These produce/consume the **ASAPv1** wire envelope (kind `0x04 0x00`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). They are **not** available
-on every `Count`: the impl exists only for wire-eligible configs
-`Count<Vector2D<T>, Mode, H>` where `T` is `i32`, `i64` or `f64`
+on every `CountSketch`: the impl exists only for wire-eligible configs
+`CountSketch<Vector2D<T>, Mode, H>` where `T` is `i32`, `i64` or `f64`
 (`CsWireCounter`), `Mode` is `FastPath` or `RegularPath` (`CsWireMode`), and
 `H: HashProfile`. An `i128` or non-`Vector2D` sketch must be converted first
 (only you know if the mapping is lossless).
@@ -103,7 +103,7 @@ fn new(rows: usize, cols: usize, indices: Vec<u64>, deltas: Vec<T>) -> Result<Se
 fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 
-// on Count<Vector2D<T>, Mode, H>
+// on CountSketch<Vector2D<T>, Mode, H>
 fn merge_delta(&mut self, delta: &CountSketchDelta<T, Mode, H>) -> Result<(), String>
 ```
 
@@ -139,7 +139,7 @@ serialize.
 ```rust
 use asap_sketchlib::{Count, DataInput};
 
-let mut cs = Count::with_dimensions(5, 2048);
+let mut cs = CountSketch::with_dimensions(5, 2048);
 cs.update(&DataInput::Str("alpha"));
 let est = cs.estimate(&DataInput::Str("alpha"));
 assert!(est >= 1.0);
@@ -152,4 +152,4 @@ assert!(est >= 1.0);
 
 ## Status
 
-Core frequency primitive; this crate exposes it as `Count` and uses it widely in framework layers.
+Core frequency primitive; this crate exposes it as `CountSketch` and uses it widely in framework layers.

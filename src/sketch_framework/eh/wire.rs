@@ -30,13 +30,13 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::EXPONENTIAL_HISTOGRAM;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
 use crate::sketch_framework::eh_bucket_sketch::wire::{SketchState, rebuild_sketch, sketch_state};
 
 use super::{EhBucket, ExponentialHistogram, compute_l2_mass, infer_merge_norm};
 
-/// ExponentialHistogram kind_id: family `0x13`, single algorithm variant `0x00`.
-const EH_KIND: &[u8] = &[0x13, 0x00];
 
 /// ExponentialHistogram descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
@@ -176,7 +176,7 @@ impl ExponentialHistogram {
             max_times: self.payload.iter().map(|b| b.max_time).collect(),
             prototype,
         })?;
-        Ok(envelope::encode(EH_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::EXPONENTIAL_HISTOGRAM, &metadata, &payload))
     }
 
     /// Deserializes a histogram from an ASAPv1 MessagePack envelope. The bucket
@@ -189,9 +189,9 @@ impl ExponentialHistogram {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != EH_KIND {
+        if kind_id != kind::EXPONENTIAL_HISTOGRAM {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "ExponentialHistogram kind_id mismatch: stored {kind_id:?}, expected {EH_KIND:?}"
+                "ExponentialHistogram kind_id mismatch: stored {kind_id:?}, expected {EXPONENTIAL_HISTOGRAM:?}"
             )));
         }
         let meta: EhMetadata = envelope::decode_block(metadata)?;
@@ -263,9 +263,8 @@ mod tests {
     use crate::sketch_framework::eh_bucket_sketch::wire::tests::{
         alt_profile_triple, populated_variants, relabelled, sample_input,
     };
-    use crate::sketch_framework::eh_bucket_sketch::wire::{CM_KIND, UNIFORM_KIND};
     use crate::sketch_framework::eh_bucket_sketch::{EhBucketSketch, SketchNorm};
-    use crate::{Count, CountMinSketch, DataInput, FastPath, Vector2D};
+    use crate::{CountSketch, CountMinSketch, DataInput, FastPath, Vector2D};
 
     /// A histogram over Count-Min buckets with a few timestamped updates.
     fn populated_eh() -> ExponentialHistogram {
@@ -294,7 +293,7 @@ mod tests {
     /// Wraps a crafted payload in a `0x13 0x00` envelope with valid metadata.
     fn envelope_for(payload: &EhPayload) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(&eh_metadata(1000, 2)).unwrap();
-        envelope::encode(EH_KIND, &metadata, &rmp_serde::to_vec(payload).unwrap())
+        envelope::encode(kind::EXPONENTIAL_HISTOGRAM, &metadata, &rmp_serde::to_vec(payload).unwrap())
     }
 
     #[test]
@@ -447,7 +446,7 @@ mod tests {
         let good = populated_eh().to_asapv1().expect("serialize");
         let (_, _, payload) = envelope::split(&good).expect("split");
         let metadata = rmp_serde::to_vec_named(&eh_metadata(1000, 0)).unwrap();
-        let bytes = envelope::encode(EH_KIND, &metadata, payload);
+        let bytes = envelope::encode(kind::EXPONENTIAL_HISTOGRAM, &metadata, payload);
         assert!(ExponentialHistogram::from_asapv1(&bytes).is_err());
     }
 
@@ -520,11 +519,11 @@ mod tests {
             CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
         );
         let payload = EhPayload {
-            buckets: vec![relabelled(&sketch, UNIFORM_KIND)],
+            buckets: vec![relabelled(&sketch, kind::UNIFORM_SAMPLING)],
             sizes: vec![1],
             min_times: vec![0],
             max_times: vec![0],
-            prototype: relabelled(&sketch, CM_KIND),
+            prototype: relabelled(&sketch, kind::COUNT_MIN),
         };
         let message = ExponentialHistogram::from_asapv1(&envelope_for(&payload))
             .expect_err("a relabelled bucket must not decode")
@@ -563,7 +562,7 @@ mod tests {
             CountMinSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
         );
         let cs =
-            EhBucketSketch::CountSketch(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
+            EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
         let payload = EhPayload {
             buckets: vec![
                 sketch_state(&cm).expect("state"),
@@ -599,7 +598,7 @@ mod tests {
     fn eh_refuses_to_serialize_a_bucket_that_disagrees_with_the_prototype() {
         let mut mixed = populated_eh();
         let foreign =
-            EhBucketSketch::CountSketch(Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
+            EhBucketSketch::CountSketch(CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8));
         let last = mixed.payload.len() - 1;
         mixed.payload[last].l2_mass = compute_l2_mass(&foreign);
         mixed.payload[last].bucket = foreign;

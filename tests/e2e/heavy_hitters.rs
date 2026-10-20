@@ -1582,7 +1582,7 @@ mod documented_matrix {
     };
     use super::*;
 
-    use asap_sketchlib::{Count, CountMinSketch, FastPath, RegularPath, Vector2D};
+    use asap_sketchlib::{CountSketch, CountMinSketch, FastPath, RegularPath, Vector2D};
 
     /// The document's `(row, column)` grid.
     const DOC_ROWS: [usize; 3] = [3, 5, 7];
@@ -1801,8 +1801,8 @@ mod documented_matrix {
 
         for rows in DOC_ROWS {
             for cols in DOC_COLS {
-                let mut regular = Count::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
-                let mut fast = Count::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
+                let mut regular = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, cols);
+                let mut fast = CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(rows, cols);
                 for key in &input.keys {
                     let d = input.data(*key);
                     regular.update(&d);
@@ -1831,8 +1831,8 @@ mod documented_matrix {
         macro_rules! assert_fixed_matrix {
             ($($mat:ident => ($rows:expr, $cols:expr)),* $(,)?) => {
                 $({
-                    let mut regular = Count::<$mat, RegularPath>::from_storage($mat::default());
-                    let mut fast = Count::<$mat, FastPath>::from_storage($mat::default());
+                    let mut regular = CountSketch::<$mat, RegularPath>::from_storage($mat::default());
+                    let mut fast = CountSketch::<$mat, FastPath>::from_storage($mat::default());
                     for key in &input.keys {
                         let d = input.data(*key);
                         regular.update(&d);

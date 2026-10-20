@@ -9,7 +9,7 @@ use std::{
 };
 
 use crate::{
-    Count, CountMinSketch, CountSketchWithL2Norm, Ertl, FastPath, HeapCount, HyperLogLog, Kll,
+    CountSketch, CountMinSketch, CountSketchWithL2Norm, Ertl, FastPath, HeapCount, HyperLogLog, Kll,
     MatrixHash, UnivMon, Vector2D,
 };
 
@@ -383,7 +383,7 @@ pub enum HydraCounter {
     /// HyperLogLog-backed counter.
     Hll(HyperLogLog<Ertl>),
     /// Count Sketch-backed counter.
-    CountSketch(Count<Vector2D<i32>, FastPath>),
+    CountSketch(CountSketch<Vector2D<i32>, FastPath>),
     /// KLL-backed counter.
     Kll(Kll),
     /// UnivMon-backed counter.

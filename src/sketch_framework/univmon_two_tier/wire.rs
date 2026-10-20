@@ -21,6 +21,8 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::UNIVMON_TWO_TIER;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
 use crate::sketch_framework::univmon::wire::{
     check_layers, decode_pyramid, encode_pyramid, pyramid_key_type, pyramid_state, rebuild_layers,
@@ -31,8 +33,6 @@ use crate::{DefaultXxHasher, HashProfile};
 
 use super::UnivMonTwoTier;
 
-/// UnivMon Optimized kind_id: family `0x11`, single algorithm variant `0x00`.
-const PYRAMID_KIND: &[u8] = &[0x11, 0x00];
 
 /// UnivMonTwoTier descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
@@ -196,7 +196,7 @@ impl UnivMonTwoTier {
             key_type,
         ))?;
         let payload = encode_pyramid(key_type, state)?;
-        Ok(envelope::encode(PYRAMID_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::UNIVMON_TWO_TIER, &metadata, &payload))
     }
 
     /// Deserializes a pyramid from an ASAPv1 MessagePack envelope. The layout
@@ -210,9 +210,9 @@ impl UnivMonTwoTier {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != PYRAMID_KIND {
+        if kind_id != kind::UNIVMON_TWO_TIER {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMonPyramid kind_id mismatch: stored {kind_id:?}, expected {PYRAMID_KIND:?}"
+                "UnivMonPyramid kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_TWO_TIER:?}"
             )));
         }
         let meta: UnivMonTwoTierMetadata = envelope::decode_block(metadata)?;
@@ -319,7 +319,7 @@ mod tests {
     ) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(meta).expect("metadata");
         let payload = rmp_serde::to_vec(payload).expect("payload");
-        envelope::encode(PYRAMID_KIND, &metadata, &payload)
+        envelope::encode(kind::UNIVMON_TWO_TIER, &metadata, &payload)
     }
 
     #[test]
@@ -548,7 +548,7 @@ mod tests {
         );
         let (_, _, payload) = envelope::split(&encoded).expect("split");
         let forged = envelope::encode(
-            PYRAMID_KIND,
+            kind::UNIVMON_TWO_TIER,
             &rmp_serde::to_vec_named(&alt).expect("metadata"),
             payload,
         );
@@ -563,7 +563,7 @@ mod tests {
     /// Count Sketch envelope.
     #[test]
     fn pyramid_rejects_foreign_kind_ids() {
-        let count_sketch = crate::Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
+        let count_sketch = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
             .to_asapv1()
             .expect("serialize Count Sketch");
         let count_l2hh = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(2, 8)

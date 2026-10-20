@@ -21,7 +21,7 @@ use asap_sketchlib::{
     TupleKey, UnivMonQ, UnivMonQConfig, UnivMonTwoTier,
 };
 use asap_sketchlib::{
-    Classic, CocoBucket, CocoSketch, Count, CountMinSketch, CountMinSketchDelta,
+    Classic, CocoBucket, CocoSketch, CountSketch, CountMinSketch, CountMinSketchDelta,
     CountMinSketchWithHeap, CountMinSketchWithHeapDelta, CountMinSketchWithSpaceSaving,
     CountSketchCellDelta, CountSketchWithHeap, CountSketchWithHeapDelta, CountSketchWithL2Norm,
     CountSketchWithSpaceSaving, DataInput, DdSketch, DdSketchDelta, ElasticSketch, Ertl, FastPath,
@@ -375,7 +375,7 @@ fn cs_i64_regular_2x4_matches_golden() {
     let want = decode_hex(GOLDEN_CS_REGULAR);
 
     let sketch =
-        Count::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
+        CountSketch::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
             CS_VALS[r][c]
         }));
     let got = sketch.to_asapv1().expect("serialize");
@@ -384,7 +384,7 @@ fn cs_i64_regular_2x4_matches_golden() {
         "Count Sketch i64/regular bytes diverge from golden"
     );
 
-    let decoded = Count::<Vector2D<i64>, RegularPath>::from_asapv1(&want).expect("decode");
+    let decoded = CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
     assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
     assert_eq!(decoded.rows(), 2);
@@ -396,13 +396,13 @@ fn cs_i64_regular_2x4_matches_golden() {
 fn cs_i64_fast_2x4_matches_golden() {
     let want = decode_hex(GOLDEN_CS_FAST);
 
-    let sketch = Count::<Vector2D<i64>, FastPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
+    let sketch = CountSketch::<Vector2D<i64>, FastPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
         CS_VALS[r][c]
     }));
     let got = sketch.to_asapv1().expect("serialize");
     assert_eq!(got, want, "Count Sketch i64/fast bytes diverge from golden");
 
-    let decoded = Count::<Vector2D<i64>, FastPath>::from_asapv1(&want).expect("decode");
+    let decoded = CountSketch::<Vector2D<i64>, FastPath>::from_asapv1(&want).expect("decode");
     let flat: Vec<i64> = CS_VALS.iter().flatten().copied().collect();
     assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
@@ -416,7 +416,7 @@ fn cs_i32_regular_2x4_matches_golden() {
     let want = decode_hex(GOLDEN_CS_I32);
 
     let sketch =
-        Count::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
+        CountSketch::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::from_fn(2, 4, |r, c| {
             CS_VALS[r][c] as i32
         }));
     let got = sketch.to_asapv1().expect("serialize");
@@ -425,7 +425,7 @@ fn cs_i32_regular_2x4_matches_golden() {
         "Count Sketch i32/regular bytes diverge from golden"
     );
 
-    let decoded = Count::<Vector2D<i32>, RegularPath>::from_asapv1(&want).expect("decode");
+    let decoded = CountSketch::<Vector2D<i32>, RegularPath>::from_asapv1(&want).expect("decode");
     let flat: Vec<i32> = CS_VALS.iter().flatten().map(|&v| v as i32).collect();
     assert_eq!(decoded.as_storage().as_slice(), flat.as_slice());
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
@@ -436,14 +436,14 @@ fn cs_i32_regular_2x4_matches_golden() {
     assert_eq!(want.len(), wide.len());
     assert_ne!(want, wide);
     assert!(
-        Count::<Vector2D<i64>, RegularPath>::from_asapv1(&want).is_err(),
+        CountSketch::<Vector2D<i64>, RegularPath>::from_asapv1(&want).is_err(),
         "the i32 golden must not decode as an i64 sketch"
     );
 }
 
 #[test]
 fn cs_f64_fast_2x4_matches_golden() {
-    type Cs = Count<Vector2D<f64>, FastPath>;
+    type Cs = CountSketch<Vector2D<f64>, FastPath>;
     let want = decode_hex(GOLDEN_CS_F64_FAST);
     let sketch = Cs::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_F64_VALS[r][c]));
     assert_eq!(sketch.to_asapv1().expect("serialize"), want);
@@ -461,7 +461,7 @@ fn cs_f64_fast_2x4_matches_golden() {
 
 #[test]
 fn cs_i64_regular_2x4_delta_matches_golden() {
-    type Cs = Count<Vector2D<i64>, RegularPath>;
+    type Cs = CountSketch<Vector2D<i64>, RegularPath>;
     type Delta = CountSketchDelta<i64, RegularPath>;
     let want = decode_hex(GOLDEN_CS_I64_DELTA);
     let indices = vec![0, 1, 2, 4, 6, 7];
@@ -480,7 +480,7 @@ fn cs_i64_regular_2x4_delta_matches_golden() {
 
 #[test]
 fn cs_f64_fast_2x4_delta_matches_golden() {
-    type Cs = Count<Vector2D<f64>, FastPath>;
+    type Cs = CountSketch<Vector2D<f64>, FastPath>;
     type Delta = CountSketchDelta<f64, FastPath>;
     let want = decode_hex(GOLDEN_CS_F64_DELTA);
     let indices = vec![1, 3, 5, 7];
@@ -910,7 +910,7 @@ fn csspacesaving_f64_fast_2x4_i64keys_matches_golden() {
     for (key, weight) in [(-1, 65536), (i64::MIN, 5), (128, 5), (7, 1), (i64::MIN, 1)] {
         summary.update_weighted(&DataInput::I64(key), weight);
     }
-    let matrix = Count::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_F64_VALS[r][c]));
+    let matrix = CountSketch::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_F64_VALS[r][c]));
     let sketch = Sketch::from_parts(matrix, summary);
     assert_eq!(sketch.to_asapv1().expect("serialize"), want);
 
@@ -1635,10 +1635,10 @@ fn hydra_cs_2x2_counter_2x2_matches_golden() {
     let cells = CELLS
         .iter()
         .map(|m| {
-            HydraCounter::CountSketch(Count::from_storage(Vector2D::from_fn(2, 2, |r, c| m[r][c])))
+            HydraCounter::CountSketch(CountSketch::from_storage(Vector2D::from_fn(2, 2, |r, c| m[r][c])))
         })
         .collect();
-    let prototype = HydraCounter::CountSketch(Count::with_dimensions(2, 2));
+    let prototype = HydraCounter::CountSketch(CountSketch::with_dimensions(2, 2));
     assert_hydra_golden(GOLDEN_HYDRA_CS, hydra_grid(2, 2, prototype, cells));
 }
 
@@ -1721,7 +1721,7 @@ fn cms_i64_regular_2x3_admission_matches_golden() {
 
 #[test]
 fn cs_i64_regular_2x4_admission_matches_golden() {
-    type Cs = Count<Vector2D<i64>, RegularPath>;
+    type Cs = CountSketch<Vector2D<i64>, RegularPath>;
     let want = decode_hex(GOLDEN_CS_ADMISSION);
     let sketch = Cs::from_storage(Vector2D::from_fn(2, 4, |r, c| CS_VALS[r][c]));
     let sketch = sketch.with_admission_rate(0.25);

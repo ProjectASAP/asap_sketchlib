@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use asap_sketchlib::octo_delta::DdSign;
 use asap_sketchlib::sketches::hll::HyperLogLogImpl;
 use asap_sketchlib::{
-    Classic, CocoDelta, CocoOctoAggregator, CocoSketch, CocoSketchWorker, Count, CountMinSketch,
+    Classic, CocoDelta, CocoOctoAggregator, CocoSketch, CocoSketchWorker, CountSketch, CountMinSketch,
     CountMinSketchCellDelta, CountMinSketchOctoAggregator, CountMinSketchWithHeapOctoAggregator,
     CountMinSketchWithHeapOctoPlan, CountMinSketchWorker, CountSketchCellDelta,
     CountSketchOctoAggregator, CountSketchWithHeapOctoAggregator, CountSketchWithL2Norm,
@@ -38,7 +38,7 @@ use proptest::prelude::*;
 asap_sketchlib::impl_hll_registers!(BucketsP4, 4, 1_usize << 4);
 
 type Cm = CountMinSketch<Vector2D<i32>, RegularPath>;
-type Cs = Count<Vector2D<i32>, RegularPath>;
+type Cs = CountSketch<Vector2D<i32>, RegularPath>;
 type Hll = HyperLogLog<Classic>;
 /// Sixteen registers, so a register is improved many times over one stream and
 /// two shards land on the same one. At the default precision a register is

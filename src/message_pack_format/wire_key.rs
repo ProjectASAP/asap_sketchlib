@@ -376,7 +376,7 @@ mod tests {
         let hip_ok = |b: &[u8]| HyperLogLogHipP12::from_asapv1(b).is_ok();
         let cms_ok = |b: &[u8]| CmsF64::from_asapv1(b).is_ok();
         let delta_ok = |b: &[u8]| CountMinSketchDelta::<f64, FastPath>::from_asapv1(b).is_ok();
-        let cs_ok = |b: &[u8]| Count::<Vector2D<f64>, FastPath>::from_asapv1(b).is_ok();
+        let cs_ok = |b: &[u8]| CountSketch::<Vector2D<f64>, FastPath>::from_asapv1(b).is_ok();
         let cs_delta_ok =
             |b: &[u8]| sketches::CountSketchDelta::<f64, FastPath>::from_asapv1(b).is_ok();
         let kll_ok = |b: &[u8]| Kll::<f64>::from_asapv1(b).is_ok();

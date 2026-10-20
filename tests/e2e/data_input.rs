@@ -1,5 +1,5 @@
 use asap_sketchlib::{
-    Bloom, Classic, Count, CountMinSketch, DataInput, DdSketch, FastPath, HyperLogLog, Kll,
+    Bloom, Classic, CountSketch, CountMinSketch, DataInput, DdSketch, FastPath, HyperLogLog, Kll,
     RegularPath, SpaceSaving, Vector2D, hash64_seeded, hash128_seeded,
 };
 
@@ -263,7 +263,7 @@ fn count_min_answers_every_variant_and_folds_the_aliasing_ones_together() {
 
 #[test]
 fn count_sketch_answers_every_variant() {
-    let mut sketch = Count::<Vector2D<i64>, RegularPath>::with_dimensions(5, 4_096);
+    let mut sketch = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(5, 4_096);
     for (_, value) in every_variant() {
         for _ in 0..200 {
             sketch.update(&value);

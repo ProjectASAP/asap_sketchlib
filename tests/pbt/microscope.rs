@@ -844,7 +844,7 @@ proptest! {
                 clock: SubWindowClock::count_based(per_sub_window),
                 rounding: 1,
             }).expect("encode");
-            Micro::from_asapv1(&bytes).map_err(|e| e.to_string())
+            Micro::deserialize_from_bytes(&bytes).map_err(|e| e.to_string())
         };
 
         // The same geometry, filled, is the control: the refusal below is
@@ -871,8 +871,8 @@ proptest! {
         let peak = run.drive(&mut sketch, &mut Window::new(run.t));
         prop_assert!(peak > 0, "the run never zoomed: {:?}", run);
 
-        let bytes = sketch.to_asapv1().expect("encode");
-        let decoded = Micro::from_asapv1(&bytes).expect("decode");
+        let bytes = sketch.serialize_to_bytes().expect("encode");
+        let decoded = Micro::deserialize_from_bytes(&bytes).expect("decode");
         prop_assert_eq!(decoded.max_zoom(), sketch.max_zoom());
         prop_assert_eq!(decoded.sub_window(), sketch.sub_window());
         for k in 0..DOMAIN {

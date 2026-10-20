@@ -167,8 +167,8 @@ child.update_emit_delta(&key, &mut |delta: CountMinSketchCellDelta| {
 
 ## Count Sketch Delta API
 
-Same shape as CountMinSketch, on `Count<S, RegularPath, H>` and
-`Count<S, FastPath, H>` where `S::Counter = i32`. Counters are signed, so
+Same shape as CountMinSketch, on `CountSketch<S, RegularPath, H>` and
+`CountSketch<S, FastPath, H>` where `S::Counter = i32`. Counters are signed, so
 the threshold is applied to `|counter|` (§4.4).
 
 ```rust

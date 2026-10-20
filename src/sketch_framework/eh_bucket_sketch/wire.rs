@@ -30,51 +30,29 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::EH_BUCKET_SKETCH;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 
 use super::EhBucketSketch;
 
-/// EhBucketSketch kind_id: family `0x14`, single algorithm variant `0x00`.
-pub(crate) const EH_SKETCH_LIST_KIND: &[u8] = &[0x14, 0x00];
 
-/// Count-Min, the blocks [`EhBucketSketch::CountMinSketch`] carries.
-pub(crate) const CM_KIND: &[u8] = &[0x02, 0x00];
-/// Coco, the blocks [`EhBucketSketch::CocoSketch`] carries.
-pub(crate) const COCO_KIND: &[u8] = &[0x0c, 0x00];
-/// CountSketchWithL2Norm, the blocks [`EhBucketSketch::CountSketchWithL2Norm`] carries.
-pub(crate) const COUNTL2HH_KIND: &[u8] = &[0x19, 0x00];
-/// Count Sketch, the blocks [`EhBucketSketch::CountSketch`] carries.
-pub(crate) const CS_KIND: &[u8] = &[0x04, 0x00];
-/// DDSketch, the blocks [`EhBucketSketch::DdSketch`] carries.
-pub(crate) const DDS_KIND: &[u8] = &[0x05, 0x00];
-/// Elastic, the blocks [`EhBucketSketch::ElasticSketch`] carries.
-pub(crate) const ELASTIC_KIND: &[u8] = &[0x0b, 0x00];
-/// HLL Ertl-MLE, the blocks [`EhBucketSketch::Hll`] carries. Classic
-/// (`0x01 0x01`) and HIP (`0x01 0x03`) are other algorithms.
-pub(crate) const HLL_KIND: &[u8] = &[0x01, 0x02];
-/// Compact KLL, the blocks [`EhBucketSketch::Kll`] carries. Dynamic KLL
-/// (`0x06 0x01`) is another algorithm.
-pub(crate) const KLL_KIND: &[u8] = &[0x06, 0x00];
-/// UniformSampling, the blocks `EhBucketSketch::Uniform` carries.
-pub(crate) const UNIFORM_KIND: &[u8] = &[0x0d, 0x00];
-/// UnivMon, the blocks [`EhBucketSketch::UnivMon`] carries.
-pub(crate) const UNIVMON_KIND: &[u8] = &[0x10, 0x00];
 
 /// The registry name of a nested kind_id. Error messages only: encoding and
 /// decoding dispatch on the bytes.
 pub(crate) fn variant_name(kind_id: &[u8]) -> Option<&'static str> {
     match kind_id {
-        CM_KIND => Some("CountMin"),
-        COCO_KIND => Some("Coco"),
-        COUNTL2HH_KIND => Some("CountL2HH"),
-        CS_KIND => Some("CountSketch"),
-        DDS_KIND => Some("DDSketch"),
-        ELASTIC_KIND => Some("Elastic"),
-        HLL_KIND => Some("HLL"),
-        KLL_KIND => Some("KLL"),
-        UNIFORM_KIND => Some("UniformSampling"),
-        UNIVMON_KIND => Some("UnivMon"),
+        kind::COUNT_MIN => Some("CountMin"),
+        kind::COCO => Some("Coco"),
+        kind::COUNT_SKETCH_WITH_L2_NORM => Some("CountL2HH"),
+        kind::COUNT_SKETCH => Some("CountSketch"),
+        kind::DDSKETCH => Some("DDSketch"),
+        kind::ELASTIC => Some("Elastic"),
+        kind::HLL_ERTL => Some("HLL"),
+        kind::KLL => Some("KLL"),
+        kind::UNIFORM_SAMPLING => Some("UniformSampling"),
+        kind::UNIVMON => Some("UnivMon"),
         _ => None,
     }
 }
@@ -119,7 +97,7 @@ pub(crate) fn unknown_variant(kind_id: &[u8]) -> RmpDecodeError {
 #[cfg(not(feature = "experimental"))]
 fn check_variant_available(kind_id: &[u8]) -> Result<(), RmpDecodeError> {
     match kind_id {
-        UNIFORM_KIND => Err(RmpDecodeError::Uncategorized(format!(
+        kind::UNIFORM_SAMPLING => Err(RmpDecodeError::Uncategorized(format!(
             "ASAPv1 EHSketchList: variant {} (kind_id {kind_id:02x?}) needs the experimental feature",
             variant_name(kind_id).unwrap_or("unnamed")
         ))),
@@ -166,17 +144,17 @@ fn check_admits_all(sketch: &EhBucketSketch) -> Result<(), String> {
 pub(crate) fn sketch_state(sketch: &EhBucketSketch) -> Result<SketchState, RmpEncodeError> {
     check_admits_all(sketch).map_err(RmpEncodeError::Syntax)?;
     match sketch {
-        EhBucketSketch::CountMinSketch(s) => triple(CM_KIND, &s.to_asapv1()?),
-        EhBucketSketch::CocoSketch(s) => triple(COCO_KIND, &s.to_asapv1()?),
-        EhBucketSketch::CountSketchWithL2Norm(s) => triple(COUNTL2HH_KIND, &s.to_asapv1()?),
-        EhBucketSketch::CountSketch(s) => triple(CS_KIND, &s.to_asapv1()?),
-        EhBucketSketch::DdSketch(s) => triple(DDS_KIND, &s.to_asapv1()?),
-        EhBucketSketch::ElasticSketch(s) => triple(ELASTIC_KIND, &s.to_asapv1()?),
-        EhBucketSketch::Hll(s) => triple(HLL_KIND, &s.to_asapv1()?),
-        EhBucketSketch::Kll(s) => triple(KLL_KIND, &s.to_asapv1()?),
+        EhBucketSketch::CountMinSketch(s) => triple(kind::COUNT_MIN, &s.to_asapv1()?),
+        EhBucketSketch::CocoSketch(s) => triple(kind::COCO, &s.to_asapv1()?),
+        EhBucketSketch::CountSketchWithL2Norm(s) => triple(kind::COUNT_SKETCH_WITH_L2_NORM, &s.to_asapv1()?),
+        EhBucketSketch::CountSketch(s) => triple(kind::COUNT_SKETCH, &s.to_asapv1()?),
+        EhBucketSketch::DdSketch(s) => triple(kind::DDSKETCH, &s.to_asapv1()?),
+        EhBucketSketch::ElasticSketch(s) => triple(kind::ELASTIC, &s.to_asapv1()?),
+        EhBucketSketch::Hll(s) => triple(kind::HLL_ERTL, &s.to_asapv1()?),
+        EhBucketSketch::Kll(s) => triple(kind::KLL, &s.to_asapv1()?),
         #[cfg(feature = "experimental")]
-        EhBucketSketch::Uniform(s) => triple(UNIFORM_KIND, &s.to_asapv1()?),
-        EhBucketSketch::UnivMon(s) => triple(UNIVMON_KIND, &s.to_asapv1()?),
+        EhBucketSketch::Uniform(s) => triple(kind::UNIFORM_SAMPLING, &s.to_asapv1()?),
+        EhBucketSketch::UnivMon(s) => triple(kind::UNIVMON, &s.to_asapv1()?),
     }
 }
 
@@ -198,33 +176,33 @@ fn rebuild_variant(triple: &SketchState) -> Result<EhBucketSketch, RmpDecodeErro
     }
     let bytes = envelope::encode(kind_id, &triple.descriptor, &triple.state);
     match kind_id {
-        CM_KIND => Ok(EhBucketSketch::CountMinSketch(
+        kind::COUNT_MIN => Ok(EhBucketSketch::CountMinSketch(
             crate::CountMinSketch::from_asapv1(&bytes)?,
         )),
-        COCO_KIND => Ok(EhBucketSketch::CocoSketch(crate::CocoSketch::from_asapv1(
+        kind::COCO => Ok(EhBucketSketch::CocoSketch(crate::CocoSketch::from_asapv1(
             &bytes,
         )?)),
-        COUNTL2HH_KIND => Ok(EhBucketSketch::CountSketchWithL2Norm(
+        kind::COUNT_SKETCH_WITH_L2_NORM => Ok(EhBucketSketch::CountSketchWithL2Norm(
             crate::CountSketchWithL2Norm::from_asapv1(&bytes)?,
         )),
-        CS_KIND => Ok(EhBucketSketch::CountSketch(crate::Count::from_asapv1(
+        kind::COUNT_SKETCH => Ok(EhBucketSketch::CountSketch(crate::CountSketch::from_asapv1(
             &bytes,
         )?)),
-        DDS_KIND => Ok(EhBucketSketch::DdSketch(crate::DdSketch::from_asapv1(
+        kind::DDSKETCH => Ok(EhBucketSketch::DdSketch(crate::DdSketch::from_asapv1(
             &bytes,
         )?)),
-        ELASTIC_KIND => Ok(EhBucketSketch::ElasticSketch(
+        kind::ELASTIC => Ok(EhBucketSketch::ElasticSketch(
             crate::ElasticSketch::from_asapv1(&bytes)?,
         )),
-        HLL_KIND => Ok(EhBucketSketch::Hll(
+        kind::HLL_ERTL => Ok(EhBucketSketch::Hll(
             crate::HyperLogLog::<crate::Ertl>::from_asapv1(&bytes)?,
         )),
-        KLL_KIND => Ok(EhBucketSketch::Kll(crate::Kll::from_asapv1(&bytes)?)),
+        kind::KLL => Ok(EhBucketSketch::Kll(crate::Kll::from_asapv1(&bytes)?)),
         #[cfg(feature = "experimental")]
-        UNIFORM_KIND => Ok(EhBucketSketch::Uniform(
+        kind::UNIFORM_SAMPLING => Ok(EhBucketSketch::Uniform(
             crate::UniformSampling::from_asapv1(&bytes)?,
         )),
-        UNIVMON_KIND => Ok(EhBucketSketch::UnivMon(crate::UnivMon::from_asapv1(
+        kind::UNIVMON => Ok(EhBucketSketch::UnivMon(crate::UnivMon::from_asapv1(
             &bytes,
         )?)),
         other => Err(unknown_variant(other)),
@@ -243,7 +221,7 @@ impl EhBucketSketch {
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         let metadata = rmp_serde::to_vec_named(&eh_sketch_list_metadata())?;
         let payload = rmp_serde::to_vec(&sketch_state(self)?)?;
-        Ok(envelope::encode(EH_SKETCH_LIST_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::EH_BUCKET_SKETCH, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The nested
@@ -251,9 +229,9 @@ impl EhBucketSketch {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != EH_SKETCH_LIST_KIND {
+        if kind_id != kind::EH_BUCKET_SKETCH {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "EHSketchList kind_id mismatch: stored {kind_id:?}, expected {EH_SKETCH_LIST_KIND:?}"
+                "EHSketchList kind_id mismatch: stored {kind_id:?}, expected {EH_BUCKET_SKETCH:?}"
             )));
         }
         let meta: EhSketchListMetadata = envelope::decode_block(metadata)?;
@@ -272,7 +250,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::sketch_framework::univmon::UnivMon;
     use crate::{
-        Count, CountMinSketch, CountSketchWithL2Norm, DEFAULT_CANONICAL_SEED_INDEX, DataInput,
+        CountSketch, CountMinSketch, CountSketchWithL2Norm, DEFAULT_CANONICAL_SEED_INDEX, DataInput,
         DdSketch, DefaultXxHasher, Ertl, FastPath, HashProfile, HyperLogLog, Kll, SketchHasher,
         Vector2D,
     };
@@ -301,7 +279,7 @@ pub(crate) mod tests {
             CountSketchWithL2Norm::with_dimensions(3, 256),
         ));
         out.push(EhBucketSketch::CountSketch(
-            Count::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
+            CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(3, 8),
         ));
         out.push(EhBucketSketch::DdSketch(DdSketch::new(0.01)));
         out.push(EhBucketSketch::ElasticSketch(
@@ -369,7 +347,7 @@ pub(crate) mod tests {
         let bytes = sketch.to_asapv1().expect("serialize alt CM");
         let (_, descriptor, state) = envelope::split(&bytes).expect("split alt CM");
         SketchState {
-            kind_id: CM_KIND.to_vec(),
+            kind_id: kind::COUNT_MIN.to_vec(),
             descriptor: descriptor.to_vec(),
             state: state.to_vec(),
         }
@@ -386,7 +364,7 @@ pub(crate) mod tests {
     pub(crate) fn envelope_for(triple: &SketchState) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(&eh_sketch_list_metadata()).unwrap();
         let payload = rmp_serde::to_vec(triple).unwrap();
-        envelope::encode(EH_SKETCH_LIST_KIND, &metadata, &payload)
+        envelope::encode(kind::EH_BUCKET_SKETCH, &metadata, &payload)
     }
 
     #[test]
@@ -434,16 +412,16 @@ pub(crate) mod tests {
     #[test]
     fn eh_sketch_list_kind_ids_are_build_independent() {
         let table: [(&[u8], &str); 10] = [
-            (CM_KIND, "CountMin"),
-            (COCO_KIND, "Coco"),
-            (COUNTL2HH_KIND, "CountL2HH"),
-            (CS_KIND, "CountSketch"),
-            (DDS_KIND, "DDSketch"),
-            (ELASTIC_KIND, "Elastic"),
-            (HLL_KIND, "HLL"),
-            (KLL_KIND, "KLL"),
-            (UNIFORM_KIND, "UniformSampling"),
-            (UNIVMON_KIND, "UnivMon"),
+            (kind::COUNT_MIN, "CountMin"),
+            (kind::COCO, "Coco"),
+            (kind::COUNT_SKETCH_WITH_L2_NORM, "CountL2HH"),
+            (kind::COUNT_SKETCH, "CountSketch"),
+            (kind::DDSKETCH, "DDSketch"),
+            (kind::ELASTIC, "Elastic"),
+            (kind::HLL_ERTL, "HLL"),
+            (kind::KLL, "KLL"),
+            (kind::UNIFORM_SAMPLING, "UniformSampling"),
+            (kind::UNIVMON, "UnivMon"),
         ];
         for (kind_id, name) in table {
             assert_eq!(variant_name(kind_id), Some(name), "{kind_id:02x?}");
@@ -466,7 +444,7 @@ pub(crate) mod tests {
     #[test]
     fn eh_sketch_list_rejects_an_experimental_kind_id() {
         let triple = SketchState {
-            kind_id: UNIFORM_KIND.to_vec(),
+            kind_id: kind::UNIFORM_SAMPLING.to_vec(),
             descriptor: Vec::new(),
             state: Vec::new(),
         };
@@ -532,7 +510,7 @@ pub(crate) mod tests {
     #[test]
     fn eh_sketch_list_rejects_a_mismatched_kind_id_and_descriptor() {
         let sketch = EhBucketSketch::Hll(HyperLogLog::<Ertl>::default());
-        let triple = relabelled(&sketch, CM_KIND);
+        let triple = relabelled(&sketch, kind::COUNT_MIN);
         assert!(EhBucketSketch::from_asapv1(&envelope_for(&triple)).is_err());
     }
 
@@ -589,14 +567,14 @@ pub(crate) mod tests {
         let good = sketch_state(&sketch).expect("state");
 
         let truncated = SketchState {
-            kind_id: CM_KIND.to_vec(),
+            kind_id: kind::COUNT_MIN.to_vec(),
             descriptor: good.descriptor[..good.descriptor.len() / 2].to_vec(),
             state: good.state.clone(),
         };
         assert!(EhBucketSketch::from_asapv1(&envelope_for(&truncated)).is_err());
 
         let garbage = SketchState {
-            kind_id: CM_KIND.to_vec(),
+            kind_id: kind::COUNT_MIN.to_vec(),
             descriptor: good.descriptor.clone(),
             state: vec![0xc1, 0xc1, 0xc1],
         };

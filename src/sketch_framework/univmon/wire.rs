@@ -34,6 +34,8 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind::UNIVMON;
+use crate::message_pack_format::kind;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::{WireBytes, WireString, exact_vec};
 use crate::sketches::countminsketch_heap::heap_wire::{
@@ -45,8 +47,6 @@ use crate::{DefaultXxHasher, HashProfile, L2HH, OwnedDataInput, TopKHeap, Vector
 
 use super::{UNIVMON_MAX_LAYERS, UnivMon, UnivMonUpdateMode};
 
-/// UnivMon kind_id: family `0x10`, single algorithm variant `0x00`.
-const UNIVMON_KIND: &[u8] = &[0x10, 0x00];
 
 /// UnivMon descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
@@ -601,7 +601,7 @@ impl UnivMon {
             key_type,
         ))?;
         let payload = encode_pyramid(key_type, state)?;
-        Ok(envelope::encode(UNIVMON_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::UNIVMON, &metadata, &payload))
     }
 
     /// Deserializes a pyramid from an ASAPv1 MessagePack envelope. The shape
@@ -615,9 +615,9 @@ impl UnivMon {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != UNIVMON_KIND {
+        if kind_id != kind::UNIVMON {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMon kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_KIND:?}"
+                "UnivMon kind_id mismatch: stored {kind_id:?}, expected {UNIVMON:?}"
             )));
         }
         let meta: UnivMonMetadata = envelope::decode_block(metadata)?;
@@ -697,7 +697,7 @@ mod tests {
     fn crafted<K: Serialize>(meta: &UnivMonMetadata, payload: &PyramidPayload<K>) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(meta).expect("metadata");
         let payload = rmp_serde::to_vec(payload).expect("payload");
-        envelope::encode(UNIVMON_KIND, &metadata, &payload)
+        envelope::encode(kind::UNIVMON, &metadata, &payload)
     }
 
     fn payload_of<K: for<'de> Deserialize<'de>>(bytes: &[u8]) -> PyramidPayload<K> {
@@ -956,7 +956,7 @@ mod tests {
         );
         let (_, _, payload) = envelope::split(&encoded).expect("split");
         let forged = envelope::encode(
-            UNIVMON_KIND,
+            kind::UNIVMON,
             &rmp_serde::to_vec_named(&alt).expect("metadata"),
             payload,
         );
@@ -971,7 +971,7 @@ mod tests {
     /// Count Sketch envelope.
     #[test]
     fn univmon_rejects_foreign_kind_ids() {
-        let count_sketch = crate::Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
+        let count_sketch = crate::CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8)
             .to_asapv1()
             .expect("serialize Count Sketch");
         let count_l2hh =

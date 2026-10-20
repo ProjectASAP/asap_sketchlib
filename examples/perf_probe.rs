@@ -10,7 +10,7 @@
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use asap_sketchlib::{Count, CountMinSketch, DataInput, FastPath, Kll, RegularPath, Vector2D};
+use asap_sketchlib::{CountSketch, CountMinSketch, DataInput, FastPath, Kll, RegularPath, Vector2D};
 
 const N_ITEMS: usize = 200_000;
 const ESTIMATE_N: usize = 100_000;
@@ -144,7 +144,7 @@ fn main() {
     });
 
     bench("cs_fast_insert", N_ITEMS, || {
-        let mut sk = Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+        let mut sk = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
         let start = Instant::now();
         for &k in &seq_keys {
             sk.update(&DataInput::U64(k));

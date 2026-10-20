@@ -1,5 +1,5 @@
 //! Nitro sampling, end to end: the row-level accelerator behind
-//! `CountMinSketch::nitro_update` / `Count::nitro_update`, and the
+//! `CountMinSketch::nitro_update` / `CountSketch::nitro_update`, and the
 //! `NitroBatch` wrapper's two ingestion paths.
 //!
 //! # The model every band here is computed from
@@ -56,7 +56,7 @@ use crate::common;
 use common::specs::{CountMinSpec, SIMULTANEOUS_LEVEL, SamplingConfidenceSpec, Tally};
 use common::{FreqTruth, zipf_u64};
 
-use asap_sketchlib::{Count, CountMinSketch, DataInput, FastPath, NitroBatch, Vector2D};
+use asap_sketchlib::{CountSketch, CountMinSketch, DataInput, FastPath, NitroBatch, Vector2D};
 
 /// Every rate the public constructors accept that the suite covers.
 ///
@@ -176,7 +176,7 @@ fn row_countmin(rate: f64, seed: u64, f: usize) -> Vec<f64> {
 /// single key's row mass is `±` its admitted mass; the magnitude carries the
 /// same distribution as the Count-Min path.
 fn row_countsketch(rate: f64, seed: u64, f: usize) -> Vec<f64> {
-    let mut cs = Count::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
+    let mut cs = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(ROWS, COLS);
     cs.enable_nitro_with_seed(rate, seed);
     let key = DataInput::U64(SOLO_KEY);
     for _ in 0..f {
@@ -1039,9 +1039,9 @@ fn count_min_seeded_nitro_sampling_is_reproducible_and_admits_a_strict_subset() 
 fn count_sketch_at_full_nitro_sampling_writes_exactly_what_a_plain_insert_writes() {
     let (stream, truth) = integration_stream();
     let mut plain =
-        Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+        CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
     let mut sampled =
-        Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+        CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
     sampled.enable_nitro(1.0);
     for k in &stream {
         plain.update(&DataInput::U64(*k));
@@ -1068,7 +1068,7 @@ fn count_sketch_seeded_nitro_sampling_is_reproducible() {
     let (stream, _) = integration_stream();
     let build = |seed: u64| {
         let mut sketch =
-            Count::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
+            CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(INTEGRATION_ROWS, INTEGRATION_COLS);
         sketch.enable_nitro_with_seed(RATE, seed);
         for k in &stream {
             sketch.nitro_update(&DataInput::U64(*k));

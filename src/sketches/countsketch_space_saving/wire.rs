@@ -5,17 +5,16 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::sketches::countminsketch_space_saving::summary_wire::{
     self, DecodedSummaryTopK, SummaryKind,
 };
 use crate::sketches::countsketch::{CountSketchCounter, CsWireCounter, CsWireMode};
-use crate::{Count, HashProfile, SketchHasher, Vector2D};
+use crate::{CountSketch, HashProfile, SketchHasher, Vector2D};
 
 use super::CountSketchWithSpaceSaving;
 
-/// CountSketchWithSpaceSaving kind_id: family `0x1f`, variant `0x00`.
-const CS_SPACE_SAVING_KIND: &[u8] = &[0x1f, 0x00];
 
 impl<T, Mode, H> CountSketchWithSpaceSaving<Vector2D<T>, Mode, H>
 where
@@ -25,7 +24,7 @@ where
 {
     const KIND: SummaryKind = SummaryKind {
         name: "CSSpaceSaving",
-        kind_id: CS_SPACE_SAVING_KIND,
+        kind_id: kind::COUNT_SKETCH_WITH_SPACE_SAVING,
         counter_type: T::COUNTER_TYPE,
         mode: Mode::MODE,
     };
@@ -57,7 +56,7 @@ where
         } = summary_wire::decode::<T, H>(&Self::KIND, bytes)?;
         let storage = Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]);
         Ok(CountSketchWithSpaceSaving {
-            cs: Count::from_storage(storage),
+            cs: CountSketch::from_storage(storage),
             summary,
         })
     }
@@ -121,7 +120,7 @@ mod tests {
     fn foreign_kind_ids_are_rejected() {
         let cms_ss = CountMinSketchWithSpaceSaving::<Vector2D<i64>, RegularPath>::new(3, 8, 2);
         let cs_heap = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 8, 2);
-        let count = Count::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
+        let count = CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 8);
         for (bytes, what) in [
             (
                 cms_ss.to_asapv1().expect("CMSSpaceSaving"),
@@ -140,7 +139,7 @@ mod tests {
     #[test]
     fn a_sampled_matrix_fails_to_serialize() {
         let sampled = Target::from_parts(
-            Count::with_dimensions(3, 8).with_admission_rate(0.25),
+            CountSketch::with_dimensions(3, 8).with_admission_rate(0.25),
             SpaceSaving::<DefaultXxHasher>::with_capacity(2),
         );
         assert!(sampled.to_asapv1().is_err());

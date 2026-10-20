@@ -39,14 +39,14 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashSet;
 
+use crate::message_pack_format::kind::COCO;
+use crate::message_pack_format::kind;
 use crate::common::hash::check_matrix_rows;
 use crate::message_pack_format::envelope;
 use crate::{DataInput, HashProfile, SketchHasher, Vector2D};
 
 use super::{CocoBucket, CocoRng, CocoSketch};
 
-/// Coco kind_id: family `0x0c`, single algorithm variant `0x00`.
-const COCO_KIND: &[u8] = &[0x0c, 0x00];
 
 /// Coco descriptor metadata (ASAPv1 §2), a msgpack **map** (`to_vec_named`)
 /// with keys in this declaration order — the canonical order the wire spec
@@ -177,7 +177,7 @@ impl<H: SketchHasher + HashProfile> CocoSketch<H> {
             keys,
             values: buckets.iter().map(|b| b.val).collect(),
         })?;
-        Ok(envelope::encode(COCO_KIND, &metadata, &payload))
+        Ok(envelope::encode(kind::COCO, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope. The table
@@ -186,9 +186,9 @@ impl<H: SketchHasher + HashProfile> CocoSketch<H> {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != COCO_KIND {
+        if kind_id != kind::COCO {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "Coco kind_id mismatch: stored {kind_id:?}, expected {COCO_KIND:?}"
+                "Coco kind_id mismatch: stored {kind_id:?}, expected {COCO:?}"
             )));
         }
         let meta: CocoMetadata = envelope::decode_block(metadata)?;
@@ -268,7 +268,7 @@ mod tests {
             values: vec![0; rows * 8],
         })
         .unwrap();
-        let bytes = envelope::encode(COCO_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COCO, &metadata, &payload);
         let problem = CocoSketch::<DefaultXxHasher>::from_asapv1(&bytes)
             .expect_err("rows past MATRIX_MAX_ROWS must be rejected")
             .to_string();
@@ -391,7 +391,7 @@ mod tests {
             values: Vec::new(),
         })
         .unwrap();
-        let bytes = envelope::encode(COCO_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COCO, &metadata, &payload);
         assert!(
             CocoSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "zero-dimension metadata must be rejected, not panic"
@@ -412,7 +412,7 @@ mod tests {
             values: vec![0, 0, 0],
         })
         .unwrap();
-        let bytes = envelope::encode(COCO_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COCO, &metadata, &payload);
         assert!(
             CocoSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "payload lengths must match rows*cols"
@@ -429,7 +429,7 @@ mod tests {
             values: vec![0, 9],
         })
         .unwrap();
-        let bytes = envelope::encode(COCO_KIND, &metadata, &payload);
+        let bytes = envelope::encode(kind::COCO, &metadata, &payload);
         assert!(
             CocoSketch::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
             "a nil key with a non-zero value must be rejected"
@@ -451,7 +451,7 @@ mod tests {
             values: cells.iter().map(|(_, v)| *v).collect(),
         })
         .unwrap();
-        envelope::encode(COCO_KIND, &metadata, &payload)
+        envelope::encode(kind::COCO, &metadata, &payload)
     }
 
     /// A key only ever lands in the bucket its own row hashes it to, so a

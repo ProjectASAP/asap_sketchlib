@@ -48,7 +48,7 @@ use crate::sketches::countsketch_heap::{
 };
 use crate::sketches::elastic::{ElasticSketch, LAMBDA};
 use crate::{
-    Classic, Count, CountMinSketch, CountMinSketchCellDelta, CountSketchCellDelta, DataInput,
+    Classic, CountSketch, CountMinSketch, CountMinSketchCellDelta, CountSketchCellDelta, DataInput,
     DdSketch, HllRegisterDelta, HyperLogLog, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
     OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, OCTO_HLL_DEFAULT_THRESHOLD, OwnedDataInput, RegularPath,
     UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon, UnivMonCellDelta, Vector2D, hash64_seeded,
@@ -403,7 +403,7 @@ impl CountSketchWorker {
 /// UnivMon-layer worker sketch: one-byte signed counters over the cell mapping
 /// `CountSketchWithL2Norm` uses.
 ///
-/// A UnivMon layer is not a plain `Count` sketch: it slices one 128-bit hash
+/// A UnivMon layer is not a plain `CountSketch` sketch: it slices one 128-bit hash
 /// into per-row columns and takes each row's sign from a different high bit,
 /// and every layer hashes under its own seed. This worker calls the same
 /// `l2hh_cell_for_row` the parent does, so the two cannot drift apart.
@@ -1607,17 +1607,17 @@ impl OctoWorker for CountSketchOctoWorker {
     }
 }
 
-/// OctoSketch parent wrapping a full-precision `Count`.
+/// OctoSketch parent wrapping a full-precision `CountSketch`.
 pub struct CountSketchOctoAggregator {
     /// Parent Count Sketch updated by worker deltas.
-    pub sketch: Count<Vector2D<i32>, RegularPath>,
+    pub sketch: CountSketch<Vector2D<i32>, RegularPath>,
 }
 
 impl CountSketchOctoAggregator {
     /// Creates an aggregator with a `rows` x `cols` parent sketch.
     pub fn new(rows: usize, cols: usize) -> Self {
         Self {
-            sketch: Count::with_dimensions(rows, cols),
+            sketch: CountSketch::with_dimensions(rows, cols),
         }
     }
 }
@@ -3179,7 +3179,7 @@ mod worker_tests {
 
         let mut compact = CountSketchWorker::new(1, 64);
         let mut compact_values: Vec<i32> = Vec::new();
-        let mut full = Count::<Vector2D<i32>, RegularPath>::with_dimensions(1, 64);
+        let mut full = CountSketch::<Vector2D<i32>, RegularPath>::with_dimensions(1, 64);
         let mut full_values: Vec<i32> = Vec::new();
         for _ in 0..400 {
             compact.update_emit_delta(&key, tau, &mut |d| compact_values.push(d.value));

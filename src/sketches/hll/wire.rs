@@ -13,6 +13,7 @@ use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
+use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::message_pack_format::envelope;
 use crate::message_pack_format::wire_key::exact;
@@ -25,14 +26,18 @@ use super::{Classic, Ertl, HyperLogLogHipImpl, HyperLogLogImpl};
 pub trait HllWireVariant {
     /// The `[family, variant]` kind_id for this estimator.
     const WIRE_KIND_ID: &'static [u8];
+    /// The kind_id of this estimator's delta.
+    const WIRE_DELTA_KIND_ID: &'static [u8];
 }
 
 impl HllWireVariant for Classic {
-    const WIRE_KIND_ID: &'static [u8] = HLL_KIND_CLASSIC;
+    const WIRE_KIND_ID: &'static [u8] = kind::HLL_CLASSIC;
+    const WIRE_DELTA_KIND_ID: &'static [u8] = kind::HLL_CLASSIC_DELTA;
 }
 
 impl HllWireVariant for Ertl {
-    const WIRE_KIND_ID: &'static [u8] = HLL_KIND_ERTL_MLE;
+    const WIRE_KIND_ID: &'static [u8] = kind::HLL_ERTL;
+    const WIRE_DELTA_KIND_ID: &'static [u8] = kind::HLL_ERTL_DELTA;
 }
 
 /// HLL payload (ASAPv1 §3.1), serialized as a msgpack **array** (`to_vec`,
@@ -57,10 +62,6 @@ pub(crate) struct HllPayloadHip {
     pub(crate) hip_est: f64,
 }
 
-const HLL_KIND_FAMILY: u8 = 0x01;
-pub(crate) const HLL_KIND_CLASSIC: &[u8] = &[HLL_KIND_FAMILY, 0x01];
-pub(crate) const HLL_KIND_ERTL_MLE: &[u8] = &[HLL_KIND_FAMILY, 0x02];
-pub(crate) const HLL_KIND_HIP: &[u8] = &[HLL_KIND_FAMILY, 0x03];
 
 /// Descriptor metadata for an HLL sketch (ASAPv1 §2), serialized as a msgpack
 /// **map** (`to_vec_named`) with keys in this declaration order — the canonical
@@ -257,14 +258,14 @@ impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
             hip_kxq1: self.kxq1,
             hip_est: self.est,
         })?;
-        Ok(envelope::encode(HLL_KIND_HIP, &metadata, &payload))
+        Ok(envelope::encode(kind::HLL_HIP, &metadata, &payload))
     }
 
     /// Deserializes a sketch from an ASAPv1 MessagePack envelope.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (payload, admission_rate) = validated_hll_payload::<DefaultXxHasher>(
             bytes,
-            HLL_KIND_HIP,
+            kind::HLL_HIP,
             Registers::PRECISION as u32,
         )?;
         let payload: HllPayloadHip = envelope::decode_block(payload)?;
@@ -453,7 +454,7 @@ mod tests {
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
-        assert_eq!(&bytes[8..10], HLL_KIND_ERTL_MLE);
+        assert_eq!(&bytes[8..10], kind::HLL_ERTL);
 
         let decoded = HyperLogLog::<Ertl>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.registers_as_slice(), sketch.registers_as_slice());
@@ -470,7 +471,7 @@ mod tests {
         }
         let bytes = sketch.to_asapv1().expect("serialize");
         assert!(bytes.starts_with(envelope::MAGIC));
-        assert_eq!(&bytes[8..10], HLL_KIND_HIP);
+        assert_eq!(&bytes[8..10], kind::HLL_HIP);
 
         let decoded = HyperLogLogHip::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.registers.as_slice(), sketch.registers.as_slice());
@@ -684,12 +685,12 @@ mod tests {
 
         // The bound itself decodes, one past it does not — for both estimators
         // sharing the plain payload, and at a second precision.
-        let ok = crafted_plain(HLL_KIND_CLASSIC, 14, bin(p14, P14_MAX));
+        let ok = crafted_plain(kind::HLL_CLASSIC, 14, bin(p14, P14_MAX));
         assert!(HyperLogLog::<Classic>::from_asapv1(&ok).is_ok());
-        let ok = crafted_plain(HLL_KIND_ERTL_MLE, 12, bin(p12, P12_MAX));
+        let ok = crafted_plain(kind::HLL_ERTL, 12, bin(p12, P12_MAX));
         assert!(HyperLogLogP12::<Ertl>::from_asapv1(&ok).is_ok());
 
-        let over = crafted_plain(HLL_KIND_CLASSIC, 14, bin(p14, P14_MAX + 1));
+        let over = crafted_plain(kind::HLL_CLASSIC, 14, bin(p14, P14_MAX + 1));
         let problem = HyperLogLog::<Classic>::from_asapv1(&over)
             .expect_err("a register past the maximum rank must be rejected")
             .to_string();
@@ -698,13 +699,13 @@ mod tests {
             "got {problem}"
         );
 
-        let over = crafted_plain(HLL_KIND_ERTL_MLE, 14, bin(p14, u8::MAX));
+        let over = crafted_plain(kind::HLL_ERTL, 14, bin(p14, u8::MAX));
         assert!(
             HyperLogLog::<Ertl>::from_asapv1(&over).is_err(),
             "a register past the Ertl histogram must be rejected"
         );
 
-        let over = crafted_plain(HLL_KIND_ERTL_MLE, 12, bin(p12, P12_MAX + 1));
+        let over = crafted_plain(kind::HLL_ERTL, 12, bin(p12, P12_MAX + 1));
         let problem = HyperLogLogP12::<Ertl>::from_asapv1(&over)
             .expect_err("a register past the maximum rank must be rejected")
             .to_string();
@@ -722,7 +723,7 @@ mod tests {
             hip_est: 0.0,
         })
         .expect("payload");
-        let over = envelope::encode(HLL_KIND_HIP, &metadata, &payload);
+        let over = envelope::encode(kind::HLL_HIP, &metadata, &payload);
         let problem = HyperLogLogHip::from_asapv1(&over)
             .expect_err("a register past the maximum rank must be rejected")
             .to_string();

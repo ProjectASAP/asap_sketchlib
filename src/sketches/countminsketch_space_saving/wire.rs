@@ -5,6 +5,7 @@
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
 
+use crate::message_pack_format::kind;
 use crate::message_pack_format::admission_rate;
 use crate::sketches::countminsketch::{CmsWireCounter, CmsWireMode};
 use crate::{CountMinSketch, HashProfile, SketchHasher, Vector2D};
@@ -12,8 +13,6 @@ use crate::{CountMinSketch, HashProfile, SketchHasher, Vector2D};
 use super::CountMinSketchWithSpaceSaving;
 use super::summary_wire::{self, DecodedSummaryTopK, SummaryKind};
 
-/// CountMinSketchWithSpaceSaving kind_id: family `0x1e`, variant `0x00`.
-pub(crate) const CMS_SPACE_SAVING_KIND: &[u8] = &[0x1e, 0x00];
 
 impl<T, Mode, H> CountMinSketchWithSpaceSaving<Vector2D<T>, Mode, H>
 where
@@ -23,7 +22,7 @@ where
 {
     const KIND: SummaryKind = SummaryKind {
         name: "CMSSpaceSaving",
-        kind_id: CMS_SPACE_SAVING_KIND,
+        kind_id: kind::COUNT_MIN_WITH_SPACE_SAVING,
         counter_type: T::COUNTER_TYPE,
         mode: Mode::MODE,
     };
