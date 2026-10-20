@@ -108,6 +108,8 @@ original UnivMon recurrence and the coordinated occurrence-sample identity
 `H = E[ln(N/f_X)]`. The recurrence is used for diffuse streams and complete
 candidate recovery; concentrated streams with incomplete recovery use the
 occurrence path. The two component estimators remain exposed for experiments.
+All three entropy estimates are in nats (ln); UnivMon's `estimate_entropy` is in
+bits.
 
 `prepare_queries` reconstructs candidate frequencies, logical sampled levels,
 F2 thresholds, and the ordered CDF once. Its returned immutable view exposes

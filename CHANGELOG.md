@@ -321,6 +321,12 @@ signals a backwards-compatible change.
   `with_k_and_seed` use. `Vector2D::filled(rows, cols, value)` builds a filled
   matrix in one call. `Vector2D::nitro_skip` takes `&self`.
 
+- Docs state what the code does: `FastPath` / `RegularPath`, `MatrixFastHash`
+  and `FastPathHasher` describe the hashing they select; UnivMon's
+  `total_weight` is the total inserted weight; UnivMon's `estimate_entropy` is
+  in bits and UnivMon-Q's in nats. Spec §3.15 / §3.16 rule 3 bounds `layers`
+  by 19 (`UNIVMON_MAX_LAYERS`), the seed-table ceiling the code enforces.
+
 ### Removed
 
 - **Dead and duplicate APIs** (breaking). `Kll::wire_k` (use `k()`);

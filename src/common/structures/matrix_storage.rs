@@ -57,7 +57,8 @@ impl MatrixHash {
     }
 }
 
-/// Trait for hash values that support fast row/column decoding.
+/// A key's [`FastPath`](crate::FastPath) matrix hash, from which each row reads
+/// its column and Count Sketch sign.
 pub trait MatrixFastHash: Clone {
     /// Verifies that the hash type can encode the given dimensions.
     fn assert_compatible(rows: usize, cols: usize);
@@ -236,7 +237,8 @@ pub trait MatrixStorage {
     fn query_one_counter(&self, row: usize, col: usize) -> Self::Counter;
 }
 
-/// Trait for storages that can derive fast-path hashes for their dimensions.
+/// A matrix storage that builds, with hasher `H`, the [`FastPath`](crate::FastPath)
+/// matrix hash its own `rows` x `cols` geometry needs.
 pub trait FastPathHasher<H>: MatrixStorage
 where
     H: crate::SketchHasher,

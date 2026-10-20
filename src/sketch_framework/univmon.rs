@@ -63,7 +63,7 @@ pub struct UnivMon {
     pub cols: usize,
     /// Heap capacity per layer.
     pub heap_size: usize,
-    /// Bucket size used for hashing decisions.
+    /// Total inserted weight (the exact L1 norm).
     pub total_weight: usize,
     #[serde(default)]
     update_mode: UnivMonUpdateMode,
@@ -455,7 +455,7 @@ impl UnivMon {
         tmp.sqrt()
     }
 
-    /// Returns the estimated entropy.
+    /// Returns the estimated Shannon entropy, in bits (log2).
     pub fn estimate_entropy(&self) -> f64 {
         if self.total_weight == 0 {
             return 0.0;

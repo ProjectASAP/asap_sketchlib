@@ -88,6 +88,7 @@ impl EhUnivMonQueryResult {
         }
     }
 
+    /// Shannon entropy of the interval, in bits (log2).
     pub fn estimate_entropy(&self) -> f64 {
         match self {
             Self::Sketch(um) => um.estimate_entropy(),

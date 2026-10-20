@@ -63,7 +63,8 @@ fn estimate_g_sum<F>(&self, g: F, heavy_only: bool) -> f64
 ```
 
 Because UnivMon accepts only non-negative updates, `estimate_l1()` returns the
-exact tracked total weight. The generic recurrence remains available through
+exact tracked total weight. `estimate_entropy()` is Shannon entropy in bits
+(log2); UnivMon-Q's is in nats. The generic recurrence remains available through
 `estimate_g_sum` for compatible frequency functions.
 
 ## Merge

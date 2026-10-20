@@ -45,7 +45,7 @@ fn estimate_g_sum<F>(&self, g: F, heavy_only: bool) -> f64
 
 For the supported non-negative update stream, `estimate_l1()` returns the exact
 tracked total weight rather than estimating the linear sum through the
-hierarchy.
+hierarchy. `estimate_entropy()` is Shannon entropy in bits (log2).
 
 ## Merge
 
