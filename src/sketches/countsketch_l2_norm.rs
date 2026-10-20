@@ -89,16 +89,14 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
         if let Err(problem) = CountSketchWithL2Norm::check_hash_bits(rows, cols) {
             panic!("{problem}");
         }
-        let mut sk = CountSketchWithL2Norm {
-            counts: Vector2D::unfilled(rows, cols),
+        CountSketchWithL2Norm {
+            counts: Vector2D::filled(rows, cols, 0),
             row_l2_squared: Vector1D::filled(rows, 0),
             rows,
             cols,
             seed_index,
             _hasher: PhantomData,
-        };
-        sk.counts.fill(0);
-        sk
+        }
     }
 
     /// Number of rows in the sketch.

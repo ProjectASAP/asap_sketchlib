@@ -7,7 +7,7 @@ use std::cmp::Ordering;
 use crate::sketches::space_saving::parts::key_cmp;
 use crate::{
     CountMinSketch, DataInput, DefaultXxHasher, MatrixStorage, OwnedDataInput, RegularPath,
-    SketchHasher, SpaceSaving, Vector2D, heap_item_to_sketch_input,
+    SketchHasher, SpaceSaving, Vector2D,
 };
 
 pub(crate) mod summary_wire;
@@ -79,7 +79,7 @@ pub(crate) fn rank_candidates<H: SketchHasher, C: CandidateCounter>(
         .entries()
         .into_iter()
         .map(|(key, _, _)| {
-            let count = estimate(&heap_item_to_sketch_input(&key));
+            let count = estimate(&key.as_data_input());
             (key, count)
         })
         .collect();
@@ -246,7 +246,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CountMinSketchWithHeap, FastPath, heap_item_to_sketch_input};
+    use crate::{CountMinSketchWithHeap, FastPath};
 
     fn u64_key(item: &OwnedDataInput) -> u64 {
         match item {
@@ -408,7 +408,7 @@ mod tests {
         sk.update_weighted(&DataInput::U64(2), 1.5);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(1)), 1);
         let top = sk.top_k(2);
-        assert_eq!(heap_item_to_sketch_input(&top[0].0), DataInput::U64(2));
+        assert_eq!(top[0].0.as_data_input(), DataInput::U64(2));
         assert_eq!(top[0].1, 1.5);
         assert_eq!(top[1].1, 0.25);
     }

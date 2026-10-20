@@ -20,6 +20,7 @@ Shared matrix, vector, and bit storage plus utility structures used by sketch im
 ```rust
 // Vector2D
 fn unfilled(rows: usize, cols: usize) -> Self
+fn filled(rows: usize, cols: usize, value: T) -> Self
 fn from_fn<F>(rows: usize, cols: usize, f: F) -> Self
 
 // Vector3D

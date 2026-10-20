@@ -30,8 +30,8 @@ use asap_sketchlib::{
     OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, OCTO_DDSKETCH_DEFAULT_THRESHOLD,
     OCTO_ELASTIC_DEFAULT_THRESHOLD, OCTO_HLL_DEFAULT_THRESHOLD, OCTO_MAX_PROMOTION_THRESHOLD,
     OCTO_UNIVMON_DEFAULT_THRESHOLD, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker,
-    RegularPath, UnivMonCellDelta, UnivMonOctoPlan, Vector2D, heap_item_to_sketch_input,
-    input_to_owned, max_hll_threshold, univmon_layer_threshold,
+    RegularPath, UnivMonCellDelta, UnivMonOctoPlan, Vector2D, max_hll_threshold,
+    univmon_layer_threshold,
 };
 use proptest::prelude::*;
 
@@ -891,7 +891,7 @@ proptest! {
                 d.total_weight, *i as u64 + 1,
                 "insert {} reported a running weight of {}", i, d.total_weight
             );
-            prop_assert_eq!(&d.key, &input_to_owned(&DataInput::U64(keys[*i])));
+            prop_assert_eq!(&d.key, &DataInput::U64(keys[*i]).to_owned_input());
         }
     }
 
@@ -933,7 +933,7 @@ proptest! {
             parent.sketch.heap().len(), promoted.len(), top_k
         );
         for item in parent.sketch.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             let estimate = i64::from(parent.sketch.count_min_sketch().estimate(&key));
             prop_assert!(
                 matches!(key, DataInput::U64(k) if seen.contains(&k)),
@@ -961,7 +961,7 @@ proptest! {
         for k in &keys {
             let input = DataInput::U64(*k);
             let hashes = CountMinSketchWorker::hashes(rows, &input);
-            let key = input_to_owned(&input);
+            let key = input.to_owned_input();
             worker.update_emit_keyed_delta_with_row_hashes(&hashes, &key, tau, &mut |d| {
                 deltas.push(d.clone());
                 promoted.insert(*k);
@@ -988,7 +988,7 @@ proptest! {
             parent.sketch.heap().len(), promoted.len(), top_k
         );
         for item in parent.sketch.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             prop_assert!(
                 matches!(key, DataInput::U64(k) if seen.contains(&k)),
                 "the heap holds {:?}, which never arrived", item.key

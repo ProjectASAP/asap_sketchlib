@@ -212,16 +212,14 @@ where
 {
     /// Creates a sketch with the requested number of rows and columns.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
-        let mut sk = CountSketch {
-            counts: Vector2D::unfilled(rows, cols),
+        CountSketch {
+            counts: Vector2D::filled(rows, cols, T::from(0)),
             rows,
             cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),
-        };
-        sk.counts.fill(T::from(0));
-        sk
+        }
     }
 }
 
@@ -563,7 +561,6 @@ impl<H: SketchHasher> NitroTarget for CountSketch<Vector2D<i32>, FastPath, H> {
     }
 }
 
-use crate::input_to_owned;
 use crate::octo_delta::{
     CountSketchCellDelta, KeyedCountSketchCellDelta, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
     OCTO_MAX_PROMOTION_THRESHOLD,
@@ -621,7 +618,7 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountSketch<S, RegularPat
     ) {
         self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
             emit(KeyedCountSketchCellDelta {
-                key: input_to_owned(value),
+                key: value.to_owned_input(),
                 delta,
             })
         });
@@ -680,7 +677,7 @@ where
     ) {
         self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
             emit(KeyedCountSketchCellDelta {
-                key: input_to_owned(value),
+                key: value.to_owned_input(),
                 delta,
             })
         });

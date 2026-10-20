@@ -17,7 +17,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DataInput, DefaultXxHasher, SketchHasher, TopKHeap, heap_item_to_sketch_input};
+use crate::{DataInput, DefaultXxHasher, SketchHasher, TopKHeap};
 use std::marker::PhantomData;
 
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
@@ -453,7 +453,7 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
         // Reconcile top-k heaps from both sources.
         for source in [a, b] {
             for item in source.heap.heap() {
-                let key_ref = heap_item_to_sketch_input(&item.key);
+                let key_ref = item.key.as_data_input();
                 let est = result.estimate(&key_ref);
                 result.heap.update(&key_ref, est);
             }
@@ -500,7 +500,7 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
 
         // Reconcile heap.
         for item in self.heap.heap() {
-            let key_ref = heap_item_to_sketch_input(&item.key);
+            let key_ref = item.key.as_data_input();
             let est = result.estimate(&key_ref);
             result.heap.update(&key_ref, est);
         }
@@ -544,7 +544,7 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
         // Reconcile heaps from all sources.
         for sk in sketches {
             for item in sk.heap.heap() {
-                let key_ref = heap_item_to_sketch_input(&item.key);
+                let key_ref = item.key.as_data_input();
                 let est = result.estimate(&key_ref);
                 result.heap.update(&key_ref, est);
             }
@@ -591,7 +591,7 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
     /// Re-query all heap items from `other` against `self` and update our heap.
     fn reconcile_heap_from(&mut self, other: &CountMinSketchFold<H>) {
         for item in other.heap.heap() {
-            let key_ref = heap_item_to_sketch_input(&item.key);
+            let key_ref = item.key.as_data_input();
             let est = self.estimate(&key_ref);
             self.heap.update(&key_ref, est);
         }

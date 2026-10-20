@@ -15,7 +15,7 @@
 //! and the mouse dimensions after, so every per-layer geometry is derived and
 //! none is stored.
 //!
-//! [`UnivMonPool`](super::UnivMonPool) is a free-list of scratch
+//! [`UnivMonPool`](crate::UnivMonPool) is a free-list of scratch
 //! `UnivMon`s rather than a sketch, and has no wire kind.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};

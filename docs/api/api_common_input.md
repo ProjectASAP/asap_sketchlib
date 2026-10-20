@@ -21,8 +21,11 @@ Canonical input and ownership model shared across sketches/frameworks.
 ## Constructors / Conversions
 
 ```rust
-fn heap_item_to_sketch_input(item: &OwnedDataInput) -> DataInput<'_>
-fn input_to_owned(input: &DataInput<'_>) -> OwnedDataInput
+// OwnedDataInput
+fn as_data_input(&self) -> DataInput<'_>
+
+// DataInput
+fn to_owned_input(&self) -> OwnedDataInput
 
 // HeapEntry<C>
 fn from_input(k: DataInput, count: C) -> Self
@@ -103,14 +106,14 @@ follow the bytes: `-0.0 == 0.0` and `NaN == NaN`.
 ## Examples
 
 ```rust
-use asap_sketchlib::{DataInput, input_to_owned};
+use asap_sketchlib::DataInput;
 use asap_sketchlib::common::input::HydraQuery;
 
 let q = HydraQuery::Frequency(DataInput::Str("key"));
 let _ = q;
 
 let key = DataInput::String("flow".to_string());
-let _owned = input_to_owned(&key);
+let _owned = key.to_owned_input();
 ```
 
 ## See Also

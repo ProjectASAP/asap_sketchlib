@@ -89,48 +89,52 @@ pub enum OwnedDataInput {
     Bytes(Vec<u8>),
 }
 
-/// Converts a heap-owned key into a borrowed sketch input.
-pub fn heap_item_to_sketch_input(item: &OwnedDataInput) -> DataInput<'_> {
-    match item {
-        OwnedDataInput::I8(v) => DataInput::I8(*v),
-        OwnedDataInput::I16(v) => DataInput::I16(*v),
-        OwnedDataInput::I32(v) => DataInput::I32(*v),
-        OwnedDataInput::I64(v) => DataInput::I64(*v),
-        OwnedDataInput::I128(v) => DataInput::I128(*v),
-        OwnedDataInput::Isize(v) => DataInput::Isize(*v),
-        OwnedDataInput::U8(v) => DataInput::U8(*v),
-        OwnedDataInput::U16(v) => DataInput::U16(*v),
-        OwnedDataInput::U32(v) => DataInput::U32(*v),
-        OwnedDataInput::U64(v) => DataInput::U64(*v),
-        OwnedDataInput::U128(v) => DataInput::U128(*v),
-        OwnedDataInput::Usize(v) => DataInput::Usize(*v),
-        OwnedDataInput::F32(v) => DataInput::F32(*v),
-        OwnedDataInput::F64(v) => DataInput::F64(*v),
-        OwnedDataInput::String(s) => DataInput::Str(s),
-        OwnedDataInput::Bytes(b) => DataInput::Bytes(b.as_slice()),
+impl OwnedDataInput {
+    /// Borrows this owned key as a sketch input.
+    pub fn as_data_input(&self) -> DataInput<'_> {
+        match self {
+            OwnedDataInput::I8(v) => DataInput::I8(*v),
+            OwnedDataInput::I16(v) => DataInput::I16(*v),
+            OwnedDataInput::I32(v) => DataInput::I32(*v),
+            OwnedDataInput::I64(v) => DataInput::I64(*v),
+            OwnedDataInput::I128(v) => DataInput::I128(*v),
+            OwnedDataInput::Isize(v) => DataInput::Isize(*v),
+            OwnedDataInput::U8(v) => DataInput::U8(*v),
+            OwnedDataInput::U16(v) => DataInput::U16(*v),
+            OwnedDataInput::U32(v) => DataInput::U32(*v),
+            OwnedDataInput::U64(v) => DataInput::U64(*v),
+            OwnedDataInput::U128(v) => DataInput::U128(*v),
+            OwnedDataInput::Usize(v) => DataInput::Usize(*v),
+            OwnedDataInput::F32(v) => DataInput::F32(*v),
+            OwnedDataInput::F64(v) => DataInput::F64(*v),
+            OwnedDataInput::String(s) => DataInput::Str(s),
+            OwnedDataInput::Bytes(b) => DataInput::Bytes(b.as_slice()),
+        }
     }
 }
 
-/// Converts a sketch input into an owned heap item.
-pub fn input_to_owned<'a>(input: &DataInput<'a>) -> OwnedDataInput {
-    match input {
-        DataInput::I8(i) => OwnedDataInput::I8(*i),
-        DataInput::I16(i) => OwnedDataInput::I16(*i),
-        DataInput::I32(i) => OwnedDataInput::I32(*i),
-        DataInput::I64(i) => OwnedDataInput::I64(*i),
-        DataInput::I128(i) => OwnedDataInput::I128(*i),
-        DataInput::Isize(i) => OwnedDataInput::Isize(*i),
-        DataInput::U8(u) => OwnedDataInput::U8(*u),
-        DataInput::U16(u) => OwnedDataInput::U16(*u),
-        DataInput::U32(u) => OwnedDataInput::U32(*u),
-        DataInput::U64(u) => OwnedDataInput::U64(*u),
-        DataInput::U128(u) => OwnedDataInput::U128(*u),
-        DataInput::Usize(u) => OwnedDataInput::Usize(*u),
-        DataInput::F32(f) => OwnedDataInput::F32(*f),
-        DataInput::F64(f) => OwnedDataInput::F64(*f),
-        DataInput::Str(s) => OwnedDataInput::String((*s).to_owned()),
-        DataInput::String(s) => OwnedDataInput::String((*s).to_owned()),
-        DataInput::Bytes(b) => OwnedDataInput::Bytes((*b).to_vec()),
+impl DataInput<'_> {
+    /// Copies this input into an owned key.
+    pub fn to_owned_input(&self) -> OwnedDataInput {
+        match self {
+            DataInput::I8(i) => OwnedDataInput::I8(*i),
+            DataInput::I16(i) => OwnedDataInput::I16(*i),
+            DataInput::I32(i) => OwnedDataInput::I32(*i),
+            DataInput::I64(i) => OwnedDataInput::I64(*i),
+            DataInput::I128(i) => OwnedDataInput::I128(*i),
+            DataInput::Isize(i) => OwnedDataInput::Isize(*i),
+            DataInput::U8(u) => OwnedDataInput::U8(*u),
+            DataInput::U16(u) => OwnedDataInput::U16(*u),
+            DataInput::U32(u) => OwnedDataInput::U32(*u),
+            DataInput::U64(u) => OwnedDataInput::U64(*u),
+            DataInput::U128(u) => OwnedDataInput::U128(*u),
+            DataInput::Usize(u) => OwnedDataInput::Usize(*u),
+            DataInput::F32(f) => OwnedDataInput::F32(*f),
+            DataInput::F64(f) => OwnedDataInput::F64(*f),
+            DataInput::Str(s) => OwnedDataInput::String((*s).to_owned()),
+            DataInput::String(s) => OwnedDataInput::String((*s).to_owned()),
+            DataInput::Bytes(b) => OwnedDataInput::Bytes((*b).to_vec()),
+        }
     }
 }
 
@@ -518,7 +522,7 @@ impl<C: HeapCount> HeapEntry<C> {
     /// Creates an entry by copying a borrowed input.
     pub fn from_input(k: DataInput, count: C) -> Self {
         HeapEntry {
-            key: input_to_owned(&k),
+            key: k.to_owned_input(),
             count,
         }
     }
@@ -567,9 +571,9 @@ mod tests {
     /// bytes, whatever they are.
     #[test]
     fn a_byte_array_owns_and_borrows_back_unchanged() {
-        let owned = input_to_owned(&DataInput::Bytes(RAW));
+        let owned = DataInput::Bytes(RAW).to_owned_input();
         assert_eq!(owned, OwnedDataInput::Bytes(RAW.to_vec()));
-        assert_eq!(heap_item_to_sketch_input(&owned), DataInput::Bytes(RAW));
+        assert_eq!(owned.as_data_input(), DataInput::Bytes(RAW));
         assert_eq!(owned, DataInput::Bytes(RAW));
     }
 
@@ -577,8 +581,8 @@ mod tests {
     /// UTF-8, so a sketch holding one never answers for the other.
     #[test]
     fn a_byte_key_is_not_the_string_of_the_same_bytes() {
-        let bytes = input_to_owned(&DataInput::Bytes(b"abc"));
-        let string = input_to_owned(&DataInput::Str("abc"));
+        let bytes = DataInput::Bytes(b"abc").to_owned_input();
+        let string = DataInput::Str("abc").to_owned_input();
         assert_ne!(bytes, string);
 
         assert_eq!(bytes, DataInput::Bytes(b"abc"));

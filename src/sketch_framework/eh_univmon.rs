@@ -4,14 +4,13 @@
 //! buckets use full UnivMon sketches. When a map bucket grows too large,
 //! it is promoted to a UnivMon sketch.
 //!
-//! Uses `UnivMonPool` (from `univmon_two_tier`) to recycle `UnivMon`
+//! Uses `UnivMonPool` (from `univmon`) to recycle `UnivMon`
 //! instances across promotion, merge, and expiration cycles.
 
 use std::collections::HashMap;
 
 use crate::common::heap::DEFAULT_HEAP_SIZE;
-use crate::common::input::{heap_item_to_sketch_input, input_to_owned};
-use crate::sketch_framework::univmon_two_tier::UnivMonPool;
+use crate::sketch_framework::univmon::UnivMonPool;
 use crate::{DataInput, OwnedDataInput, UnivMon};
 
 const MASS_EPSILON: f64 = 1e-9;
@@ -202,7 +201,7 @@ impl ExponentialHistogramUnivMon {
         }
 
         // 3. Create new map bucket
-        let owned_key = input_to_owned(key);
+        let owned_key = key.to_owned_input();
         let mut counts = HashMap::new();
         counts.insert(owned_key, weight);
         self.exact_buckets.push(EhUnivMonExactBucket {
@@ -257,7 +256,7 @@ impl ExponentialHistogramUnivMon {
         // if the pool has a recycled sketch available.
         let mut sketch = self.pool.take();
         for (key, value) in &oldest.counts {
-            let input = heap_item_to_sketch_input(key);
+            let input = key.as_data_input();
             sketch.update_weighted(&input, *value);
         }
 
@@ -421,7 +420,7 @@ impl ExponentialHistogramUnivMon {
 
             // Insert map entries into merged sketch
             for (key, value) in &map_merged {
-                let input = heap_item_to_sketch_input(key);
+                let input = key.as_data_input();
                 merged.update_weighted(&input, *value);
             }
 

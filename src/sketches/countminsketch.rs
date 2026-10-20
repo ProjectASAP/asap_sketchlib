@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 
 use crate::common::structure_utils::AdmittedRows;
-use crate::input_to_owned;
 use crate::message_pack_format::admission_rate::{admit_all, deserialize_rate};
 use crate::octo_delta::{
     CountMinSketchCellDelta, KeyedCountMinSketchCellDelta, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
@@ -198,16 +197,14 @@ where
 {
     /// Creates a sketch with the requested number of rows and columns.
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
-        let mut sk = CountMinSketch {
-            counts: Vector2D::unfilled(rows, cols),
+        CountMinSketch {
+            counts: Vector2D::filled(rows, cols, T::default()),
             rows,
             cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),
-        };
-        sk.counts.fill(T::default());
-        sk
+        }
     }
 }
 
@@ -443,7 +440,7 @@ impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMinSketch<S, Regular
     ) {
         self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
             emit(KeyedCountMinSketchCellDelta {
-                key: input_to_owned(value),
+                key: value.to_owned_input(),
                 delta,
             })
         });
@@ -501,7 +498,7 @@ where
     ) {
         self.update_emit_delta_with_threshold(value, threshold, &mut |delta| {
             emit(KeyedCountMinSketchCellDelta {
-                key: input_to_owned(value),
+                key: value.to_owned_input(),
                 delta,
             })
         });

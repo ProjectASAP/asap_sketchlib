@@ -21,6 +21,8 @@ fn with_k_and_seed(k: i32, seed: u64) -> Self
 fn with_seed(k: usize, m: usize, seed: u64) -> Self
 ```
 
+`with_k` and `with_k_and_seed` set `m` to `DEFAULT_M` (8).
+
 The unseeded constructors draw the compaction coin from the wall clock, so two
 runs over the same input produce different sketches. The `*_with_seed` forms
 fix the coin and store the seed, so `clear()` re-seeds from it too — use them

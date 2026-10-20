@@ -40,8 +40,7 @@ use asap_sketchlib::{
     OCTO_COUNT_MIN_DEFAULT_THRESHOLD, OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD,
     OCTO_HLL_DEFAULT_THRESHOLD, OctoAggregator, OctoPlan, OctoThreshold, OctoWorker, RegularPath,
     UnivMon, UnivMonCellDelta, UnivMonDeltaFidelity, UnivMonOctoAggregator, UnivMonOctoPlan,
-    UnivMonOctoWorker, Vector2D, hash64_seeded, hash128_seeded, input_to_owned,
-    univmon_layer_threshold,
+    UnivMonOctoWorker, Vector2D, hash64_seeded, hash128_seeded, univmon_layer_threshold,
 };
 use common::{FreqTruth, zipf_u64};
 use rand::SeedableRng;
@@ -2765,7 +2764,7 @@ fn univmon_through_deltas(
             hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, &input),
             layers,
         );
-        let owned = input_to_owned(&input);
+        let owned = input.to_owned_input();
         for (layer, worker) in workers.iter_mut().enumerate().take(bottom + 1) {
             let hashed = hash128_seeded(layer, &input);
             let mut promoted = Vec::new();
@@ -4749,7 +4748,7 @@ mod top_k_plans {
         for d in promoted {
             assert_eq!(
                 d.key,
-                asap_sketchlib::input_to_owned(&cold),
+                cold.to_owned_input(),
                 "every top-k delta must carry the flow key that produced it"
             );
             parent.apply(d);

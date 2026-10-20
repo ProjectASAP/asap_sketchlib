@@ -131,7 +131,7 @@ assert!(sk.estimate(&DataInput::Str("flow")) >= 1.0);
 - Estimate semantics follow Count Sketch and may be non-integer.
 - Merge requires matching dimensions and compatible type parameters.
 - **Over integer counters, heap counts are a saturating, truncating view of the
-  estimate.** The insert path stores `heap_count_from_estimate(estimate)`, where the
+  estimate.** The insert path stores `CountSketchHeapCounter::heap_count(estimate)`, where the
   estimate is the row median as `f64` and the heap holds `i64`. The conversion
   saturates at `i64::MAX` / `i64::MIN` (and maps `NaN` to `0`) rather than
   wrapping, because a wrapped negative count would corrupt the heap's ordering.

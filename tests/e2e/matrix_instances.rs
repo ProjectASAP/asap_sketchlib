@@ -39,7 +39,7 @@ use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, CountSketch, CountSketchWithHeap, DataInput,
     DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, FastPath, FixedMatrix, OwnedDataInput,
     QuickMatrixI64, QuickMatrixI128, RegularPath, Vector2D, hash_for_matrix,
-    heap_count_from_estimate,
+    sketches::CountSketchHeapCounter,
 };
 
 /// Medium stream: large enough that collisions are statistically meaningful at
@@ -533,7 +533,7 @@ macro_rules! csheap_instance {
             single.heap().heap(),
             $truth,
             |k| single.estimate(&DataInput::U64(k as u64)),
-            heap_count_from_estimate,
+            <i64 as CountSketchHeapCounter>::heap_count,
         );
     }};
 }
@@ -543,7 +543,7 @@ macro_rules! csheap_instance {
 ///
 /// `count_of` maps the sketch's estimate to the integer a heap entry holds. It
 /// is the identity for `CountMinSketchWithHeap`, whose estimate is already the counter type,
-/// and `heap_count_from_estimate` for `CountSketchWithHeap`, whose estimate is an `f64` median and is
+/// and `CountSketchHeapCounter::heap_count` for `CountSketchWithHeap`, whose estimate is an `f64` median and is
 /// documented to reach the heap by a saturating, truncating conversion.
 fn assert_heap_matches_sketch<F, C>(
     label: &str,
@@ -673,12 +673,12 @@ heap_matrix_test!(
 /// `CountSketchWithHeap` over an `i128` counter really does accept counts past `i64::MAX`,
 /// and this pins what happens to the heap entry when it does.
 ///
-/// The insert path is `heap.update(key, heap_count_from_estimate(estimate))`, where the
+/// The insert path is `heap.update(key, CountSketchHeapCounter::heap_count(estimate))`, where the
 /// estimate is the row **median** as `f64`. Two lossy steps are unavoidable and
 /// both are documented API rather than accidents:
 ///
 /// 1. `i128 -> f64` inside `CountSketch::estimate`, exact only below `2^53`;
-/// 2. `f64 -> i64` in `heap_count_from_estimate`, which **saturates** at `i64::MAX`.
+/// 2. `f64 -> i64` in `CountSketchHeapCounter::heap_count`, which **saturates** at `i64::MAX`.
 ///
 /// Saturating is the chosen semantics. Wrapping would turn a huge positive
 /// count into a negative one and corrupt the heap's ordering, which is the one
@@ -726,9 +726,9 @@ fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
                 "{label}: the sketch itself must still hold the i128 mass, got {est}"
             );
             assert_eq!(
-                heap_count_from_estimate(est),
+                <i128 as CountSketchHeapCounter>::heap_count(est),
                 i64::MAX,
-                "{label}: heap_count_from_estimate must saturate at i64::MAX"
+                "{label}: CountSketchHeapCounter::heap_count must saturate at i64::MAX"
             );
             assert_eq!(
                 heap_count(huge.heap().heap(), &key),
@@ -784,7 +784,7 @@ fn csheap_i128_counters_saturate_into_the_heap_instead_of_wrapping() {
 fn heap_count(items: &[asap_sketchlib::HeapEntry], key: &DataInput) -> Option<i64> {
     items
         .iter()
-        .find(|it| asap_sketchlib::heap_item_to_sketch_input(&it.key) == *key)
+        .find(|it| it.key.as_data_input() == *key)
         .map(|it| it.count)
 }
 

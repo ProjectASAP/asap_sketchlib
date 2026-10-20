@@ -310,6 +310,17 @@ signals a backwards-compatible change.
   `common::structures::fixed_structure`, and the default heap size (32) and
   KLL's largest `k` once each.
 
+- **Key conversions are methods** (breaking). `heap_item_to_sketch_input(&k)`
+  -> `k.as_data_input()` on `OwnedDataInput`, `input_to_owned(&k)` ->
+  `k.to_owned_input()` on `DataInput`.
+- **`UnivMonPool` lives in `sketch_framework::univmon`** beside `UnivMon`;
+  the crate-root path is unchanged.
+- **`heap_count_from_estimate` is crate-private** (breaking);
+  `CountSketchHeapCounter::heap_count` is the public form.
+- KLL's default `m` is the constant `kll::DEFAULT_M` (8), which `with_k` and
+  `with_k_and_seed` use. `Vector2D::filled(rows, cols, value)` builds a filled
+  matrix in one call. `Vector2D::nitro_skip` takes `&self`.
+
 ### Removed
 
 - **Dead and duplicate APIs** (breaking). `Kll::wire_k` (use `k()`);

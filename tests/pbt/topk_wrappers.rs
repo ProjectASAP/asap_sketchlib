@@ -9,7 +9,7 @@ use crate::support::{PROBE_KEYS, edge_dimension, edge_rows, grid, keys};
 use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, CountSketch, CountSketchWithHeap,
     CountSketchWithL2Norm, DataInput, DefaultXxHasher, FastPath, RegularPath, TopKHeap, Vector2D,
-    heap_count_from_estimate, heap_item_to_sketch_input,
+    sketches::CountSketchHeapCounter,
 };
 use proptest::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -271,7 +271,7 @@ proptest! {
         for k in &stream {
             let probe = DataInput::U64(*k);
             wrapped.update(&probe);
-            read_at_last_insert.insert(*k, heap_count_from_estimate(wrapped.estimate(&probe)));
+            read_at_last_insert.insert(*k, <i64 as CountSketchHeapCounter>::heap_count(wrapped.estimate(&probe)));
         }
 
         for (key, expected) in read_at_last_insert {
@@ -410,7 +410,7 @@ proptest! {
         cs.merge(&cs_other);
 
         for item in cms.heap().heap() {
-            let probe = heap_item_to_sketch_input(&item.key);
+            let probe = item.key.as_data_input();
             prop_assert_eq!(
                 item.count,
                 i64::from(cms.estimate(&probe)),
@@ -418,10 +418,10 @@ proptest! {
             );
         }
         for item in cs.heap().heap() {
-            let probe = heap_item_to_sketch_input(&item.key);
+            let probe = item.key.as_data_input();
             prop_assert_eq!(
                 item.count,
-                heap_count_from_estimate(cs.estimate(&probe)),
+                <i64 as CountSketchHeapCounter>::heap_count(cs.estimate(&probe)),
                 "CS key {:?}", item.key
             );
         }

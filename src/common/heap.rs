@@ -8,7 +8,7 @@
 use crate::common::input::HeapEntry;
 use crate::common::structures::heap::PREALLOCATED_SLOTS;
 use crate::common::{CommonHeap, DigestBuildHasher, RetainLargest};
-use crate::{DataInput, OwnedDataInput, hash64_seeded, hash64_seeded_owned, input_to_owned};
+use crate::{DataInput, OwnedDataInput, hash64_seeded, hash64_seeded_owned};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use smallvec::SmallVec;
 use std::cmp::Ordering;
@@ -152,7 +152,7 @@ impl<C: HeapCount> TopKHeap<C> {
         if !self.should_accept_new(count) {
             return retained_every_key;
         }
-        self.seat(input_to_owned(key), slot, count);
+        self.seat(key.to_owned_input(), slot, count);
         retained_every_key
     }
 
@@ -1138,7 +1138,7 @@ mod differential {
                 return retained_every_key;
             }
 
-            let owned = input_to_owned(key);
+            let owned = key.to_owned_input();
             self.heap.push(HeapEntry::new(owned, count));
             self.refresh_positions();
             retained_every_key
@@ -1193,7 +1193,7 @@ mod differential {
             }
             if self.residents.len() < self.k {
                 self.residents
-                    .push(HeapEntry::new(input_to_owned(key), count));
+                    .push(HeapEntry::new(key.to_owned_input(), count));
                 return retained_every_key;
             }
 
@@ -1205,7 +1205,7 @@ mod differential {
                 .map(|(idx, _)| idx)
                 .expect("a full heap of capacity k > 0 has residents");
             if count > self.residents[smallest].count {
-                self.residents[smallest] = HeapEntry::new(input_to_owned(key), count);
+                self.residents[smallest] = HeapEntry::new(key.to_owned_input(), count);
             }
             retained_every_key
         }

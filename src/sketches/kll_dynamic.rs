@@ -18,7 +18,7 @@ use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
 
-use super::kll::{Coin, MAX_K, merge_sorted_runs, randomly_halve_up};
+use super::kll::{Coin, DEFAULT_M, MAX_K, merge_sorted_runs, randomly_halve_up};
 
 mod wire;
 
@@ -113,14 +113,14 @@ impl<T: NumericalValue> KllDynamic<T> {
         s
     }
 
-    /// Creates a KLL dynamic sketch with default `m` and the provided `k`.
+    /// Creates a KLL dynamic sketch with the given `k` and `m` = [`DEFAULT_M`].
     pub fn with_k(k: i32) -> Self {
-        Self::new(k as usize, 8)
+        Self::new(k as usize, DEFAULT_M)
     }
 
     /// `with_k` with an explicit RNG seed. See [`KllDynamic::with_seed`].
     pub fn with_k_and_seed(k: i32, seed: u64) -> Self {
-        Self::with_seed(k as usize, 8, seed)
+        Self::with_seed(k as usize, DEFAULT_M, seed)
     }
 
     fn push_value(&mut self, value: T) {

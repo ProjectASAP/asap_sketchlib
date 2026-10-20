@@ -110,9 +110,7 @@ pub mod countminsketch_heap;
 pub use countminsketch_heap::{CountMinSketchWithHeap, CountMinSketchWithHeapDelta};
 
 pub mod countsketch_heap;
-pub use countsketch_heap::{
-    CountSketchHeapCounter, CountSketchWithHeap, CountSketchWithHeapDelta, heap_count_from_estimate,
-};
+pub use countsketch_heap::{CountSketchHeapCounter, CountSketchWithHeap, CountSketchWithHeapDelta};
 
 pub mod countsketch_l2_norm;
 pub use countsketch_l2_norm::CountSketchWithL2Norm;

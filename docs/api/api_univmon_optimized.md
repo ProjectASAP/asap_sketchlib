@@ -4,20 +4,15 @@ Status: `Ready`
 
 ## Purpose
 
-Two-tier UnivMon pyramid, and a free-list pool of scratch `UnivMon`s.
+Two-tier UnivMon pyramid.
 
 ## Type/Struct
 
-- `UnivMonPool`
 - `UnivMonTwoTier`
 
 ## Constructors
 
 ```rust
-// UnivMonPool
-fn new(initial_size: usize, heap_size: usize, rows: usize, cols: usize, layers: usize) -> Self
-
-// UnivMonTwoTier
 fn new(
     heap_size: usize,
     elephant_layers: usize,
@@ -46,10 +41,6 @@ fn estimate_l2(&self) -> f64
 fn estimate_entropy(&self) -> f64
 fn estimate_cardinality(&self) -> f64
 fn estimate_g_sum<F>(&self, g: F, heavy_only: bool) -> f64
-
-// UnivMonPool
-fn available(&self) -> usize
-fn total_allocated(&self) -> usize
 ```
 
 For the supported non-negative update stream, `estimate_l1()` returns the exact
@@ -78,9 +69,6 @@ two-tier layout (`layers`, `elephant_layers`, `elephant_rows`,
 and the mouse dimensions after, so every per-layer geometry is derived and none
 is stored. `elephant_rows` and `mouse_rows` carry `UnivMon`'s per-layer row bound,
 `1 <= rows <= 20` (`MATRIX_MAX_ROWS`, the seed list length).
-
-`UnivMonPool` is a free-list of scratch `UnivMon`s rather than a sketch, and
-has no wire kind.
 
 ## Examples
 

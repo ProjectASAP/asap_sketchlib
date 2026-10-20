@@ -37,7 +37,6 @@ src/common/
 use asap_sketchlib::common::{
     // Input layer
     DataInput, OwnedDataInput, HeapEntry,
-    input_to_owned, heap_item_to_sketch_input,
 
     // Hash layer
     SketchHasher, DefaultXxHasher,

@@ -35,9 +35,9 @@ This document provides a high-level overview of implemented and planned features
 
 **Hydra** - Subpopulation queries over multi-dimensional keys ([apis.md](apis.md))
 
-**UnivMon** - Universal monitoring (L1, L2, entropy, cardinality from single structure) ([apis.md](apis.md))
+**UnivMon** - Universal monitoring (L1, L2, entropy, cardinality from single structure), with `UnivMonPool` to recycle scratch sketches ([apis.md](apis.md))
 
-**UnivMonTwoTier** - Optimized two-tier UnivMon with `UnivMonPool` for insert and memory management ([apis.md](apis.md))
+**UnivMonTwoTier** - Two-tier UnivMon: larger elephant layers on top, smaller mouse layers below ([apis.md](apis.md))
 
 **UnivMonQ (Experimental)** - Terminal-stratum UnivMon with exact insertion-only L1, F0/F2/compatible g-sum queries, an adaptively assisted occurrence sample for entropy, ranks, and quantiles, and reusable prepared query views. Its API, estimators, and guarantees may change.
 

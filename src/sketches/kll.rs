@@ -27,6 +27,8 @@ const MAX_LEVELS: usize = 61;
 
 const CAPACITY_CACHE_LEN: usize = 20;
 pub(crate) const MAX_K: usize = 26_602;
+/// Minimum level capacity `m` that `with_k` and `with_k_and_seed` use.
+pub const DEFAULT_M: usize = 8;
 const CAPACITY_DECAY: f64 = 2.0 / 3.0;
 const DEFAULT_K: i32 = 200;
 
@@ -287,14 +289,14 @@ impl<T: NumericalValue> Kll<T> {
         Self::init_internal(k, m, Coin::from_seed(seed), Some(seed))
     }
 
-    /// Creates a new KLL sketch with the given `k` and a default minimum level capacity of 8.
+    /// Creates a new KLL sketch with the given `k` and `m` = [`DEFAULT_M`].
     pub fn with_k(k: i32) -> Self {
-        Self::new(k as usize, 8)
+        Self::new(k as usize, DEFAULT_M)
     }
 
     /// `with_k` with an explicit RNG seed. See `with_seed`.
     pub fn with_k_and_seed(k: i32, seed: u64) -> Self {
-        Self::with_seed(k as usize, 8, seed)
+        Self::with_seed(k as usize, DEFAULT_M, seed)
     }
 
     fn init_internal(k: usize, m: usize, coin: Coin, seed: Option<u64>) -> Self {

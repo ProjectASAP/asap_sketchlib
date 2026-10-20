@@ -27,7 +27,7 @@
 //!   ICDT 2005. <https://doi.org/10.1007/978-3-540-30570-5_27>
 
 use crate::common::DigestBuildHasher;
-use crate::{DataInput, DefaultXxHasher, OwnedDataInput, SketchHasher, input_to_owned};
+use crate::{DataInput, DefaultXxHasher, OwnedDataInput, SketchHasher};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use smallvec::SmallVec;
 use std::collections::HashMap;
@@ -188,7 +188,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
         if self.monitored.len() < self.capacity {
             let seated = self.discarded_max.saturating_add(weight);
             let discarded_max = self.discarded_max;
-            self.seat(digest, input_to_owned(value), seated, discarded_max);
+            self.seat(digest, value.to_owned_input(), seated, discarded_max);
             return;
         }
 
@@ -201,7 +201,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
         );
         self.discarded_max = lowest;
         self.unindex(self.monitored[victim].digest, victim);
-        self.monitored[victim].key = input_to_owned(value);
+        self.monitored[victim].key = value.to_owned_input();
         self.monitored[victim].digest = digest;
         self.monitored[victim].error = lowest;
         self.index.entry(digest).or_default().push(victim);

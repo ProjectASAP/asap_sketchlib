@@ -51,7 +51,7 @@ use crate::{
     DdSketch, HllRegisterDelta, HyperLogLog, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
     OCTO_COUNT_SKETCH_DEFAULT_THRESHOLD, OCTO_HLL_DEFAULT_THRESHOLD, OwnedDataInput, RegularPath,
     UNIVMON_BOTTOM_LAYER_SEED_INDEX, UnivMon, UnivMonCellDelta, Vector2D, hash64_seeded,
-    hash128_seeded, heap_item_to_sketch_input, input_to_owned,
+    hash128_seeded,
 };
 use crate::{
     CocoDelta, DEFAULT_CANONICAL_SEED_INDEX, ElasticDelta, OCTO_COCO_DEFAULT_THRESHOLD,
@@ -1548,7 +1548,7 @@ impl OctoAggregator for CountMinSketchWithHeapOctoAggregator {
     #[inline(always)]
     fn apply(&mut self, delta: KeyedCountMinSketchCellDelta) {
         self.sketch.count_min_sketch_mut().apply_delta(delta.delta);
-        let key = heap_item_to_sketch_input(&delta.key);
+        let key = delta.key.as_data_input();
         let estimate = self.sketch.count_min_sketch().estimate(&key);
         self.sketch.heap_mut().update(&key, estimate as i64);
     }
@@ -1700,7 +1700,7 @@ impl OctoAggregator for CountSketchWithHeapOctoAggregator {
     #[inline(always)]
     fn apply(&mut self, delta: KeyedCountSketchCellDelta) {
         self.sketch.count_sketch_mut().apply_delta(delta.delta);
-        let key = heap_item_to_sketch_input(&delta.key);
+        let key = delta.key.as_data_input();
         let estimate = self.sketch.count_sketch().estimate(&key);
         self.sketch.heap_mut().update(&key, estimate as i64);
     }
@@ -2640,7 +2640,7 @@ impl OctoPlan for CountMinSketchWithHeapOctoPlan {
     fn prepare(&self, input: &DataInput<'_>) -> KeyedHashes {
         KeyedHashes {
             hashes: CountMinSketchWorker::hashes(self.rows, input),
-            key: input_to_owned(input),
+            key: input.to_owned_input(),
         }
     }
 }
@@ -2655,7 +2655,7 @@ impl OctoPlan for CountSketchWithHeapOctoPlan {
     fn prepare(&self, input: &DataInput<'_>) -> KeyedHashes {
         KeyedHashes {
             hashes: CountMinSketchWorker::hashes(self.rows, input),
-            key: input_to_owned(input),
+            key: input.to_owned_input(),
         }
     }
 }
@@ -2937,7 +2937,7 @@ impl OctoPlan for UnivMonOctoPlan {
         KeyedLayerHashes {
             bottom_layer: bottom,
             layer_hashes: (0..=bottom).map(|l| hash128_seeded(l, input)).collect(),
-            key: input_to_owned(input),
+            key: input.to_owned_input(),
         }
     }
 }
@@ -3047,14 +3047,14 @@ mod worker_tests {
         for _ in 0..OCTO_COUNT_MIN_DEFAULT_THRESHOLD {
             worker.update_emit_keyed_delta_with_row_hashes(
                 &CountMinSketchWorker::hashes(2, &key),
-                &input_to_owned(&key),
+                &key.to_owned_input(),
                 OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
                 &mut |d| keyed.push(d),
             );
         }
         assert!(!keyed.is_empty());
         for d in &keyed {
-            assert_eq!(d.key, input_to_owned(&key));
+            assert_eq!(d.key, key.to_owned_input());
         }
     }
 

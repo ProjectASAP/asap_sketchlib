@@ -10,7 +10,7 @@
 
 use asap_sketchlib::{
     CountMinSketch, CountMinSketchWithHeap, DataInput, FastPath, HeapEntry, OwnedDataInput,
-    TopKHeap, Vector2D, hash64_seeded, input_to_owned,
+    TopKHeap, Vector2D, hash64_seeded,
 };
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -81,7 +81,7 @@ impl IndexedHeap {
         let retained_every_key = self.data.len() < self.k;
         if self.data.len() < self.k {
             let idx = self.data.len();
-            self.data.push(HeapEntry::new(input_to_owned(key), count));
+            self.data.push(HeapEntry::new(key.to_owned_input(), count));
             self.slots.push(slot);
             self.register(slot, idx);
             self.bubble_up(idx);
@@ -94,7 +94,7 @@ impl IndexedHeap {
 
         let old_slot = self.slots[0];
         self.unregister(old_slot, 0);
-        self.data[0] = HeapEntry::new(input_to_owned(key), count);
+        self.data[0] = HeapEntry::new(key.to_owned_input(), count);
         self.slots[0] = slot;
         self.register(slot, 0);
         self.bubble_down(0);
@@ -218,14 +218,14 @@ impl ScanHeap {
 
         let retained_every_key = self.data.len() < self.k;
         if self.data.len() < self.k {
-            self.data.push(HeapEntry::new(input_to_owned(key), count));
+            self.data.push(HeapEntry::new(key.to_owned_input(), count));
             self.bubble_up(self.data.len() - 1);
             return retained_every_key;
         }
         if count <= self.data[0].count {
             return retained_every_key;
         }
-        self.data[0] = HeapEntry::new(input_to_owned(key), count);
+        self.data[0] = HeapEntry::new(key.to_owned_input(), count);
         self.bubble_down(0);
         retained_every_key
     }

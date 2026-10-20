@@ -7,7 +7,7 @@
 use crate::{
     CountMinSketch, DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128,
     DefaultXxHasher, FastPath, FixedMatrix, HeapCounter, MatrixStorage, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, TopKHeap, Vector2D, heap_item_to_sketch_input,
+    QuickMatrixI128, RegularPath, SketchHasher, TopKHeap, Vector2D,
 };
 
 mod delta;
@@ -264,7 +264,7 @@ where
         }
         self.heap.clear();
         for key in candidate_keys {
-            let key_ref = heap_item_to_sketch_input(&key);
+            let key_ref = key.as_data_input();
             let est = self.count_min_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, est.into());
         }
@@ -320,7 +320,7 @@ where
         }
         self.heap.clear();
         for key in candidate_keys {
-            let key_ref = heap_item_to_sketch_input(&key);
+            let key_ref = key.as_data_input();
             let est = self.count_min_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, est.into());
         }
@@ -337,7 +337,7 @@ mod tests {
     fn heap_count_for_key<C: crate::HeapCount>(heap: &TopKHeap<C>, key: &DataInput) -> Option<C> {
         heap.heap()
             .iter()
-            .find(|item| heap_item_to_sketch_input(&item.key) == *key)
+            .find(|item| item.key.as_data_input() == *key)
             .map(|item| item.count)
     }
 
@@ -396,7 +396,7 @@ mod tests {
     fn top_k_heap_keys(heap: &TopKHeap) -> HashSet<u64> {
         heap.heap()
             .iter()
-            .map(|item| match heap_item_to_sketch_input(&item.key) {
+            .map(|item| match item.key.as_data_input() {
                 DataInput::U64(v) => v,
                 other => panic!("expected U64 key in zipf tests, got {other:?}"),
             })
@@ -461,7 +461,7 @@ mod tests {
             .heap()
             .iter()
             .find(|item| {
-                let k = heap_item_to_sketch_input(&item.key);
+                let k = item.key.as_data_input();
                 k == key
             })
             .expect("key should be in heap");
@@ -722,7 +722,7 @@ mod tests {
         ]);
 
         for item in sh.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             assert_eq!(item.count, sh.estimate(&key));
         }
 
@@ -732,7 +732,7 @@ mod tests {
         sh.merge(&other);
 
         for item in sh.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             assert_eq!(item.count, sh.estimate(&key));
         }
     }
@@ -846,7 +846,7 @@ mod tests {
             .heap()
             .heap()
             .iter()
-            .filter(|item| heap_item_to_sketch_input(&item.key) == DataInput::Str("dup"))
+            .filter(|item| item.key.as_data_input() == DataInput::Str("dup"))
             .count();
         assert_eq!(dup_entries, 1);
     }
@@ -862,7 +862,7 @@ mod tests {
 
         assert!(sketch.heap().len() <= top_k);
         for item in sketch.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             assert_eq!(item.count, sketch.estimate(&key));
         }
 
@@ -886,7 +886,7 @@ mod tests {
 
         assert!(sketch.heap().len() <= top_k);
         for item in sketch.heap().heap() {
-            let key = heap_item_to_sketch_input(&item.key);
+            let key = item.key.as_data_input();
             assert_eq!(item.count, sketch.estimate(&key));
         }
 
