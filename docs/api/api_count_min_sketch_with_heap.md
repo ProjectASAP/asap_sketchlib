@@ -20,7 +20,11 @@ and `i128`. Each entry's count is the sketch's estimate, unrounded.
 fn new(rows: usize, cols: usize, heap_size: usize) -> Self
 fn from_storage(storage: S, heap_size: usize) -> Self
 fn default() -> Self
+fn check_shape(rows: usize, cols: usize) -> Result<(), String>
 ```
+
+`check_shape` is `CountMinSketch::check_shape`; `new` and `from_storage` panic on a
+shape it refuses.
 
 ## Insert/Update
 
@@ -29,7 +33,11 @@ fn update(&mut self, key: &DataInput)
 fn update_weighted(&mut self, key: &DataInput, weight: S::Counter)
 fn update_batch(&mut self, values: &[DataInput])
 fn clear_heap(&mut self)
+fn clear(&mut self)
 ```
+
+`clear_heap` empties the heap; `clear` also zeroes the counters and restarts the
+Nitro sampler. Both keep the shape and allocations.
 
 ## Query
 
@@ -40,6 +48,17 @@ fn cols(&self) -> usize
 fn count_min_sketch(&self) -> &CountMinSketch<S, M, H>
 fn heap(&self) -> &TopKHeap<C>
 ```
+
+## Memory
+
+```rust
+fn memory_bytes(&self) -> usize
+fn estimated_memory_bytes(rows: usize, cols: usize, heap_size: usize, key: &DataInput) -> usize // Vector2D storage
+```
+
+`memory_bytes` is what the instance holds now: the struct, `rows * cols`
+counters and `TopKHeap::memory_bytes`. `estimated_memory_bytes` prices a
+`new(rows, cols, heap_size)` whose heap is full of keys shaped like `key`.
 
 ## Merge
 

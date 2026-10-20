@@ -106,6 +106,8 @@ where
 {
     /// Creates a `rows x cols` sketch whose summary monitors at most
     /// `capacity` keys.
+    ///
+    /// Panics when [`Self::check_shape`] refuses `rows` x `cols`.
     pub fn new(rows: usize, cols: usize, capacity: usize) -> Self {
         CountMinSketchWithSpaceSaving {
             count_min_sketch: CountMinSketch::with_dimensions(rows, cols),
@@ -115,6 +117,11 @@ where
 }
 
 impl<S: MatrixStorage, M, H: SketchHasher> CountMinSketchWithSpaceSaving<S, M, H> {
+    /// The shapes this sketch builds; see [`CountMinSketch::check_shape`].
+    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
+        CountMinSketch::<S, M, H>::check_shape(rows, cols)
+    }
+
     /// Pairs an existing matrix with an existing summary.
     pub fn from_parts(
         count_min_sketch: CountMinSketch<S, M, H>,

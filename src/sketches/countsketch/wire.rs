@@ -456,17 +456,14 @@ mod tests {
         );
     }
 
-    /// More rows than the seed list has seeds is outside the wire-eligible
-    /// subset, on both sides.
+    /// More rows than the seed list has seeds is refused by the constructors
+    /// and by the decoder.
     #[test]
     fn count_sketch_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
-        assert!(
-            CountSketch::<Vector2D<i64>, RegularPath>::with_dimensions(rows, 8)
-                .to_asapv1()
-                .is_err(),
-            "a matrix past MATRIX_MAX_ROWS must not serialize"
-        );
+        let problem = CountSketch::<Vector2D<i64>, RegularPath>::check_shape(rows, 8)
+            .expect_err("a matrix past MATRIX_MAX_ROWS must not be built");
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
 
         let metadata = rmp_serde::to_vec_named(&cs_metadata::<DefaultXxHasher>(
             rows as u32,
@@ -510,17 +507,9 @@ mod tests {
     /// but is refused on decode, so serializing it must fail rather than emit
     /// bytes the format would not read back.
     #[test]
-    fn count_sketch_rejects_serializing_zero_rows() {
-        let sketch = CountSketch::<Vector2D<i64>, RegularPath>::from_storage(Vector2D::from_fn(
-            0,
-            4,
-            |_, _| 0i64,
-        ));
-        assert_eq!(sketch.rows(), 0);
-        let problem = sketch
-            .to_asapv1()
-            .expect_err("a zero-row matrix must not serialize")
-            .to_string();
+    fn count_sketch_rejects_zero_rows() {
+        let problem = CountSketch::<Vector2D<i64>, RegularPath>::check_shape(0, 4)
+            .expect_err("a zero-row matrix must not be built");
         assert!(problem.contains("non-zero"), "got {problem}");
     }
 

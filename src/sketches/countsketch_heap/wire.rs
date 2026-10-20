@@ -353,17 +353,14 @@ mod tests {
         assert!(problem.contains("!= rows*cols"), "got {problem}");
     }
 
-    /// More rows than the seed list has seeds is outside the wire-eligible
-    /// subset, on both sides.
+    /// More rows than the seed list has seeds is refused by the constructors
+    /// and by the decoder.
     #[test]
     fn count_sketch_with_heap_rejects_too_many_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
-        assert!(
-            CountSketchWithHeap::<Vector2D<i64>, RegularPath>::new(rows, 8, 4)
-                .to_asapv1()
-                .is_err(),
-            "a matrix past MATRIX_MAX_ROWS must not serialize"
-        );
+        let problem = CountSketchWithHeap::<Vector2D<i64>, RegularPath>::check_shape(rows, 8)
+            .expect_err("a matrix past MATRIX_MAX_ROWS must not be built");
+        assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");
 
         let problem = decode_error(&crafted(rows as u32, 8, 4, vec![0; rows * 8]));
         assert!(problem.contains("MATRIX_MAX_ROWS"), "got {problem}");

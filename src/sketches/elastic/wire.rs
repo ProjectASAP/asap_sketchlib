@@ -300,10 +300,11 @@ mod tests {
     fn elastic_rejects_too_many_light_rows() {
         let rows = MATRIX_MAX_ROWS + 1;
         assert!(
-            ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(4, rows, 256)
-                .to_asapv1()
-                .is_err(),
-            "a light layer past MATRIX_MAX_ROWS must not serialize"
+            std::panic::catch_unwind(|| {
+                ElasticSketch::<DefaultXxHasher>::with_heavy_and_light(4, rows, 256)
+            })
+            .is_err(),
+            "a light layer past MATRIX_MAX_ROWS must not be built"
         );
 
         let metadata =

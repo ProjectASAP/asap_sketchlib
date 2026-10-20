@@ -44,11 +44,27 @@ where
     T: Copy + Default + std::ops::AddAssign + HeapCounter,
 {
     /// Creates a new `CountMinSketchWithHeap` with the given CMS dimensions and heap capacity.
+    ///
+    /// Panics when [`Self::check_shape`] refuses `rows` x `cols`.
     pub fn new(rows: usize, cols: usize, heap_size: usize) -> Self {
         CountMinSketchWithHeap {
             count_min_sketch: CountMinSketch::with_dimensions(rows, cols),
             heap: TopKHeap::new(heap_size),
         }
+    }
+
+    /// Bytes a sketch built by [`Self::new`]`(rows, cols, heap_size)` holds once
+    /// its heap is full of keys shaped like `key`: the struct, the counters and
+    /// [`TopKHeap::estimated_memory_bytes`].
+    pub fn estimated_memory_bytes(
+        rows: usize,
+        cols: usize,
+        heap_size: usize,
+        key: &DataInput,
+    ) -> usize {
+        size_of::<Self>() - size_of::<TopKHeap<T::HeapCount>>()
+            + rows.saturating_mul(cols).saturating_mul(size_of::<T>())
+            + TopKHeap::<T::HeapCount>::estimated_memory_bytes(heap_size, key)
     }
 }
 
@@ -59,6 +75,8 @@ where
     S::Counter: HeapCounter,
 {
     /// Creates a `CountMinSketchWithHeap` from a pre-built storage backend.
+    ///
+    /// Panics when [`Self::check_shape`] refuses the storage's shape.
     pub fn from_storage(storage: S, heap_size: usize) -> Self {
         CountMinSketchWithHeap {
             count_min_sketch: CountMinSketch::from_storage(storage),
@@ -207,8 +225,33 @@ where
         self.count_min_sketch.cols()
     }
 
-    /// Clears both the CMS counters (by rebuilding) and the heap.
+    /// Empties the heavy-hitter heap; the counters are kept.
     pub fn clear_heap(&mut self) {
+        self.heap.clear();
+    }
+
+    /// The shapes this sketch builds; see [`CountMinSketch::check_shape`].
+    pub fn check_shape(rows: usize, cols: usize) -> Result<(), String> {
+        CountMinSketch::<S, M, H>::check_shape(rows, cols)
+    }
+
+    /// Bytes this sketch holds: the struct, its `rows * cols` counters and
+    /// [`TopKHeap::memory_bytes`].
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() - size_of::<TopKHeap<HeapCountOf<S>>>()
+            + self.rows() * self.cols() * size_of::<S::Counter>()
+            + self.heap.memory_bytes()
+    }
+}
+
+impl<S: MatrixStorage, M, H: SketchHasher> CountMinSketchWithHeap<S, M, H>
+where
+    S::Counter: Copy + std::ops::AddAssign + From<i32> + HeapCounter,
+{
+    /// Zeroes the counters and empties the heap, keeping the shape and the
+    /// allocations.
+    pub fn clear(&mut self) {
+        self.count_min_sketch.clear();
         self.heap.clear();
     }
 }
@@ -333,6 +376,32 @@ mod tests {
     use crate::DataInput;
     use crate::test_utils::sample_zipf_u64;
     use std::collections::{HashMap, HashSet};
+
+    /// `clear` zeroes the counters and empties the heap, keeping the shape and
+    /// the memory held; `check_shape` is the matrix's.
+    #[test]
+    fn clear_empties_counters_and_heap_and_keeps_the_allocation() {
+        let mut sketch = CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::new(3, 64, 8);
+        for i in 0..2_000u64 {
+            sketch.update(&DataInput::U64(i % 50));
+        }
+        assert_eq!(sketch.heap().len(), 8);
+        let held = sketch.memory_bytes();
+        sketch.clear();
+        assert_eq!((sketch.rows(), sketch.cols()), (3, 64));
+        assert!(sketch.heap().is_empty());
+        assert!(
+            sketch
+                .count_min_sketch()
+                .as_storage()
+                .as_slice()
+                .iter()
+                .all(|&c| c == 0)
+        );
+        assert_eq!(sketch.memory_bytes(), held);
+        assert!(CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::check_shape(21, 64).is_err());
+        assert!(CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::check_shape(20, 64).is_ok());
+    }
 
     fn heap_count_for_key<C: crate::HeapCount>(heap: &TopKHeap<C>, key: &DataInput) -> Option<C> {
         heap.heap()

@@ -663,6 +663,10 @@ where
         self.rows()
     }
 
+    fn reset_sampler(&mut self) {
+        self.nitro.reset();
+    }
+
     #[inline(always)]
     fn cols(&self) -> usize {
         self.cols()

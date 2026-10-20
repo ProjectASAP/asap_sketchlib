@@ -127,6 +127,16 @@ signals a backwards-compatible change.
 - **`TopKHeap::estimated_memory_bytes(heap_size, key)`**: the bytes a heap
   of that capacity holds in steady state once keys shaped like `key` churn
   through it.
+- **`check_shape(rows, cols)`** on `CountMinSketch`, `CountSketch`, their
+  WithHeap and WithSpaceSaving forms: the shapes their constructors build.
+- **`clear`** on `CountMinSketch`, `CountSketch` and their WithHeap forms:
+  zeroes the counters (and empties the heap) and returns the Nitro sampler to
+  its start, keeping shape and allocation. With it, `Nitro::reset` and
+  `MatrixStorage::reset_sampler` (a no-op by default; `Vector2D` resets its
+  Nitro).
+- **`TopKHeap::memory_bytes`**, and **`memory_bytes` and
+  `estimated_memory_bytes(rows, cols, heap_size, key)`** on
+  `CountMinSketchWithHeap` and `CountSketchWithHeap`.
 
 ### Changed
 
@@ -355,6 +365,12 @@ signals a backwards-compatible change.
   (breaking) and counts what the instance holds now. Across the crate,
   `memory_bytes(&self)` is what an instance holds and
   `estimated_memory_bytes(<shape>)` prices a shape before building.
+- **`CountMinSketch`, `CountSketch`, their WithHeap and WithSpaceSaving forms
+  refuse shapes outside the ASAPv1 geometry** (breaking): their constructors
+  and `from_storage` panic unless `1 <= rows <= MATRIX_MAX_ROWS` (20) and
+  `1 <= cols <= u32::MAX`, on every hashing path. Past 20 rows the regular
+  path and the fast path's per-row (`Rows`) layout would reuse row `r`'s seed
+  for row `r + 20`; the packed layouts reuse no seed.
 
 ### Removed
 

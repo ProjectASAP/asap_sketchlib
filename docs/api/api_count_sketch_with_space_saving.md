@@ -21,7 +21,10 @@ of `k`.
 ```rust
 fn new(rows: usize, cols: usize, capacity: usize) -> Self
 fn from_parts(count_sketch: CountSketch<S, M, H>, space_saving: SpaceSaving<H>) -> Self
+fn check_shape(rows: usize, cols: usize) -> Result<(), String>
 ```
+
+`check_shape` is `CountSketch::check_shape`; `new` panics on a shape it refuses.
 
 ## Insert/Update
 

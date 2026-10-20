@@ -44,13 +44,15 @@ fn heap(&self) -> &[HeapEntry<C>]
 fn len(&self) -> usize
 fn is_empty(&self) -> bool
 fn capacity(&self) -> usize
+fn memory_bytes(&self) -> usize
 fn estimated_memory_bytes(heap_size: usize, key: &DataInput) -> usize
 ```
 
-`estimated_memory_bytes` is the bytes a heap of capacity `heap_size` holds in
-steady state once keys shaped like `key` (owned string or byte length; 0 for a
-number) churn through it, for pricing a heap before building one. A heap holds
-at most this, and exactly this once evictions have resized its index.
+`memory_bytes` is the bytes the heap holds now. `estimated_memory_bytes` is the
+bytes a heap of capacity `heap_size` holds in steady state once keys shaped like
+`key` (owned string or byte length; 0 for a number) churn through it, for
+pricing a heap before building one. A heap holds at most this, and exactly this
+once evictions have resized its index.
 
 ## Merge
 

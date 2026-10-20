@@ -75,6 +75,8 @@ pub struct TopKHeap<C: HeapCount = i64> {
     /// the index without re-hashing the keys it moves.
     slots: Vec<u64>,
     positions: Index,
+    /// Largest `positions.capacity()` seen, which gives the index's buckets.
+    index_peak: usize,
     heap_size: usize,
 }
 
@@ -92,10 +94,12 @@ impl<C: HeapCount> TopKHeap<C> {
     /// entries to fill.
     pub fn with_expected_len(heap_size: usize, expected_len: usize) -> Self {
         let reserved = expected_len.min(heap_size).min(PREALLOCATED_SLOTS);
+        let positions = Index::with_capacity_and_hasher(reserved, DigestBuildHasher::default());
         TopKHeap {
             heap: CommonHeap::with_expected_len(heap_size, expected_len, RetainLargest),
             slots: Vec::with_capacity(reserved),
-            positions: Index::with_capacity_and_hasher(reserved, DigestBuildHasher::default()),
+            index_peak: positions.capacity(),
+            positions,
             heap_size,
         }
     }
@@ -191,6 +195,32 @@ impl<C: HeapCount> TopKHeap<C> {
         self.heap_size
     }
 
+    /// Bytes this heap holds: the struct, the allocated entry and digest
+    /// slots, the digest index and the residents' owned key bytes.
+    pub fn memory_bytes(&self) -> usize {
+        let keys: usize = self
+            .heap
+            .iter()
+            .map(|entry| match &entry.key {
+                OwnedDataInput::String(s) => s.capacity(),
+                OwnedDataInput::Bytes(b) => b.capacity(),
+                _ => 0,
+            })
+            .sum();
+        let spilled: usize = self
+            .positions
+            .values()
+            .filter(|slot| slot.spilled())
+            .map(|slot| slot.capacity() * size_of::<usize>())
+            .sum();
+        size_of::<Self>()
+            + self.heap.allocated_slots() * size_of::<HeapEntry<C>>()
+            + self.slots.capacity() * size_of::<u64>()
+            + hash_map_bytes::<(u64, Slot)>(self.index_peak)
+            + keys
+            + spilled
+    }
+
     /// Bytes a heap built by [`Self::new`]`(heap_size)` holds in steady state
     /// once keys shaped like `key` churn through it: the struct, the entry and
     /// digest arrays, the digest index and each resident's owned key bytes.
@@ -262,6 +292,7 @@ impl<C: HeapCount> TopKHeap<C> {
             } = self;
             heap.replace_root_with(item, &mut |i, j| swap_entry(slots, positions, i, j));
         }
+        self.index_peak = self.index_peak.max(self.positions.capacity());
     }
 
     #[inline]

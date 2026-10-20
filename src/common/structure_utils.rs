@@ -67,6 +67,8 @@ pub struct Nitro {
     /// splitmix64 state for the stochastic-rounding draw, advanced once per
     /// admitted slot whose `1/p` is not an integer.
     rounding_state: u64,
+    /// Seed this state was built from, so [`Nitro::reset`] can return to it.
+    seed: Option<u64>,
 }
 
 /// Seed the rounding stream starts from when it is not seeded explicitly.
@@ -104,6 +106,7 @@ impl Default for Nitro {
             idx: 0,
             mask: LN_ONE_MINUS_U_TABLE_LEN - 1,
             rounding_state: ROUNDING_SEED,
+            seed: None,
         }
     }
 }
@@ -138,6 +141,15 @@ impl Nitro {
         Self::seeded_from(rate, Some(seed))
     }
 
+    /// Returns the sampler to the state its constructor built: the same rate,
+    /// skip cursor, first skip and rounding stream. A disabled one stays
+    /// disabled.
+    pub fn reset(&mut self) {
+        if self.is_nitro_mode {
+            *self = Self::seeded_from(self.sampling_rate, self.seed);
+        }
+    }
+
     fn seeded_from(rate: f64, seed: Option<u64>) -> Self {
         assert!(
             !rate.is_nan() && rate > 0.0 && rate <= 1.0,
@@ -160,6 +172,7 @@ impl Nitro {
                 Some(0) | None => ROUNDING_SEED,
                 Some(s) => s,
             },
+            seed,
         };
         nitro.delta = nitro.scaled_increment(1);
         // The cursor is in place, so this reads the seed's own stretch of the

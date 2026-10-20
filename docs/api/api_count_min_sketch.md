@@ -16,7 +16,14 @@ Approximate frequency estimation with sub-linear memory.
 fn default() -> Self
 fn with_dimensions(rows: usize, cols: usize) -> Self
 fn from_storage(counts: S) -> Self
+fn check_shape(rows: usize, cols: usize) -> Result<(), String>
 ```
+
+`check_shape` accepts the ASAPv1 geometry, `1 <= rows <= MATRIX_MAX_ROWS` (20)
+and `1 <= cols <= u32::MAX`, on every hashing path; `with_dimensions` and
+`from_storage` panic on any other shape. Past 20 rows the regular path and the
+fast path's per-row (`Rows`) layout would hash row `r + 20` with row `r`'s
+seed; the packed layouts carve one hash and reuse no seed.
 
 ## Insert/Update
 
@@ -27,7 +34,11 @@ fn update_batch(&mut self, values: &[DataInput])
 fn update_weighted_batch(&mut self, values: &[(DataInput, S::Counter)])
 fn update_with_hash(&mut self, hashed_val: &H::HashType)
 fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, weight: S::Counter)
+fn clear(&mut self)
 ```
+
+`clear` zeroes every counter and returns the Nitro sampler to its start, keeping
+the shape, allocation and admission rate.
 
 ## Query
 
