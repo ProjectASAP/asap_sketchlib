@@ -65,13 +65,13 @@ pub trait SketchHasher: Clone + Debug {
     type HashType: MatrixFastHash + Clone + Debug;
 
     /// Hashes an input into a 64-bit value with the selected seed.
-    fn hash64_seeded(d: usize, key: &DataInput) -> u64;
+    fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64;
     /// Hashes an input into a 128-bit value with the selected seed.
-    fn hash128_seeded(d: usize, key: &DataInput) -> u128;
+    fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128;
     /// Hashes a heap-owned key into a 64-bit value with the selected seed.
-    fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64;
+    fn hash64_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u64;
     /// Hashes a heap-owned key into a 128-bit value with the selected seed.
-    fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128;
+    fn hash128_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u128;
 
     /// Produces the matrix hash form used by matrix-backed sketches.
     fn hash_for_matrix_seeded(
@@ -130,8 +130,8 @@ impl SketchHasher for DefaultXxHasher {
     type HashType = MatrixHash;
 
     #[inline(always)]
-    fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
-        let seed = SEED_LIST[normalized_seed_index(d)];
+    fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64 {
+        let seed = SEED_LIST[normalized_seed_index(seed_index)];
         match key {
             DataInput::I32(i) => XxHash3_64::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
             DataInput::I64(i) => XxHash3_64::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
@@ -154,8 +154,8 @@ impl SketchHasher for DefaultXxHasher {
     }
 
     #[inline(always)]
-    fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
-        let seed = SEED_LIST[normalized_seed_index(d)];
+    fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128 {
+        let seed = SEED_LIST[normalized_seed_index(seed_index)];
         match key {
             DataInput::I32(i) => XxHash3_128::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
             DataInput::I64(i) => XxHash3_128::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes()),
@@ -178,8 +178,8 @@ impl SketchHasher for DefaultXxHasher {
     }
 
     #[inline(always)]
-    fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128 {
-        let seed = SEED_LIST[normalized_seed_index(d)];
+    fn hash128_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u128 {
+        let seed = SEED_LIST[normalized_seed_index(seed_index)];
         match key {
             OwnedDataInput::I32(i) => {
                 XxHash3_128::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes())
@@ -221,8 +221,8 @@ impl SketchHasher for DefaultXxHasher {
     }
 
     #[inline(always)]
-    fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64 {
-        let seed = SEED_LIST[normalized_seed_index(d)];
+    fn hash64_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u64 {
+        let seed = SEED_LIST[normalized_seed_index(seed_index)];
         match key {
             OwnedDataInput::I32(i) => {
                 XxHash3_64::oneshot_with_seed(seed, &(*i as u64).to_ne_bytes())
@@ -323,28 +323,28 @@ pub type DigestBuildHasher = std::hash::BuildHasherDefault<DigestHasher>;
 
 /// I32, U32, F32 will all be treated as 64-bit value.
 #[inline(always)]
-pub fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
-    DefaultXxHasher::hash64_seeded(d, key)
+pub fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64 {
+    DefaultXxHasher::hash64_seeded(seed_index, key)
 }
 
 #[inline(always)]
 /// Hashes an input into a 128-bit value with the selected seed.
-pub fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
-    DefaultXxHasher::hash128_seeded(d, key)
+pub fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128 {
+    DefaultXxHasher::hash128_seeded(seed_index, key)
 }
 
 // for speed, add separate function
 /// Hashes a heap-owned key into a 128-bit value with the selected seed.
 #[inline(always)]
-pub fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128 {
-    DefaultXxHasher::hash128_seeded_owned(d, key)
+pub fn hash128_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u128 {
+    DefaultXxHasher::hash128_seeded_owned(seed_index, key)
 }
 
 // for speed, add separate function
 /// Hashes a heap-owned key into a 64-bit value with the selected seed.
 #[inline(always)]
-pub fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64 {
-    DefaultXxHasher::hash64_seeded_owned(d, key)
+pub fn hash64_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u64 {
+    DefaultXxHasher::hash64_seeded_owned(seed_index, key)
 }
 
 // ---------------------------------------------------------------------------
@@ -401,30 +401,30 @@ pub fn hash_for_matrix_seeded(
     cols: usize,
     key: &DataInput,
 ) -> MatrixHash {
-    let mode = hash_layout_for_matrix(rows, cols);
-    hash_for_matrix_seeded_with_layout(seed_index, mode, rows, key)
+    let layout = hash_layout_for_matrix(rows, cols);
+    hash_for_matrix_seeded_with_layout(seed_index, layout, rows, key)
 }
 
-/// Creates a fast-path hash using a pre-selected hash mode.
+/// Creates a fast-path hash using a pre-selected hash layout.
 #[inline(always)]
 pub fn hash_for_matrix_seeded_with_layout(
     seed_index: usize,
-    mode: MatrixHashLayout,
+    layout: MatrixHashLayout,
     rows: usize,
     key: &DataInput,
 ) -> MatrixHash {
-    hash_for_matrix_seeded_with_layout_generic::<DefaultXxHasher>(seed_index, mode, rows, key)
+    hash_for_matrix_seeded_with_layout_generic::<DefaultXxHasher>(seed_index, layout, rows, key)
 }
 
 /// Generic version of matrix hash that uses a custom hasher.
 #[inline(always)]
 pub fn hash_for_matrix_seeded_with_layout_generic<H: SketchHasher>(
     seed_index: usize,
-    mode: MatrixHashLayout,
+    layout: MatrixHashLayout,
     rows: usize,
     key: &DataInput,
 ) -> MatrixHash {
-    match mode {
+    match layout {
         MatrixHashLayout::Packed64 => {
             MatrixHash::Packed64(H::hash64_seeded(seed_index % SEED_LIST.len(), key))
         }
@@ -459,8 +459,8 @@ pub fn hash_for_matrix_seeded_generic<H: SketchHasher>(
     cols: usize,
     key: &DataInput,
 ) -> MatrixHash {
-    let mode = hash_layout_for_matrix(rows, cols);
-    hash_for_matrix_seeded_with_layout_generic::<H>(seed_index, mode, rows, key)
+    let layout = hash_layout_for_matrix(rows, cols);
+    hash_for_matrix_seeded_with_layout_generic::<H>(seed_index, layout, rows, key)
 }
 
 #[cfg(test)]
@@ -475,20 +475,20 @@ mod tests {
     impl SketchHasher for Packed64Hasher {
         type HashType = u64;
 
-        fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
-            DefaultXxHasher::hash64_seeded(d, key)
+        fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(seed_index, key)
         }
 
-        fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
-            DefaultXxHasher::hash128_seeded(d, key)
+        fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(seed_index, key)
         }
 
-        fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64 {
-            DefaultXxHasher::hash64_seeded_owned(d, key)
+        fn hash64_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(seed_index, key)
         }
 
-        fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128 {
-            DefaultXxHasher::hash128_seeded_owned(d, key)
+        fn hash128_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(seed_index, key)
         }
 
         fn hash_for_matrix_seeded(
@@ -508,20 +508,20 @@ mod tests {
     impl SketchHasher for Packed128Hasher {
         type HashType = u128;
 
-        fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
-            DefaultXxHasher::hash64_seeded(d, key)
+        fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(seed_index, key)
         }
 
-        fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
-            DefaultXxHasher::hash128_seeded(d, key)
+        fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(seed_index, key)
         }
 
-        fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64 {
-            DefaultXxHasher::hash64_seeded_owned(d, key)
+        fn hash64_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(seed_index, key)
         }
 
-        fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128 {
-            DefaultXxHasher::hash128_seeded_owned(d, key)
+        fn hash128_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(seed_index, key)
         }
 
         fn hash_for_matrix_seeded(

@@ -32,17 +32,17 @@ pub const DEFAULT_CANONICAL_SEED_INDEX: usize
 pub const UNIVMON_BOTTOM_LAYER_SEED_INDEX: usize
 pub const HYDRA_SEED_INDEX: usize
 
-fn hash64_seeded(d: usize, key: &DataInput) -> u64
-fn hash128_seeded(d: usize, key: &DataInput) -> u128
-fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64
-fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128
+fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64
+fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128
+fn hash64_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u64
+fn hash128_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u128
 fn hash_layout_for_matrix(rows: usize, cols: usize) -> MatrixHashLayout
 fn hash_for_matrix(rows: usize, cols: usize, key: &DataInput) -> MatrixHash
 fn hash_for_matrix_seeded(seed_index: usize, rows: usize, cols: usize, key: &DataInput) -> MatrixHash
-fn hash_for_matrix_seeded_with_layout(seed_index: usize, mode: MatrixHashLayout, rows: usize, key: &DataInput) -> MatrixHash
+fn hash_for_matrix_seeded_with_layout(seed_index: usize, layout: MatrixHashLayout, rows: usize, key: &DataInput) -> MatrixHash
 fn hash_for_matrix_seeded_with_layout_generic<H: SketchHasher>(
     seed_index: usize,
-    mode: MatrixHashLayout,
+    layout: MatrixHashLayout,
     rows: usize,
     key: &DataInput,
 ) -> MatrixHash

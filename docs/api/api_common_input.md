@@ -26,8 +26,8 @@ fn heap_item_to_sketch_input(item: &OwnedDataInput) -> DataInput<'_>
 fn input_to_owned(input: &DataInput<'_>) -> OwnedDataInput
 
 // HeapEntry<C>
-fn new(k: DataInput, count: C) -> Self
-fn create_item(k: OwnedDataInput, count: C) -> Self
+fn from_input(k: DataInput, count: C) -> Self
+fn new(key: OwnedDataInput, count: C) -> Self
 fn init_item(k: DataInput, count: C) -> Self
 ```
 

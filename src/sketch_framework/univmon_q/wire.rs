@@ -745,17 +745,17 @@ mod tests {
     impl SketchHasher for AltHasher {
         type HashType = <DefaultXxHasher as SketchHasher>::HashType;
 
-        fn hash64_seeded(d: usize, key: &DataInput) -> u64 {
-            DefaultXxHasher::hash64_seeded(d, key)
+        fn hash64_seeded(seed_index: usize, key: &DataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded(seed_index, key)
         }
-        fn hash128_seeded(d: usize, key: &DataInput) -> u128 {
-            DefaultXxHasher::hash128_seeded(d, key)
+        fn hash128_seeded(seed_index: usize, key: &DataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded(seed_index, key)
         }
-        fn hash64_seeded_owned(d: usize, key: &OwnedDataInput) -> u64 {
-            DefaultXxHasher::hash64_seeded_owned(d, key)
+        fn hash64_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u64 {
+            DefaultXxHasher::hash64_seeded_owned(seed_index, key)
         }
-        fn hash128_seeded_owned(d: usize, key: &OwnedDataInput) -> u128 {
-            DefaultXxHasher::hash128_seeded_owned(d, key)
+        fn hash128_seeded_owned(seed_index: usize, key: &OwnedDataInput) -> u128 {
+            DefaultXxHasher::hash128_seeded_owned(seed_index, key)
         }
         fn hash_for_matrix_seeded(
             seed_index: usize,

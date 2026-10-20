@@ -23,7 +23,7 @@ index is patched through each sift: `update` costs one hash, one map probe and
 ## Constructors
 
 ```rust
-fn new(k: usize) -> Self
+fn new(heap_size: usize) -> Self
 fn from_heap(other: &TopKHeap<C>) -> Self
 ```
 

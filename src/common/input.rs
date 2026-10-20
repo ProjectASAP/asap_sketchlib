@@ -573,8 +573,8 @@ pub struct HeapEntry<C: HeapCount = i64> {
 }
 
 impl<C: HeapCount> HeapEntry<C> {
-    /// Creates a new Item with the given key and count.
-    pub fn new(k: DataInput, count: C) -> Self {
+    /// Creates an entry by copying a borrowed input.
+    pub fn from_input(k: DataInput, count: C) -> Self {
         HeapEntry {
             key: input_to_owned(&k),
             count,
@@ -582,8 +582,8 @@ impl<C: HeapCount> HeapEntry<C> {
     }
 
     /// Creates an item from an already-owned key.
-    pub fn create_item(k: OwnedDataInput, count: C) -> Self {
-        HeapEntry { key: k, count }
+    pub fn new(key: OwnedDataInput, count: C) -> Self {
+        HeapEntry { key, count }
     }
 
     /// Legacy constructor for compatibility.

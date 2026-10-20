@@ -39,17 +39,17 @@ use crate::{
 use std::marker::PhantomData;
 
 // Pre-computed hash configuration derived from matrix dimensions.
-// Stored once so `hash_input` can avoid recomputing the mode on every call.
+// Stored once so `hash_input` can avoid recomputing the layout on every call.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct HashConfig {
-    mode: MatrixHashLayout,
+    layout: MatrixHashLayout,
     rows: usize,
 }
 
 impl HashConfig {
     fn from_dimensions(rows: usize, cols: usize) -> Self {
         HashConfig {
-            mode: hash_layout_for_matrix(rows, cols),
+            layout: hash_layout_for_matrix(rows, cols),
             rows,
         }
     }
@@ -58,7 +58,7 @@ impl HashConfig {
     where
         H: SketchHasher<HashType = MatrixHash>,
     {
-        hash_for_matrix_seeded_with_layout_generic::<H>(0, self.mode, self.rows, input)
+        hash_for_matrix_seeded_with_layout_generic::<H>(0, self.layout, self.rows, input)
     }
 }
 

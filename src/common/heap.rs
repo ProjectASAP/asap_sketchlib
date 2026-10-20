@@ -69,7 +69,7 @@ type Index = HashMap<u64, Slot, DigestBuildHasher>;
 #[serde(bound = "")]
 struct TopKHeapState<C: HeapCount> {
     heap: CommonHeap<HeapEntry<C>, RetainLargest>,
-    k: usize,
+    heap_size: usize,
 }
 
 /// Bounded min-heap over [`HeapEntry`] with key lookup, retaining the `k` largest
@@ -84,7 +84,7 @@ pub struct TopKHeap<C: HeapCount = i64> {
     slots: Vec<u64>,
     #[serde(skip)]
     positions: Index,
-    k: usize,
+    heap_size: usize,
 }
 
 impl<C: HeapCount> From<TopKHeapState<C>> for TopKHeap<C> {
@@ -93,7 +93,7 @@ impl<C: HeapCount> From<TopKHeapState<C>> for TopKHeap<C> {
             heap: state.heap,
             slots: Vec::new(),
             positions: Index::default(),
-            k: state.k,
+            heap_size: state.heap_size,
         };
         heap.rebuild_index();
         heap
@@ -101,23 +101,24 @@ impl<C: HeapCount> From<TopKHeapState<C>> for TopKHeap<C> {
 }
 
 impl<C: HeapCount> TopKHeap<C> {
-    /// Creates a new TopKHeap with capacity k.
-    pub fn new(k: usize) -> Self {
-        Self::with_expected_len(k, k)
+    /// Creates a new TopKHeap with capacity `heap_size`.
+    pub fn new(heap_size: usize) -> Self {
+        Self::with_expected_len(heap_size, heap_size)
     }
 
-    /// Creates a heap of capacity `k` whose heap array and index reserve for
-    /// `expected_len` residents rather than for `k`. Capacity semantics are
-    /// unchanged — [`Self::capacity`] is still `k`, and the heap still turns a
-    /// key away once it holds `k` — so this only moves the reservation off a
-    /// declared capacity the caller does not yet have the entries to fill.
-    pub fn with_expected_len(k: usize, expected_len: usize) -> Self {
-        let reserved = expected_len.min(k).min(PREALLOCATED_SLOTS);
+    /// Creates a heap of capacity `heap_size` whose heap array and index reserve
+    /// for `expected_len` residents rather than for `heap_size`. Capacity
+    /// semantics are unchanged — [`Self::capacity`] is still `heap_size`, and the
+    /// heap still turns a key away once it holds `heap_size` — so this only moves
+    /// the reservation off a declared capacity the caller does not yet have the
+    /// entries to fill.
+    pub fn with_expected_len(heap_size: usize, expected_len: usize) -> Self {
+        let reserved = expected_len.min(heap_size).min(PREALLOCATED_SLOTS);
         TopKHeap {
-            heap: CommonHeap::with_expected_len(k, expected_len, RetainLargest),
+            heap: CommonHeap::with_expected_len(heap_size, expected_len, RetainLargest),
             slots: Vec::with_capacity(reserved),
             positions: Index::with_capacity_and_hasher(reserved, DigestBuildHasher::default()),
-            k,
+            heap_size,
         }
     }
 
@@ -144,7 +145,7 @@ impl<C: HeapCount> TopKHeap<C> {
             return true;
         }
 
-        let retained_every_key = self.heap.len() < self.k;
+        let retained_every_key = self.heap.len() < self.heap_size;
         if !self.should_accept_new(count) {
             return retained_every_key;
         }
@@ -162,7 +163,7 @@ impl<C: HeapCount> TopKHeap<C> {
             return true;
         }
 
-        let retained_every_key = self.heap.len() < self.k;
+        let retained_every_key = self.heap.len() < self.heap_size;
         if !self.should_accept_new(count) {
             return retained_every_key;
         }
@@ -209,7 +210,7 @@ impl<C: HeapCount> TopKHeap<C> {
 
     /// Returns the capacity of the heap.
     pub fn capacity(&self) -> usize {
-        self.k
+        self.heap_size
     }
 
     // -- index maintenance ---------------------------------------------------
@@ -237,8 +238,8 @@ impl<C: HeapCount> TopKHeap<C> {
     /// Places a key the heap has decided to accept, evicting the root when the
     /// heap is already at capacity.
     fn seat(&mut self, key: OwnedDataInput, slot: u64, count: C) {
-        let item = HeapEntry::create_item(key, count);
-        if self.heap.len() < self.k {
+        let item = HeapEntry::new(key, count);
+        if self.heap.len() < self.heap_size {
             let idx = self.heap.len();
             self.slots.push(slot);
             self.positions.entry(slot).or_default().push(idx);
@@ -284,10 +285,10 @@ impl<C: HeapCount> TopKHeap<C> {
 
     #[inline]
     fn should_accept_new(&self, count: C) -> bool {
-        if self.k == 0 {
+        if self.heap_size == 0 {
             return false;
         }
-        if self.heap.len() < self.k {
+        if self.heap.len() < self.heap_size {
             return true;
         }
         debug_assert!(
@@ -542,9 +543,9 @@ mod tests {
     #[test]
     fn test_custom_struct_with_ord() {
         let mut heap = CommonHeap::<HeapEntry, RetainLargest>::new_min(3);
-        heap.push(HeapEntry::new(DataInput::String("five".to_owned()), 5));
-        heap.push(HeapEntry::new(DataInput::String("three".to_owned()), 3));
-        heap.push(HeapEntry::new(DataInput::String("seven".to_owned()), 7));
+        heap.push(HeapEntry::from_input(DataInput::String("five".to_owned()), 5));
+        heap.push(HeapEntry::from_input(DataInput::String("three".to_owned()), 3));
+        heap.push(HeapEntry::from_input(DataInput::String("seven".to_owned()), 7));
 
         assert_eq!(heap.peek().map(|item| item.count), Some(3));
     }
@@ -559,7 +560,7 @@ mod tests {
 
         // Insert items (simulating TopKHeap behavior)
         for i in 1..=5 {
-            heap.push(HeapEntry::new(
+            heap.push(HeapEntry::from_input(
                 DataInput::String(format!("key-{i}").to_owned()),
                 i,
             ));
@@ -618,11 +619,11 @@ mod tests {
 
         let mut heap = CommonHeap::<HeapEntry, CompareByCount>::with_capacity(3, CompareByCount);
 
-        heap.push(HeapEntry::new(DataInput::String("a".to_owned()), 5));
-        heap.push(HeapEntry::new(DataInput::String("b".to_owned()), 3));
-        heap.push(HeapEntry::new(DataInput::String("c".to_owned()), 7));
-        heap.push(HeapEntry::new(DataInput::String("d".to_owned()), 1)); // Won't be added
-        heap.push(HeapEntry::new(DataInput::String("e".to_owned()), 10)); // Will replace min
+        heap.push(HeapEntry::from_input(DataInput::String("a".to_owned()), 5));
+        heap.push(HeapEntry::from_input(DataInput::String("b".to_owned()), 3));
+        heap.push(HeapEntry::from_input(DataInput::String("c".to_owned()), 7));
+        heap.push(HeapEntry::from_input(DataInput::String("d".to_owned()), 1)); // Won't be added
+        heap.push(HeapEntry::from_input(DataInput::String("e".to_owned()), 10)); // Will replace min
 
         assert_eq!(heap.len(), 3);
         let min_count = heap.peek().map(|item| item.count);
@@ -650,7 +651,7 @@ mod tests {
                     heap.update_at(idx);
                 } else {
                     // Not found: insert (TopKHeap::insert equivalent)
-                    heap.push(HeapEntry::new(DataInput::Str(key), count));
+                    heap.push(HeapEntry::from_input(DataInput::Str(key), count));
                 }
             };
 
@@ -692,23 +693,23 @@ mod tests {
 
         let mut smallest = CommonHeap::<HeapEntry, RetainLargest>::new_min(3);
         for (name, count) in [("a", 5i64), ("b", 7), ("c", 9)] {
-            smallest.push(HeapEntry::new(DataInput::Str(name), count));
+            smallest.push(HeapEntry::from_input(DataInput::Str(name), count));
         }
-        smallest.push(HeapEntry::new(DataInput::Str("tie"), 5));
+        smallest.push(HeapEntry::from_input(DataInput::Str("tie"), 5));
         assert!(resident(&smallest, "a"), "the tied root was displaced");
         assert!(!resident(&smallest, "tie"));
-        smallest.push(HeapEntry::new(DataInput::Str("larger"), 6));
+        smallest.push(HeapEntry::from_input(DataInput::Str("larger"), 6));
         assert!(!resident(&smallest, "a"));
         assert!(resident(&smallest, "larger"));
 
         let mut largest = CommonHeap::<HeapEntry, RetainSmallest>::new_max(3);
         for (name, count) in [("a", 9i64), ("b", 7), ("c", 5)] {
-            largest.push(HeapEntry::new(DataInput::Str(name), count));
+            largest.push(HeapEntry::from_input(DataInput::Str(name), count));
         }
-        largest.push(HeapEntry::new(DataInput::Str("tie"), 9));
+        largest.push(HeapEntry::from_input(DataInput::Str("tie"), 9));
         assert!(resident(&largest, "a"), "the tied root was displaced");
         assert!(!resident(&largest, "tie"));
-        largest.push(HeapEntry::new(DataInput::Str("smaller"), 8));
+        largest.push(HeapEntry::from_input(DataInput::Str("smaller"), 8));
         assert!(!resident(&largest, "a"));
         assert!(resident(&largest, "smaller"));
     }
@@ -1126,7 +1127,7 @@ mod differential {
             }
 
             let owned = input_to_owned(key);
-            self.heap.push(HeapEntry::create_item(owned, count));
+            self.heap.push(HeapEntry::new(owned, count));
             self.refresh_positions();
             retained_every_key
         }
@@ -1180,7 +1181,7 @@ mod differential {
             }
             if self.residents.len() < self.k {
                 self.residents
-                    .push(HeapEntry::create_item(input_to_owned(key), count));
+                    .push(HeapEntry::new(input_to_owned(key), count));
                 return retained_every_key;
             }
 
@@ -1192,7 +1193,7 @@ mod differential {
                 .map(|(idx, _)| idx)
                 .expect("a full heap of capacity k > 0 has residents");
             if count > self.residents[smallest].count {
-                self.residents[smallest] = HeapEntry::create_item(input_to_owned(key), count);
+                self.residents[smallest] = HeapEntry::new(input_to_owned(key), count);
             }
             retained_every_key
         }
