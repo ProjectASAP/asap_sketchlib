@@ -263,6 +263,14 @@ impl<T: NumericalValue> KllDynamic<T> {
         levels_slice[self.num_levels] = self.items.len();
     }
 
+    /// Bytes this sketch holds: the struct, its item buffer and its level
+    /// bounds.
+    pub fn memory_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.items.capacity() * std::mem::size_of::<T>()
+            + self.level_bounds_top_down.capacity() * std::mem::size_of::<usize>()
+    }
+
     /// Reset the sketch to its initial state, preserving `k`, `m`, and the
     /// backing `items` allocation. After clearing, the sketch behaves as if
     /// freshly constructed.
@@ -596,6 +604,21 @@ mod tests {
     use crate::test_utils::{sample_uniform_f64, sample_zipf_f64};
 
     const SKETCH_K: i32 = 200;
+
+    /// A new sketch holds its 3k-item reservation and two level bounds.
+    #[test]
+    fn memory_bytes_counts_the_reservation() {
+        let mut sk = KllDynamic::<f64>::with_seed(200, 8, 3);
+        let fresh = sk.memory_bytes();
+        assert_eq!(
+            fresh,
+            std::mem::size_of::<KllDynamic<f64>>() + 600 * 8 + 2 * 8
+        );
+        for i in 0..10_000 {
+            sk.update(&f64::from(i));
+        }
+        assert!(sk.memory_bytes() > fresh);
+    }
 
     // return element from input with given quantile
     fn quantile_from_sorted(data: &[f64], quantile: f64) -> f64 {

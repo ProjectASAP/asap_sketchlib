@@ -355,6 +355,18 @@ impl<T: NumericalValue> Kll<T> {
         }
     }
 
+    /// Bytes this sketch holds: the struct, its item buffer, level array and
+    /// merge scratch space, and a memoized CDF when one is held.
+    pub fn memory_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + std::mem::size_of_val(&*self.items)
+            + std::mem::size_of_val(&*self.levels)
+            + self.merge_buf.capacity() * std::mem::size_of::<T>()
+            + self.cdf_cache.as_ref().map_or(0, |cdf| {
+                cdf.entries.capacity() * std::mem::size_of::<CdfEntry>()
+            })
+    }
+
     /// Reconstruct a KLL directly from the retained `items` in level order
     /// plus the `levels` boundary array (`levels[0] == 0`, `levels[num_levels] == items.len()`). Avoids replaying
     /// every item through `update()`: it places the items straight into the
@@ -1135,6 +1147,52 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A sketch holding 10 items at k = 469 holds well under its full
+    /// capacity, and its memory grows as items arrive.
+    #[test]
+    fn memory_follows_the_items_held() {
+        let mut sk = Kll::<f64>::with_seed(469, 8, 3);
+        for i in 0..10 {
+            sk.update(&f64::from(i));
+        }
+        let small = sk.memory_bytes();
+        assert!(small < 2048, "10 items reported {small} bytes");
+        for i in 0..100_000 {
+            sk.update(&f64::from(i));
+        }
+        assert!(sk.memory_bytes() > small + 469 * std::mem::size_of::<f64>());
+        assert!(sk.items.len() <= sk.max_capacity);
+        assert!(
+            sk.merge_buf.capacity() > 0,
+            "compaction used the scratch space"
+        );
+        assert_eq!(
+            sk.memory_bytes(),
+            std::mem::size_of::<Kll<f64>>()
+                + (sk.items.len() + sk.merge_buf.capacity()) * 8
+                + sk.levels.len() * 8
+        );
+        let before = sk.memory_bytes();
+        let _ = sk.cdf_cached();
+        assert!(sk.memory_bytes() > before);
+    }
+
+    /// A decoded sketch's buffer holds just its retained items.
+    #[test]
+    fn decoded_sketch_holds_just_its_retained_items() {
+        let mut sk = Kll::<f64>::with_seed(200, 8, 4);
+        for i in 0..50_000 {
+            sk.update(&f64::from(i));
+        }
+        let retained = sk.buffer_size();
+        assert!(retained < sk.items.len());
+        let decoded = Kll::<f64>::from_asapv1(&sk.to_asapv1().unwrap()).unwrap();
+        assert_eq!(
+            decoded.memory_bytes(),
+            std::mem::size_of::<Kll<f64>>() + retained * 8 + decoded.levels.len() * 8
+        );
     }
 
     /// The memoized CDF must agree with the from-scratch rebuild at every

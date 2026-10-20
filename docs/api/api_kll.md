@@ -63,6 +63,15 @@ fn value_at_interpolated(&self, p: f64) -> f64
 fn merge(&mut self, other: &Kll<T>)
 ```
 
+## Memory
+
+```rust
+fn memory_bytes(&self) -> usize
+```
+
+The bytes the sketch holds now: struct, item buffer, level array, merge
+scratch space and a memoized CDF. `KllDynamic` has the same method.
+
 ## Serialization
 
 ```rust

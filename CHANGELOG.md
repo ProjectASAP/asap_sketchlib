@@ -120,6 +120,8 @@ signals a backwards-compatible change.
   summaries, and panics on a dimension, admission-rate or capacity mismatch.
   ASAPv1 kinds `0x1e 0x00` and `0x1f 0x00` (spec §3.24, §3.25) for `i32`,
   `i64` and `f64` `Vector2D` matrices on either path, with no delta kind.
+- **`Kll::memory_bytes` and `KllDynamic::memory_bytes`**: the bytes the
+  sketch holds now.
 
 ### Changed
 
