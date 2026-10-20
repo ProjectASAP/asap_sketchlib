@@ -187,7 +187,7 @@ impl UnivMonTwoTier {
         UnivMonTwoTier {
             layer_sketches: Vector1D::from_vec(sk_vec),
             layer_heaps: Vector1D::from_vec(hh_vec),
-            layers: layers,
+            layers,
             elephant_layers,
             elephant_rows,
             elephant_cols,
@@ -253,7 +253,7 @@ impl UnivMonTwoTier {
     /// Joltik-style insert: updates only the terminal CountSketch and heap.
     ///
     /// Logical upper-layer candidate sets are reconstructed at query time.
-    /// Do not mix this method with [`Self::update`] on the same sketch.
+    /// Do not mix this method with [`Self::update_weighted`] on the same sketch.
     pub fn update_weighted_terminal(&mut self, key: &DataInput, weight: i64) {
         self.begin_update(weight, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);

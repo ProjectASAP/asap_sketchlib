@@ -204,8 +204,8 @@ where
     pub fn with_dimensions(rows: usize, cols: usize) -> Self {
         let mut sk = CountMinSketch {
             counts: Vector2D::unfilled(rows, cols),
-            rows: rows,
-            cols: cols,
+            rows,
+            cols,
             _mode: PhantomData,
             _hasher: PhantomData,
             admission_rate: admit_all(),

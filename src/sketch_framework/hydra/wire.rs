@@ -844,8 +844,8 @@ impl Hydra {
             )))
         });
         Ok(Hydra {
-            rows: rows,
-            cols: cols,
+            rows,
+            cols,
             cells: sketches,
             prototype: HydraCounter::CountMinSketch(CountMinSketch::with_dimensions(
                 cell_rows, cell_cols,
@@ -867,8 +867,8 @@ impl Hydra {
             )))
         });
         Ok(Hydra {
-            rows: rows,
-            cols: cols,
+            rows,
+            cols,
             cells: sketches,
             prototype: HydraCounter::CountSketch(CountSketch::with_dimensions(
                 cell_rows, cell_cols,
@@ -956,8 +956,8 @@ impl Hydra {
             counters.next().expect("one counter per grid cell")
         });
         Ok(Hydra {
-            rows: rows,
-            cols: cols,
+            rows,
+            cols,
             cells: sketches,
             prototype: HydraCounter::Hll(HyperLogLog::<Ertl>::default()),
             schema: schema_of(&meta.schema)?,
@@ -1002,8 +1002,8 @@ impl Hydra {
             counters.next().expect("one counter per grid cell")
         });
         Ok(Hydra {
-            rows: rows,
-            cols: cols,
+            rows,
+            cols,
             cells: sketches,
             prototype: HydraCounter::Kll(Kll::new(meta.cell_k as usize, meta.cell_m as usize)),
             schema: schema_of(&meta.schema)?,
@@ -1072,8 +1072,8 @@ impl Hydra {
             counters.next().expect("one counter per grid cell")
         });
         Ok(Hydra {
-            rows: rows,
-            cols: cols,
+            rows,
+            cols,
             cells: sketches,
             prototype: HydraCounter::UnivMon(UnivMon::new(
                 shape.heap_size as usize,

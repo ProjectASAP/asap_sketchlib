@@ -84,7 +84,7 @@ pub struct KllConfig {
     /// is built with [`Kll::with_seed`], so two processes running the
     /// same tumbling pipeline produce byte-identical sketches — including
     /// across window rotations, because `tumbling_clear` re-seeds from the
-    /// stored seed. When `None`, the legacy wall-clock-seeded [`Kll::init`]
+    /// stored seed. When `None`, the legacy wall-clock-seeded [`Kll::new`]
     /// path is used and cross-process agreement is not achievable.
     pub seed: Option<u64>,
 }

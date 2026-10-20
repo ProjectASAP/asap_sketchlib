@@ -187,8 +187,8 @@ pub(crate) fn rebuild_layer<H: SketchHasher>(
     Ok(CountSketchWithL2Norm {
         counts: Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]),
         row_l2_squared: Vector1D::from_vec(l2.to_vec()),
-        rows: rows,
-        cols: cols,
+        rows,
+        cols,
         seed_index,
         _hasher: PhantomData,
     })
@@ -602,8 +602,8 @@ mod tests {
         CountSketchWithL2Norm {
             counts: Vector2D::unfilled(rows, cols),
             row_l2_squared: Vector1D::filled(rows, 0),
-            rows: rows,
-            cols: cols,
+            rows,
+            cols,
             seed_index: 0,
             _hasher: PhantomData,
         }

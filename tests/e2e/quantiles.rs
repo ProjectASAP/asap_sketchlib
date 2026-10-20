@@ -909,7 +909,7 @@ fn ddsketch_merge_and_delta_replay_preserve_the_relative_error_contract() {
                 replayed.apply_delta(DdSketchBucketDelta {
                     sign: Default::default(),
                     index: single.positive_store_offset() + i as i32,
-                    count: count,
+                    count,
                 });
             }
         }

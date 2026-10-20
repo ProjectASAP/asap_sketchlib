@@ -85,9 +85,9 @@ pub(crate) fn univmon_metadata<H: HashProfile>(
         seed_derivation: H::SEED_DERIVATION.to_string(),
         input_encoding: H::INPUT_ENCODING.to_string(),
         seed_list: H::seed_list(),
-        layers: layers,
-        rows: rows,
-        cols: cols,
+        layers,
+        rows,
+        cols,
         heap_size,
         key_type: key_type.to_string(),
     }
@@ -1010,9 +1010,9 @@ mod tests {
         let payload = payload_of::<String>(&encoded);
 
         let shaped = |layers, rows, cols, heap_size| UnivMonMetadata {
-            layers: layers,
-            rows: rows,
-            cols: cols,
+            layers,
+            rows,
+            cols,
             heap_size,
             ..univmon_metadata::<DefaultXxHasher>(0, 0, 0, 0, &base.key_type)
         };

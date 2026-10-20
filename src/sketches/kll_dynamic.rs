@@ -36,7 +36,7 @@ pub struct DynamicCdfEntry {
 
 /// KLL quantile sketch using a dynamic, insert-optimized layout.
 ///
-/// Unlike [`Kll`](super::kll::KLL), which pre-allocates a fixed buffer and
+/// Unlike [`Kll`](super::kll::Kll), which pre-allocates a fixed buffer and
 /// grows downward, `KllDynamic` appends items to a growable `Vector1D` and
 /// shifts elements during compaction.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -84,7 +84,7 @@ impl<T: NumericalValue> KllDynamic<T> {
     /// scenarios and deterministic accuracy tests possible. The seed is also
     /// stored so `clear()` re-seeds deterministically.
     ///
-    /// The unseeded [`KllDynamic::init`] draws from the wall clock, so a
+    /// The unseeded [`KllDynamic::new`] draws from the wall clock, so a
     /// sketch built with it cannot be used to assert an accuracy bound
     /// reproducibly. Mirrors [`crate::Kll::with_seed`].
     pub fn with_seed(k: usize, m: usize, seed: u64) -> Self {
@@ -104,7 +104,7 @@ impl<T: NumericalValue> KllDynamic<T> {
             k: norm_k,
             m: norm_m,
             num_levels: 1,
-            coin: coin,
+            coin,
             seed,
             capacity_cache: [0; CAPACITY_CACHE_LEN],
             top_height: 0,
@@ -351,7 +351,7 @@ impl<T: NumericalValue> KllDynamic<T> {
 
     /// Merges another sketch's retained items into this one, preserving
     /// each retained item's level weight (`2^level`) instead of discarding
-    /// it. See [`Kll::merge`](super::kll::KLL::merge) for the full
+    /// it. See [`Kll::merge`](super::kll::Kll::merge) for the full
     /// rationale — this is the same weight-preserving, level-by-level
     /// interleave-and-recompact merge (concatenate each level's retained
     /// items, then re-run the same randomized halve-and-promote compaction

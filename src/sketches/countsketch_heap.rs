@@ -1098,8 +1098,8 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
         let mut sk = CountSketchWithL2Norm {
             counts: Vector2D::unfilled(rows, cols),
             row_l2_squared: Vector1D::filled(rows, 0),
-            rows: rows,
-            cols: cols,
+            rows,
+            cols,
             seed_index,
             _hasher: PhantomData,
         };

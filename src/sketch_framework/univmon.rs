@@ -292,7 +292,7 @@ impl UnivMon {
     ///
     /// This is the Joltik update-last-layer construction. Logical sampled
     /// streams and their candidate sets are reconstructed during queries.
-    /// Do not mix this method with [`Self::update`] on the same sketch.
+    /// Do not mix this method with [`Self::update_weighted`] on the same sketch.
     pub fn update_weighted_terminal(&mut self, key: &DataInput, weight: i64) {
         self.begin_update(weight, UnivMonUpdateMode::Terminal);
         let h = hash64_seeded(UNIVMON_BOTTOM_LAYER_SEED_INDEX, key);
