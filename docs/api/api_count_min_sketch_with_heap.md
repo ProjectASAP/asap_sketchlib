@@ -36,6 +36,7 @@ fn clear_heap(&mut self)
 fn clear(&mut self)
 // Vector2D<f64>, RegularPath: CountMinSketch::try_update_weighted, then the heap;
 // an error leaves the counters and the heap unchanged
+fn check_weight(weight: f64) -> Result<(), String>  // the inner sketch's
 fn try_update_weighted(&mut self, key: &DataInput, weight: f64) -> Result<(), String>
 // RegularPath: re-reads every resident's count from the counters (an update
 // rescores only its own key); call before reading the heap for current counts

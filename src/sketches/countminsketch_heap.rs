@@ -254,6 +254,12 @@ where
 // -- Checked f64 updates ------------------------------------------------------
 
 impl<H: SketchHasher> CountMinSketchWithHeap<Vector2D<f64>, RegularPath, H> {
+    /// [`CountMinSketch::check_weight`]: Ok for a finite, nonnegative weight,
+    /// the weights [`Self::try_update_weighted`] accepts.
+    pub fn check_weight(weight: f64) -> Result<(), String> {
+        CountMinSketch::<Vector2D<f64>, RegularPath, H>::check_weight(weight)
+    }
+
     /// [`Self::update_weighted`] through [`CountMinSketch::try_update_weighted`]:
     /// rejects a negative or non-finite weight and a counter overflow, leaving
     /// the counters and the heap unchanged on an error.
@@ -1062,7 +1068,9 @@ mod tests {
         let cells = sketch.count_min_sketch().as_storage().as_slice().to_vec();
         let heap = f64_heap_entries(&sketch);
         for weight in [-0.5, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(CountMinSketch::<Vector2D<f64>, RegularPath>::check_weight(weight).is_err());
+            assert!(
+                CountMinSketchWithHeap::<Vector2D<f64>, RegularPath>::check_weight(weight).is_err()
+            );
             assert!(sketch.try_update_weighted(&key, weight).is_err());
         }
         assert!(
