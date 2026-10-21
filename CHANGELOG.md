@@ -10,6 +10,20 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+### Changed
+
+- **`UnivMon` and `UnivMonTwoTier` follow the UnivMon paper's Algorithm 2
+  for every query** (breaking). `estimate_l2` is again the square root of the
+  `g(x) = x²` G-sum rather than layer 0's Count Sketch F2 estimate, and
+  `estimate_cardinality` counts a heap key only when its Count Sketch estimate
+  is positive (`g(0) = 0`), not every heap key. `g` is applied to the
+  estimate as a real number, no longer truncated to an integer, in standard
+  mode. `estimate_g_sum` drops its `count_every_key` parameter:
+  `estimate_g_sum(g)`. `docs/api/api_univmon.md` replaces the derived L2 and
+  distinct-count bounds with the guarantee the paper relies on (Braverman and
+  Ostrovsky's Recursive Sum, Theorem 4.2) and lists where the implementation
+  departs from it.
+
 ## [0.4.0] - 2026-10-20
 
 Breaking release. ASAPv1 is the one serialized form: protobuf, the legacy

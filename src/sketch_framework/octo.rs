@@ -4643,8 +4643,8 @@ mod univmon_tests {
             );
         }
         assert_eq!(
-            octo.estimate_g_sum(|x| x, false),
-            reference.estimate_g_sum(|x| x, false),
+            octo.estimate_g_sum(|x| x),
+            reference.estimate_g_sum(|x| x),
             "g-sum query"
         );
     }

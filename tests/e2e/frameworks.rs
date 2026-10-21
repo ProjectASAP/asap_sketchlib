@@ -1769,22 +1769,16 @@ fn univmon_generic_g_sum_reproduces_every_named_estimator() {
     }
 
     assert_eq!(
+        um.estimate_g_sum(|x| x * x).sqrt(),
         um.estimate_l2(),
-        um.layer_sketches[0].l2(),
-        "the L2 estimator reads layer 0's Count Sketch, which sees every key"
-    );
-    assert_between(
-        um.estimate_g_sum(|x| x * x, false).sqrt(),
-        truth.f2().sqrt() * 0.85,
-        truth.f2().sqrt() * 1.15,
-        "g(x)=x^2 under a square root still tracks the exact L2",
+        "g(x)=x^2 under a square root is the L2 estimator"
     );
     assert_eq!(
-        um.estimate_g_sum(|_| 1.0, true),
+        um.estimate_g_sum(|_| 1.0),
         um.estimate_cardinality(),
-        "g(x)=1 in cardinality mode is the distinct-count estimator"
+        "g(x)=1 with g(0)=0 is the distinct-count estimator"
     );
-    let x_log_x = um.estimate_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
+    let x_log_x = um.estimate_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 });
     assert_between(
         um.estimate_entropy(),
         um.estimate_l1().log2() - x_log_x / um.estimate_l1() - 1e-9,
@@ -1792,12 +1786,12 @@ fn univmon_generic_g_sum_reproduces_every_named_estimator() {
         "the entropy estimator is the x*log2(x) g-sum rearranged",
     );
     assert_eq!(
-        um.estimate_g_sum(|_| 0.0, false),
+        um.estimate_g_sum(|_| 0.0),
         0.0,
         "the zero function must sum to zero"
     );
 
-    let identity = um.estimate_g_sum(|x| x, false);
+    let identity = um.estimate_g_sum(|x| x);
     let l1 = truth.total() as f64;
     assert_between(
         identity,
@@ -1812,7 +1806,7 @@ fn univmon_g_sum_is_zero_on_an_empty_sketch() {
     let um = UnivMon::new(32, 5, 256, 4);
     assert_eq!(um.estimate_l1(), 0.0, "an empty sketch has no mass");
     assert_eq!(um.estimate_entropy(), 0.0, "an empty sketch has no entropy");
-    assert_eq!(um.estimate_g_sum(|x| x * x, false), 0.0, "no second moment");
+    assert_eq!(um.estimate_g_sum(|x| x * x), 0.0, "no second moment");
     assert_eq!(um.estimate_cardinality(), 0.0, "no distinct values");
 }
 

@@ -40,7 +40,7 @@ fn estimate_l1(&self) -> f64
 fn estimate_l2(&self) -> f64
 fn estimate_entropy(&self) -> f64
 fn estimate_cardinality(&self) -> f64
-fn estimate_g_sum<F>(&self, g: F, count_every_key: bool) -> f64
+fn estimate_g_sum<F>(&self, g: F) -> f64
 fn top_layer_complete(&self) -> bool
 ```
 
@@ -48,14 +48,11 @@ For the supported non-negative update stream, `estimate_l1()` returns the exact
 tracked total weight rather than estimating the linear sum through the
 hierarchy. `estimate_entropy()` is Shannon entropy in bits (log2).
 
-The estimators are [`UnivMon`](./api_univmon.md)'s, with the same
-[error bounds](./api_univmon.md#error-bounds). `estimate_l2()` uses layer 0's
-Count Sketch F2 estimate in standard mode, so its `(ε, δ)` bound uses layer 0's
-dimensions (the elephant ones whenever `elephant_layers >= 1`); in terminal mode
-it sums the strata, each held to its own layer's dimensions.
-`estimate_cardinality()` counts every heap key; it misses by more than `ε F0`
-jointly with `top_layer_complete()` with probability at most `2/(kε²)` for
-`k = heap_size >= 8`, independent of the elephant/mouse split.
+The estimators are [`UnivMon`](./api_univmon.md)'s: every query is a G-sum
+computed with the UnivMon paper's Algorithm 2 over the layers' heaps, under the
+same [guarantee and departures](./api_univmon.md#paper). The elephant/mouse
+split changes only each layer's Count Sketch dimensions, which govern whether a
+layer's heap estimates meet the accuracy condition of a core.
 
 ## Merge
 
