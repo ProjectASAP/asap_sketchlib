@@ -224,9 +224,9 @@ probability at most 0.2; Theorem 4.2's proof adds Markov's inequality for the
 rest of the 0.3.
 
 Independence: the analysis needs only pairwise independent sampling vectors
-`H_j` (Lemma 2.2, page 3); for the frequency-moment application, "we obtain an
-algorithm that needs only 4-wise independence" (page 2), the independence its
-Count-Sketch heavy-hitter step needs.
+`H_j` (Lemma 2.2, page 3). The paper's introduction adds that its
+frequency-moment application, which finds heavy hitters with Count-Sketch,
+needs only 4-wise independent hashing rather than pseudorandom generators.
 
 What this gives each query, when every condition holds:
 
