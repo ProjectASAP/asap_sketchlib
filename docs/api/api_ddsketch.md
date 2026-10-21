@@ -32,6 +32,7 @@ the type-erased dispatch path.
 
 ```rust
 fn get_value_at_quantile(&self, q: f64) -> Option<f64>
+fn quantile_interpolated(&self, q: f64) -> Result<Option<f64>, String>
 fn get_count(&self) -> u64
 fn min(&self) -> Option<f64>
 fn max(&self) -> Option<f64>
@@ -137,6 +138,19 @@ assert!(p50 >= 1.0);
 retained minimum and maximum rather than to a bucket representative, so the
 endpoints carry zero error. The convention is pinned by
 `ddsketch_answers_the_ceil_nearest_rank_order_statistic`.
+
+`quantile_interpolated(q)` is the continuous convention of PromQL
+`quantile_over_time` and SQL `percentile_cont`: it interpolates linearly
+between the order statistics at ranks `floor(q (n - 1))` and
+`ceil(q (n - 1))` (0-based). Rank 0 and rank `n - 1` are the exact minimum and
+maximum; other ranks read their bucket's representative, from the negative
+store, the zero bucket or the positive store. An empty sketch gives `Ok(None)`;
+`q` outside `[0, 1]` (NaN included) gives `Err`, and mapping it to `±inf` is
+the caller's job. When both neighbours are indexable and share a sign the
+result is within `alpha` relative of the exact interpolated value; across zero
+the error is at most `alpha * ((1 - f) |lower| + f |upper|)` for fractional
+rank `f`, an absolute bound. Tiny magnitudes counted in the zero bucket read
+as `0`. The sketch never holds NaN, since `try_add` refuses non-finite values.
 
 ## Caveats
 

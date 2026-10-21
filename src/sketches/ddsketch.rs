@@ -430,6 +430,82 @@ impl DdSketch {
         Some(self.max)
     }
 
+    /// Returns the quantile at `q` interpolated linearly between the two
+    /// adjacent order statistics at rank `q * (n - 1)` (0-based), the
+    /// convention of PromQL `quantile_over_time` and SQL `percentile_cont`.
+    /// [`Self::get_value_at_quantile`] keeps its nearest-rank convention.
+    ///
+    /// - `Ok(None)` for an empty sketch.
+    /// - `Err` for `q` outside `[0, 1]`, NaN included; mapping such a `q` to
+    ///   `-inf` / `+inf` (as PromQL does) is the caller's job.
+    /// - Rank 0 and rank `n - 1` are the exactly retained minimum and
+    ///   maximum; every other order statistic is its bucket's representative
+    ///   (negative store, zero bucket or positive store), clamped to
+    ///   `[min, max]`.
+    ///
+    /// Error: each neighbour is within `alpha` relative of the true order
+    /// statistic when its magnitude is indexable, so when both neighbours are
+    /// indexable and share a sign the result is within `alpha` relative of the
+    /// true interpolated value. Across zero the bound is absolute:
+    /// `alpha * ((1 - f) |lower| + f |upper|)` with `f` the fractional rank,
+    /// which need not be small relative to a result near zero. Magnitudes
+    /// below the indexable range are counted in the zero bucket and read as
+    /// `0`. A sketch never holds NaN: [`Self::try_add`] refuses non-finite
+    /// values. Ranks are computed in `f64`, exact up to `2^53` samples.
+    pub fn quantile_interpolated(&self, q: f64) -> Result<Option<f64>, String> {
+        if !(0.0..=1.0).contains(&q) {
+            return Err(format!("DDSketch quantile {q} is outside [0, 1]"));
+        }
+        if self.count == 0 {
+            return Ok(None);
+        }
+        let rank = q * (self.count - 1) as f64;
+        let lower_rank = rank.floor() as u64;
+        let upper_rank = (rank.ceil() as u64).min(self.count - 1);
+        let fraction = rank - lower_rank as f64;
+        let lower = self.value_at_rank(lower_rank);
+        if fraction == 0.0 {
+            return Ok(Some(lower));
+        }
+        let upper = self.value_at_rank(upper_rank);
+        Ok(Some(lower * (1.0 - fraction) + upper * fraction))
+    }
+
+    /// The estimated order statistic at 0-based `rank` (`rank < count`): the
+    /// exact minimum and maximum at the ends, otherwise the representative
+    /// of the bucket holding it, clamped to `[min, max]`.
+    fn value_at_rank(&self, rank: u64) -> f64 {
+        debug_assert!(rank < self.count);
+        if rank == 0 {
+            return self.min;
+        }
+        if rank == self.count - 1 {
+            return self.max;
+        }
+        let mut seen = 0u64;
+        let negative = self.negative_store.counts.as_slice();
+        for (i, &count) in negative.iter().enumerate().rev() {
+            seen += count;
+            if seen > rank {
+                let bin = self.negative_store.offset + i as i32;
+                return (-self.bin_representative(bin)).clamp(self.min, self.max);
+            }
+        }
+        seen += self.zero_count;
+        if seen > rank {
+            return 0.0_f64.clamp(self.min, self.max);
+        }
+        let positive = self.positive_store.counts.as_slice();
+        for (i, &count) in positive.iter().enumerate() {
+            seen += count;
+            if seen > rank {
+                let bin = self.positive_store.offset + i as i32;
+                return self.bin_representative(bin).clamp(self.min, self.max);
+            }
+        }
+        self.max
+    }
+
     /// Returns the total number of samples inserted so far.
     pub fn get_count(&self) -> u64 {
         self.count
@@ -628,6 +704,119 @@ impl DdSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The exact interpolated quantile of `values` at `q`: linear between the
+    /// order statistics at ranks `floor(q (n - 1))` and `ceil(q (n - 1))`.
+    fn exact_interpolated(values: &[f64], q: f64) -> f64 {
+        let mut sorted = values.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        let rank = q * (sorted.len() - 1) as f64;
+        let (lower, upper) = (rank.floor() as usize, rank.ceil() as usize);
+        let fraction = rank - lower as f64;
+        sorted[lower] * (1.0 - fraction) + sorted[upper] * fraction
+    }
+
+    fn sketch_of(alpha: f64, values: &[f64]) -> DdSketch {
+        let mut sketch = DdSketch::new(alpha);
+        for v in values {
+            sketch.try_add(v).expect("finite, indexable value");
+        }
+        sketch
+    }
+
+    #[test]
+    fn quantile_interpolated_two_values() {
+        let sketch = sketch_of(0.01, &[20.0, 40.0]);
+        for (q, expected) in [(0.0, 20.0), (0.5, 30.0), (0.9, 38.0), (1.0, 40.0)] {
+            let actual = sketch.quantile_interpolated(q).unwrap().unwrap();
+            assert!(
+                (actual - expected).abs() <= 0.01 * expected,
+                "q={q}: {actual} against {expected}"
+            );
+        }
+        // The nearest-rank readout keeps its convention.
+        assert_eq!(sketch.get_value_at_quantile(0.9), Some(40.0));
+    }
+
+    #[test]
+    fn quantile_interpolated_one_value_and_empty() {
+        let one = sketch_of(0.01, &[20.0]);
+        for q in [0.0, 0.3, 1.0] {
+            assert_eq!(one.quantile_interpolated(q).unwrap(), Some(20.0));
+        }
+        let empty = DdSketch::new(0.01);
+        assert_eq!(empty.quantile_interpolated(0.5).unwrap(), None);
+    }
+
+    #[test]
+    fn quantile_interpolated_refuses_q_outside_the_unit_interval() {
+        let sketch = sketch_of(0.01, &[1.0, 2.0]);
+        for q in [-0.1, 1.1, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(sketch.quantile_interpolated(q).is_err(), "q={q}");
+        }
+        assert!(DdSketch::new(0.01).quantile_interpolated(2.0).is_err());
+    }
+
+    #[test]
+    fn quantile_interpolated_signed_values() {
+        let alpha = 0.01;
+        let values = [-40.0, -20.0, -5.0, 0.0, 10.0, 30.0, 70.0];
+        let sketch = sketch_of(alpha, &values);
+        let mut sorted = values.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        for i in 0..=100 {
+            let q = f64::from(i) / 100.0;
+            let actual = sketch.quantile_interpolated(q).unwrap().unwrap();
+            let expected = exact_interpolated(&values, q);
+            let rank = q * (values.len() - 1) as f64;
+            let fraction = rank - rank.floor();
+            let (lower, upper) = (sorted[rank.floor() as usize], sorted[rank.ceil() as usize]);
+            // Each neighbour is within alpha of its own magnitude, so the
+            // result is within alpha of the weighted magnitudes; that is a
+            // relative bound when both neighbours share a sign.
+            let bound = alpha * ((1.0 - fraction) * lower.abs() + fraction * upper.abs());
+            assert!(
+                (actual - expected).abs() <= bound + 1e-12,
+                "q={q}: {actual} against {expected}, bound {bound}"
+            );
+            if lower * upper > 0.0 {
+                assert!((actual - expected).abs() <= alpha * expected.abs() + 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn quantile_interpolated_matches_the_exact_value_on_a_large_stream() {
+        use rand::{Rng, SeedableRng, rngs::StdRng};
+        let alpha = 0.01;
+        let mut rng = StdRng::seed_from_u64(0xDD5E_ED01);
+        let values: Vec<f64> = (0..20_000)
+            .map(|_| {
+                let magnitude = (rng.random_range(-3.0..6.0_f64)).exp();
+                if rng.random_bool(0.2) {
+                    -magnitude
+                } else {
+                    magnitude
+                }
+            })
+            .collect();
+        let sketch = sketch_of(alpha, &values);
+        let mut sorted = values.clone();
+        sorted.sort_by(f64::total_cmp);
+        for i in 0..=200 {
+            let q = f64::from(i) / 200.0;
+            let actual = sketch.quantile_interpolated(q).unwrap().unwrap();
+            let expected = exact_interpolated(&values, q);
+            let rank = q * (values.len() - 1) as f64;
+            let fraction = rank - rank.floor();
+            let (lower, upper) = (sorted[rank.floor() as usize], sorted[rank.ceil() as usize]);
+            let bound = alpha * ((1.0 - fraction) * lower.abs() + fraction * upper.abs());
+            assert!(
+                (actual - expected).abs() <= bound * (1.0 + 1e-9) + 1e-12,
+                "q={q}: {actual} against {expected}, bound {bound}"
+            );
+        }
+    }
 
     #[test]
     fn insert_and_query_basic() {
