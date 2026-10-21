@@ -39,6 +39,11 @@ fn update_weighted(&mut self, value: &DataInput, weight: S::Counter)
 fn update_with_hash(&mut self, hashed_val: &H::HashType)
 fn clear(&mut self)
 
+// Vector2D<f64>, RegularPath: weights finite (signed); an error (a bad weight
+// or a counter overflow) leaves the sketch unchanged
+fn check_weight(weight: f64) -> Result<(), String>
+fn try_update_weighted(&mut self, value: &DataInput, weight: f64) -> Result<(), String>
+
 // CountSketchWithL2Norm
 fn update_weighted(&mut self, val: &DataInput, weight: i64)
 fn update_weighted_with_hash(&mut self, hashed_val: u128, weight: i64)

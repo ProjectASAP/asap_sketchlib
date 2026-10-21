@@ -35,6 +35,11 @@ fn update_weighted_batch(&mut self, values: &[(DataInput, S::Counter)])
 fn update_with_hash(&mut self, hashed_val: &H::HashType)
 fn update_weighted_with_hash(&mut self, hashed_val: &H::HashType, weight: S::Counter)
 fn clear(&mut self)
+
+// Vector2D<f64>, RegularPath: weights finite and nonnegative; an error (a bad
+// weight or a counter overflow) leaves the sketch unchanged
+fn check_weight(weight: f64) -> Result<(), String>
+fn try_update_weighted(&mut self, value: &DataInput, weight: f64) -> Result<(), String>
 ```
 
 `clear` zeroes every counter and returns the Nitro sampler to its start, keeping

@@ -10,6 +10,18 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+### Added
+
+- **Checked f64 updates and heap rescoring for the Count-Min and Count Sketch
+  heap sketches.** Over `Vector2D<f64>` counters, `check_weight` and
+  `try_update_weighted` on `CountMinSketch` and `CountSketch` reject a
+  non-finite weight (and a negative one for Count-Min) and a counter
+  overflow, leaving the sketch unchanged; `CountMinSketchWithHeap` and
+  `CountSketchWithHeap` gain the same `try_update_weighted`, which then
+  updates the heap. `rescore_heap` on both heap sketches re-reads every
+  resident's count from the counters, since an update rescores only the key
+  it touches.
+
 ## [0.4.0] - 2026-10-20
 
 Breaking release. ASAPv1 is the one serialized form: protobuf, the legacy
