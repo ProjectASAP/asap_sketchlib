@@ -14,6 +14,7 @@
 //! additional approximation error — the accuracy is identical to a full-width
 //! Count Sketch with W columns.
 
+use crate::common::structures::matrix_storage::RowEstimates;
 use crate::count_min_fold::FoldCell;
 use crate::{DataInput, DefaultXxHasher, SketchHasher, TopKHeap, compute_median_inline_f64};
 use std::marker::PhantomData;
@@ -198,7 +199,7 @@ impl<H: SketchHasher> CountSketchFold<H> {
     /// Returns the Count Sketch frequency estimate for `key` (median of
     /// sign-corrected row estimates).
     pub fn estimate(&self, key: &DataInput) -> i64 {
-        let mut estimates = Vec::with_capacity(self.rows);
+        let mut estimates = RowEstimates::with_capacity(self.rows);
         for r in 0..self.rows {
             let (full_col, sign) = self.hash_for(r, key);
             let fc = self.fold_col_of(full_col);
