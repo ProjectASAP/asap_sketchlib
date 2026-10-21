@@ -256,7 +256,7 @@ impl MatrixStorage for BitMatrix {
         Hash: MatrixFastHash,
         F: Fn(&Self::Counter, usize, &Hash) -> f64,
     {
-        let mut values: Vec<f64> = (0..self.rows)
+        let mut values: crate::common::structures::matrix_storage::RowEstimates = (0..self.rows)
             .map(|row| {
                 let col = self.col_for_row(hashed_val, row);
                 op(&self.get(row, col), row, hashed_val)

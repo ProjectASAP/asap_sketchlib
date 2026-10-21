@@ -230,7 +230,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
 
     /// Returns the median estimate of the squared L2 norm across rows.
     pub fn l2_squared(&self) -> f64 {
-        let mut values: Vec<f64> = self.row_l2_squared.as_slice()[..self.rows]
+        let mut values: RowEstimates = self.row_l2_squared.as_slice()[..self.rows]
             .iter()
             .map(|&v| v as f64)
             .collect();
