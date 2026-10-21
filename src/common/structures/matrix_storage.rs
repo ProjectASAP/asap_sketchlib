@@ -4,6 +4,10 @@ use smallvec::SmallVec;
 
 use crate::DataInput;
 
+/// Per-row estimates collected for a median, held inline up to
+/// [`MATRIX_MAX_ROWS`](crate::common::MATRIX_MAX_ROWS) rows.
+pub(crate) type RowEstimates = SmallVec<[f64; crate::common::MATRIX_MAX_ROWS]>;
+
 /// Fast-path hash container for matrix-backed sketches.
 #[derive(Clone, Debug)]
 pub enum MatrixHash {

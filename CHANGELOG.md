@@ -22,6 +22,15 @@ signals a backwards-compatible change.
   resident's count from the counters, since an update rescores only the key
   it touches.
 
+### Changed
+
+- **Count Sketch estimates no longer allocate.** The per-row estimates a
+  median is taken over are collected on the stack instead of in a fresh
+  `Vec`: up to 20 rows for `Vector2D` (the fast and regular paths),
+  `BitMatrix`, `CountSketchWithL2Norm` (estimates and `l2_squared`) and
+  `CountSketchFold`, and a `[f64; ROWS]` array for the fixed-size matrices.
+  About 8 to 14 ns less per estimate on small shapes. Results are unchanged.
+
 ### Fixed
 
 - **`Kll::update` regains most of its pre-0.4.0 speed.** With the lazily grown
