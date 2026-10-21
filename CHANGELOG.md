@@ -10,6 +10,14 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+### Changed
+
+- **Count Sketch estimates no longer allocate.** The per-row estimates a
+  median is taken over (the fast and regular paths, `CountSketchWithL2Norm`,
+  `CountSketchFold`, and `Vector2D::fast_query_median*`) are collected on the
+  stack for up to 20 rows instead of in a fresh `Vec`; about 8 to 14 ns less
+  per estimate on small shapes. Results are unchanged.
+
 ## [0.4.0] - 2026-10-20
 
 Breaking release. ASAPv1 is the one serialized form: protobuf, the legacy

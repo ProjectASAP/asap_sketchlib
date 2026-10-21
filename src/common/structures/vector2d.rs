@@ -1,3 +1,4 @@
+use crate::common::structures::matrix_storage::RowEstimates;
 use std::ops::{Index, IndexMut};
 
 use crate::{
@@ -394,7 +395,7 @@ impl<T> Vector2D<T> {
         Hash: MatrixFastHash,
         F: Fn(&T, usize, &Hash) -> f64,
     {
-        let mut estimates = Vec::with_capacity(self.rows);
+        let mut estimates = RowEstimates::with_capacity(self.rows);
         for row in 0..self.rows {
             let col = self.col_for_row(hashed_val, row);
             let idx = row * self.cols + col;
@@ -566,7 +567,7 @@ impl<T> Vector2D<T> {
     where
         F: Fn(&T, &Q, usize, &MatrixHash) -> f64,
     {
-        let mut estimates = Vec::with_capacity(self.rows);
+        let mut estimates = RowEstimates::with_capacity(self.rows);
         for row in 0..self.rows {
             let col = self.col_for_row(hashed_val, row);
             let idx = row * self.cols + col;
