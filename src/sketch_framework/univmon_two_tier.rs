@@ -335,6 +335,11 @@ impl UnivMonTwoTier {
     }
 
     /// Whether the top layer's heap still holds every key that layer received.
+    ///
+    /// The Recursive Sum the paper relies on computes the top layer's sum
+    /// exactly; Algorithm 2 sums the top layer's heap instead. The two agree
+    /// when this is `true`, so a caller relying on that guarantee checks it
+    /// (see `docs/api/api_univmon.md`, Paper).
     pub fn top_layer_complete(&self) -> bool {
         self.candidate_complete[self.layers - 1]
     }

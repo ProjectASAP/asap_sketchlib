@@ -203,6 +203,11 @@ impl UnivMon {
     }
 
     /// Whether the top layer's heap still holds every key that layer received.
+    ///
+    /// The Recursive Sum the paper relies on computes the top layer's sum
+    /// exactly; Algorithm 2 sums the top layer's heap instead. The two agree
+    /// when this is `true`, so a caller relying on that guarantee checks it
+    /// (see `docs/api/api_univmon.md`, Paper).
     pub fn top_layer_complete(&self) -> bool {
         self.candidate_complete[self.layers - 1]
     }
@@ -1191,31 +1196,25 @@ mod tests {
         assert!(sketch.top_layer_complete());
     }
 
-    /// Seeded Monte Carlo checks of the guarantee the paper relies on
-    /// (Braverman and Ostrovsky's Recursive Sum, arXiv:1011.2571
-    /// Theorem 4.2): `(1 ± ε)` with probability at least 0.7, on streams and
-    /// shapes that meet its assumptions.
+    /// With complete cores (every layer's heap holds every key the layer
+    /// received) and accurate Count Sketch estimates, Algorithm 2 telescopes:
+    /// `Y_j = Σ_{i ∈ D_j} g(w_j(i))` at every layer, so `Y_0` is the G-sum of
+    /// the estimates over the whole stream. This checks the recursion and the
+    /// sampling-bit coefficients exactly, on every trial; a mistake in either
+    /// (for example reading finder bit `i` instead of `i + 1`) leaves
+    /// incomplete telescoping and large errors.
     ///
-    /// - `φ = layers − 1 = ⌈log2 n⌉` sampled layers.
-    /// - Every layer's core must hold each key with `g(f_i) ≥ α |V_j|`,
-    ///   `α ≈ ε²/φ³`. At `n = 2000` and `ε = 0.5`, `1/α ≈ 5300 > n`, so the
-    ///   theorem asks for a heap that holds every key a layer receives; the
-    ///   heap is `n`.
-    /// - Every reported estimate must be within `(1 ± ε)`: every key has
-    ///   frequency at least 50, and `5 x 65536` Count Sketches keep the row
-    ///   noise (`sqrt(F2 / 65536)`, at most about 25 here) well under it.
-    ///
-    /// At these sizes every core is complete, so the tests check that the
-    /// recursion reconstructs each G-sum from the layers' heaps; they do not
-    /// exercise incomplete cores, which the theorem's `α` rules out until `n`
-    /// exceeds `φ³/ε²`.
-    mod paper_guarantee {
+    /// The Recursive Sum's `(1 ± ε)`-with-probability-0.7 statement is not
+    /// tested here: it is only informative with incomplete cores, which needs
+    /// `n` well above `φ³/ε²` keys and is out of unit-test scope.
+    mod recursion {
         use super::*;
 
-        const KEYS: usize = 2000;
-        const EPS: f64 = 0.5;
-        /// Theorem 4.2's failure probability.
-        const DELTA: f64 = 0.3;
+        const KEYS: usize = 500;
+        /// Count Sketch columns: per-key noise variance is about `F2 / COLS`,
+        /// so the G-sums' relative bias stays near `KEYS / COLS`, under 1%.
+        const COLS: usize = 65_536;
+        const TOLERANCE: f64 = 0.02;
 
         #[derive(Clone, Copy, Debug)]
         enum Shape {
@@ -1245,64 +1244,39 @@ mod tests {
                 .collect()
         }
 
-        /// Misses allowed out of `trials` at a true rate of at most `delta`:
-        /// the mean plus four standard deviations, plus one.
-        fn allowed(trials: usize, delta: f64) -> f64 {
-            let n = trials as f64;
-            n * delta + 4.0 * (n * delta * (1.0 - delta)).sqrt() + 1.0
-        }
-
-        fn check(trials: usize) {
+        #[test]
+        fn recursion_is_exact_with_complete_cores() {
             let layers = (KEYS as f64).log2().ceil() as usize + 1;
+            let x_log_x = |x: f64| if x > 0.0 { x * x.log2() } else { 0.0 };
             let mut rng = StdRng::seed_from_u64(0x0B5E_55ED);
             for shape in [Shape::Uniform, Shape::Zipf, Shape::OneHeavy] {
-                let (mut card_misses, mut f2_misses, mut entropy_misses) = (0, 0, 0);
-                for _ in 0..trials {
+                for trial in 0..20 {
                     let keys = stream(shape, &mut rng);
-                    let mut sketch = UnivMon::new(KEYS, 5, 65_536, layers);
+                    let mut sketch = UnivMon::new(KEYS, 5, COLS, layers);
                     for &(id, f) in &keys {
                         sketch.update_weighted(&DataInput::U64(id), f);
                     }
-                    let m: f64 = keys.iter().map(|&(_, f)| f as f64).sum();
-                    let f2: f64 = keys.iter().map(|&(_, f)| (f as f64).powi(2)).sum();
-                    let entropy = m.log2()
-                        - keys
-                            .iter()
-                            .map(|&(_, f)| f as f64 * (f as f64).log2())
-                            .sum::<f64>()
-                            / m;
-                    let miss = |estimate: f64, truth: f64| (estimate - truth).abs() > EPS * truth;
-                    card_misses += usize::from(miss(sketch.estimate_cardinality(), KEYS as f64));
-                    f2_misses += usize::from(miss(sketch.estimate_l2().powi(2), f2));
-                    entropy_misses += usize::from(miss(sketch.estimate_entropy(), entropy));
-                }
-                eprintln!(
-                    "{shape:?}: misses beyond ε = {EPS} in {trials} trials: \
-                     cardinality {card_misses}, F2 {f2_misses}, entropy {entropy_misses}"
-                );
-                for (name, misses) in [
-                    ("cardinality", card_misses),
-                    ("F2", f2_misses),
-                    ("entropy", entropy_misses),
-                ] {
                     assert!(
-                        misses as f64 <= allowed(trials, DELTA),
-                        "{shape:?} {name}: {misses}/{trials} misses beyond ε = {EPS}, \
-                         more than the guarantee's δ = {DELTA} allows"
+                        sketch.candidates_complete().iter().all(|&c| c),
+                        "every core must be complete"
                     );
+                    let exact = |g: &dyn Fn(f64) -> f64| -> f64 {
+                        keys.iter().map(|&(_, f)| g(f as f64)).sum()
+                    };
+                    for (name, estimate, truth) in [
+                        ("cardinality", sketch.estimate_cardinality(), KEYS as f64),
+                        ("F2", sketch.estimate_g_sum(|x| x * x), exact(&|x| x * x)),
+                        ("Σ f log f", sketch.estimate_g_sum(x_log_x), exact(&x_log_x)),
+                    ] {
+                        let error = (estimate - truth).abs() / truth;
+                        assert!(
+                            error <= TOLERANCE,
+                            "{shape:?} trial {trial} {name}: {estimate} against {truth}, \
+                             relative error {error:.4} above {TOLERANCE}"
+                        );
+                    }
                 }
             }
-        }
-
-        #[test]
-        fn g_sums_meet_the_recursive_sum_guarantee() {
-            check(20);
-        }
-
-        #[test]
-        #[ignore = "long Monte Carlo run; the fast variant runs by default"]
-        fn g_sums_meet_the_recursive_sum_guarantee_long() {
-            check(500);
         }
     }
 

@@ -82,7 +82,8 @@ mass, so `estimate_l1()` returns the exact tracked total weight, the single
 counter the paper reads `m` from; its G-sum form is `estimate_g_sum(|x| x)`.
 `estimate_entropy()` is Shannon entropy in bits (log2); UnivMon-Q's is in nats.
 `top_layer_complete()` reports whether the top layer's heap holds every key that
-layer received.
+layer received: the check a caller makes for the Recursive Sum's exact top
+layer (see [Paper](#paper)).
 
 ## Merge
 
@@ -181,30 +182,69 @@ polylogarithmic space by this universal sketch, and that Algorithm 2's output
 is an unbiased estimator of the G-sum. For the theorems it refers to Braverman
 and Ostrovsky's Recursive Sum ("Generalizing the layering method of Indyk and
 Woodruff: Recursive sketches for frequency-based vectors on streams",
-APPROX/RANDOM 2013; arXiv:1011.2571, "Recursive Sketching For Frequency
+APPROX/RANDOM 2013; arXiv:1011.2571v1, "Recursive Sketching For Frequency
 Moments"). §4.3 shows that the distinct count (`g(x) = x⁰`), the L1 and L2
 norms and the entropy's `Σ f log f` (`g(x) = x log x`) are G-sums in
-Stream-PolyLog, so the one statement below covers every query here. No
-separate bound is stated for any of them.
+Stream-PolyLog.
 
-The Recursive Sum's statement (arXiv:1011.2571, Algorithm 4.1, Lemma 3.8 and
-Theorem 4.2), for the implicit vector `V = (g(f_1), ..., g(f_n))`, `|V_j|` its
-sum over the keys reaching layer `j`, and target error `ε`:
+arXiv:1011.2571v1, page 8 (verbatim; `ε` is the paper's `ǫ`):
 
-- **Layers.** `φ = O(log n)` pairwise independent zero-one sampling vectors,
-  `n` the number of distinct keys.
-- **Cores.** At every layer `j`, a heavy-hitter algorithm `HH(D_j, α, ε, δ_j)`
-  that with probability at least `1 − δ_j` outputs an `(α, ε)`-cover
-  (Definition 3.2): every key with `g(f_i) ≥ α |V_j|` is reported, and every
-  reported value is within `(1 ± ε)` of `g(f_i)`. Algorithm 4.1 takes
-  `α = ε²/φ³` and `δ_j = 1/φ`; Lemma 3.8 needs `α` of order `ε²/φ³` and `δ_j`
-  of order `1/φ`, and adds the per-layer failures by a union bound over the
-  `φ + 1` layers (Fact 3.7).
-- **Top layer.** `|V_φ|` computed exactly.
+> **Algorithm 4.1.** Recursive Sum[0](D, ε)
+>
+> 1. Generate φ = O(log(n)) pairwise independent zero-one vectors
+>    H₁, . . . , H_φ. Denote D_j to be a stream D_{H₁H₂...H_j}.
+> 2. Compute, in parallel, random cores Q_j = HH(D_j, φ³/ε², ε, 1/φ)
+> 3. If F₀(V_φ) > 10¹⁰ then output 0 and stop. Otherwise compute precisely
+>    Y_φ = |V_φ|.
+> 4. For each j = φ − 1, . . . , 0, compute
+>    Y_j = 2Y_{j+1} − Σ_{i∈Ind(Q_j)} (1 − 2h_i^j) w_{Q_j}(i).
+> 5. Output Y₀.
+>
+> **Theorem 4.2.** Algorithm 4.1 computes (1 ± ε)-approximation of |V| and
+> errs w.p. at most 0.3. The algorithm uses
+> O(log(n) µ(n, 1/(ε² log³(n)), ε, 1/log(n))) memory bits, where µ is the
+> space required by the above algorithm HH.
 
-Then `Y_0` is a `(1 ± ε)`-approximation of `Σ_i g(f_i)` with probability at
-least 0.7 (Theorem 4.2). The failure probability is a constant; a smaller `δ`
-needs the median of independent copies, which this library does not take.
+Here `V = (g(f_1), ..., g(f_n))`, and `HH(D, α, ε, δ)` is "an algorithm that
+produces (α, ε)-cover w.r.t. V(D) w.p. 1 − δ" (page 8): every `α`-major key
+(`g(f_i) ≥ α|V|`) is reported, and every reported value is within `(1 ± ε)` of
+its `g(f_i)` (Definition 3.2, page 6).
+
+Reading the parameters. As printed, Algorithm 4.1's `α = φ³/ε²`, Theorem 4.2's
+`1/(ε² log³ n)` and step 4's sign and `h^j` index disagree with the recursion
+defined on page 7 (`Y'_j = 2Y'_{j+1} + Σ (1 − 2h_i^{j+1}) w_i^j`, which
+Algorithm 2 of the UnivMon paper and this implementation use). The proof
+fixes the requirements: Lemma 3.8 (page 7) holds "for α = Ω(γ²/φ³) and
+δ = Ω(1/φ)", and its proof chooses the per-layer accuracy
+`ε' = γ/(30(φ + 1))` and needs `(φ + 2)(α/ε'² + 2δ)` small (page 8). That is,
+for a target error `γ`: covers accurate to `γ/(30(φ + 1))`, `α` of order
+`γ²/φ³`, and a per-layer failure probability `δ` of order `1/φ`, added over
+the `φ + 1` layers by a union bound (Fact 3.7, page 7). Lemma 3.8 fails with
+probability at most 0.2; Theorem 4.2's proof adds Markov's inequality for the
+rest of the 0.3.
+
+Independence: the analysis needs only pairwise independent sampling vectors
+`H_j` (Lemma 2.2, page 3); for the frequency-moment application, "we obtain an
+algorithm that needs only 4-wise independence" (page 2), the independence its
+Count-Sketch heavy-hitter step needs.
+
+What this gives each query, when every condition holds:
+
+- **Cardinality, F2, `Σ f log f`, L1:** `(1 ± ε)` of the G-sum with probability
+  at least 0.7. `estimate_l2()` is the square root of the F2 G-sum, so its
+  relative error is at most `ε` too (`|√(1 ± ε) − 1| ≤ ε`).
+- **Entropy:** the statement covers `Y = Σ f log2 f`, not `H`. With
+  `H = log2 m − Y/m` and `m` exact, `|Ĥ − H| = |Ŷ − Y|/m ≤ ε Y/m`, so the
+  bound on `H` is additive: `|Ĥ − H| ≤ ε (log2 m − H)`, with probability at
+  least 0.7. It is not a relative bound on `H`.
+
+The failure probability is a constant; a smaller one needs the median of
+independent copies, which this library does not take.
+
+**The defaults are far outside this regime.** The statement needs
+`heap_size` of order `φ³/ε²` with Count Sketches accurate to `ε/(30(φ + 1))`;
+the default shapes (8 layers, heaps of 32 to 128) are orders of magnitude
+smaller, so the 0.7 statement does not apply to them.
 
 ### Where this implementation departs from the paper
 
@@ -221,15 +261,17 @@ needs the median of independent copies, which this library does not take.
   [Constructors](#constructors)).
 - **Cores.** A core here is the fixed-size top-`heap_size` heap with Count
   Sketch estimates (§6.2), not an `(α, ε)`-cover sized from `ε`. It is one when
-  both conditions of Definition 3.2 hold. Capacity: at most `1/α` keys have
-  `g(f_i) ≥ α |V_j|` (their values sum to at most `|V_j|`), so
-  `heap_size ≥ 1/α = φ³/ε²` leaves room for all of them, provided the heap
-  ranks them above the other keys. Accuracy: every heap key's Count Sketch
-  estimate must give `g(w_j(i))` within `(1 ± ε)` of `g(f_i)`, which `rows` and
-  `cols` govern. The library does not size `heap_size`, `rows` or `cols` from
-  `ε`, and does not check either condition.
+  both conditions of Definition 3.2 hold. Capacity: at most `1/α` keys are
+  `α`-major (their values sum to at most `|V_j|`), so `heap_size ≥ 1/α` leaves
+  room for all of them, provided the heap ranks them above the other keys.
+  Accuracy: every heap key's estimate must give `g(w_j(i))` within the cover's
+  accuracy of `g(f_i)`, which `rows` and `cols` govern. The library does not
+  size `heap_size`, `rows` or `cols` from `ε`, and does not check either
+  condition.
 - **Top layer.** The Recursive Sum computes `|V_φ|` exactly; Algorithm 2 and
-  this implementation sum `g` over the top layer's heap.
+  this implementation sum `g` over the top layer's heap. The two agree when
+  the top layer's heap holds every key that layer received, which
+  `top_layer_complete()` reports: a caller relying on the statement checks it.
 - **Success probability.** 0.7 per instance; no median over copies.
 - **L1 and entropy's `m`.** The exact total weight, as §4.3 footnote 4 allows.
 - **Terminal mode.** `update_weighted_terminal` (the Joltik update-last-layer
