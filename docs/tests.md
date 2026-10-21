@@ -220,6 +220,11 @@ Delta tests: [`src/sketches/ddsketch/delta.rs`](../src/sketches/ddsketch/delta.r
 
 | test_name | test_description | what_is_tested |
 | --- | --- | --- |
+| `quantile_interpolated_two_values` | The interpolated quantile of two values is linear between them. | On `[20, 40]` at `alpha = 0.01`, `q` in `{0, 0.5, 0.9, 1}` gives `20, 30, 38, 40` within `alpha` relative, and `get_value_at_quantile(0.9)` keeps its nearest-rank `40`. |
+| `quantile_interpolated_one_value_and_empty` | A single value answers every `q`; an empty sketch answers `None`. | One value `20` gives `20` at `q` in `{0, 0.3, 1}`; an empty sketch gives `Ok(None)`. |
+| `quantile_interpolated_refuses_q_outside_the_unit_interval` | `q` outside `[0, 1]` is an error. | `-0.1`, `1.1`, NaN and `±inf` give `Err`, on a filled and on an empty sketch. |
+| `quantile_interpolated_signed_values` | Signed values interpolate across both stores and the zero bucket. | On `[-40, -20, -5, 0, 10, 30, 70]` for 101 `q`, the error is within `alpha ((1 - f) abs(lower) + f abs(upper))` of the exact interpolated value, and within `alpha` relative where both neighbours share a sign. |
+| `quantile_interpolated_matches_the_exact_value_on_a_large_stream` | A large signed stream meets the bound at every `q`. | 20,000 seeded values `±exp(U(-3, 6))` (20% negative) at `alpha = 0.01`, 201 `q` in `[0, 1]`: each answer is within `alpha ((1 - f) abs(lower) + f abs(upper))` of the exact interpolated quantile. |
 | `insert_and_query_basic` | Basic insert/query preserves count semantics and quantile monotonicity. | Inserts mixed values `[0.0, -5.0, 1.0, 2.0, 3.0, 10.0, 50.0, 100.0, 1000.0]`, verifies non-positive values are ignored (`count == 7`), and checks queried quantiles at `{0.0, 0.5, 0.9, 0.99, 1.0}` are monotone and bounded by sketch min/max. |
 | `empty_quantile_returns_none` | Empty sketch returns no quantiles and zero count. | For a new `DdSketch(alpha=0.01)`, asserts `get_value_at_quantile` returns `None` for `p in {0.0, 0.5, 1.0}` and `get_count() == 0`. |
 | `merge_two_sketches_combines_counts_and_bounds` | Merge combines counts and preserves quantile boundary invariants. | Merges sketches built from `[1,2,3,4]` and `[5,10,20]`, then verifies merged `count=7`, `min=1`, `max=20`, exact boundary quantiles (`q0=1`, `q1=20`), and median lies within `[1,20]`. |
