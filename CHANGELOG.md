@@ -10,6 +10,15 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+### Added
+
+- **`DdSketch::quantile_interpolated(q)`**: the quantile interpolated linearly
+  between the order statistics at rank `q * (n - 1)`, as PromQL
+  `quantile_over_time` and SQL `percentile_cont` compute it, over both signed
+  stores and the zero bucket. `Ok(None)` on an empty sketch, `Err` for `q`
+  outside `[0, 1]`. Within `alpha` relative when both neighbours are
+  indexable and share a sign; an absolute bound across zero. The legacy
+  portable `DdSketch` had it before 0.4.0.
 ### Changed
 
 - **Count Sketch estimates no longer allocate.** The per-row estimates a
