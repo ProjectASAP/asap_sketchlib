@@ -252,7 +252,9 @@ impl DdSketch {
             )));
         }
         let (alpha, admission_rate) = decode_metadata(metadata)?;
-        let p: DdPayload = envelope::decode_block(payload)?;
+        let mut p: DdPayload = envelope::decode_block(payload)?;
+        p.counts.shrink_to_fit();
+        p.negative_counts.shrink_to_fit();
         DdSketch::try_from(DdSketchState {
             alpha,
             positive_store: Buckets {

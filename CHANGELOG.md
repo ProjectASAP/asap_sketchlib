@@ -24,6 +24,9 @@ signals a backwards-compatible change.
   counter width taken from the type.
 - **`Kll::estimated_memory_bytes(k, m, n)`**: an upper bound on the bytes a
   sketch of `k` and `m` holds after `n` items, merges and a cached quantile.
+- **`DdSketch::memory_bytes`**, and **`DdSketch::estimated_memory_bytes(alpha,
+  n, min_magnitude, max_magnitude, negatives)`**: an upper bound on the bytes
+  after `n` values in that magnitude range, in any order and through merges.
 ### Changed
 
 - **Count Sketch estimates no longer allocate.** The per-row estimates a

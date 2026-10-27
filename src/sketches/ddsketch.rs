@@ -534,6 +534,67 @@ impl DdSketch {
         self.alpha
     }
 
+    /// Bytes this sketch holds: the struct and the bucket slots both stores
+    /// have allocated.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>()
+            + (self.positive_store.counts.capacity() + self.negative_store.counts.capacity())
+                * size_of::<u64>()
+    }
+
+    /// Upper bound on [`Self::memory_bytes`] for a sketch of `alpha`, built or
+    /// decoded, after `n` values with magnitudes in `[min_magnitude,
+    /// max_magnitude]`, some negative when `negatives`, in any order and
+    /// through merges. Saturates at `usize::MAX`.
+    ///
+    /// Each sign present holds one store: 128 slots for one value and, for
+    /// more, at most `127 + s` slots for a span of `s <= 64` bucket indices,
+    /// `2 * (s + 126)` above (less for two values). A NaN bound is unbounded;
+    /// a negative `max_magnitude`, one below `min_magnitude`, or a range below
+    /// the indexable one holds no buckets.
+    ///
+    /// Panics when `alpha` is outside `(0, 1)`, as [`Self::new`] does.
+    pub fn estimated_memory_bytes(
+        alpha: f64,
+        n: usize,
+        min_magnitude: f64,
+        max_magnitude: f64,
+        negatives: bool,
+    ) -> usize {
+        let sketch = Self::new(alpha);
+        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(alpha);
+        let low = min_magnitude.max(min_indexable);
+        let high = max_magnitude.min(max_indexable);
+        if n == 0 || low > high {
+            return size_of::<Self>();
+        }
+        let span =
+            usize::try_from(i64::from(sketch.key_for(high)) - i64::from(sketch.key_for(low)) + 1)
+                .unwrap_or(usize::MAX);
+        // Slots one store holds after `values` of the values; two values grow
+        // the first 128-slot block once, or merge two blocks.
+        let store_slots = |values: usize| match values {
+            0 => 0,
+            1 => GROW_CHUNK,
+            _ if span <= GROW_CHUNK / 2 => GROW_CHUNK + span - 1,
+            2 => (2 * GROW_CHUNK)
+                .max(span.saturating_add(GROW_CHUNK - 1))
+                .max(span.saturating_sub(GROW_CHUNK / 2 + 1).saturating_mul(2)),
+            _ => span.saturating_add(GROW_CHUNK - 2).saturating_mul(2),
+        };
+        let slots = if negatives {
+            // Past three values a store's bound stops growing.
+            let n = n.min(6);
+            (0..=n)
+                .map(|values| store_slots(values).saturating_add(store_slots(n - values)))
+                .max()
+                .unwrap_or(0)
+        } else {
+            store_slots(n)
+        };
+        size_of::<Self>().saturating_add(slots.saturating_mul(size_of::<u64>()))
+    }
+
     /// Returns the running sum. Exact over the values passed to [`Self::add`];
     /// a bucket promoted through [`Self::apply_delta`] contributes its bucket
     /// representative instead, and the total saturates at `f64::MAX` rather

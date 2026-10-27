@@ -1,11 +1,11 @@
-//! `TopKHeap`, `CountMinSketch`, `CountSketch`, their WithHeap forms, `Kll`
-//! and `UnivMonQ` memory methods checked against `size_of` and against the bytes
+//! `TopKHeap`, `CountMinSketch`, `CountSketch`, their WithHeap forms, `Kll`,
+//! `DdSketch` and `UnivMonQ` memory methods checked against `size_of` and against the bytes
 //! an instance holds, counted by a global allocator. One `#[test]` so no other test
 //! allocates while a count is taken.
 
 use asap_sketchlib::{
     CountMinF64, CountMinSketchWithHeap, CountMinSketchWithHeapDelta, CountSketch,
-    CountSketchWithHeap, CountSketchWithHeapDelta, DataInput, FastPath, HeapEntry, Kll,
+    CountSketchWithHeap, CountSketchWithHeapDelta, DataInput, DdSketch, FastPath, HeapEntry, Kll,
     RegularPath, TopKHeap, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -411,6 +411,75 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
                 estimated < 3 * largest,
                 "Kll k = {k}, m = {m}, n = {n}: {estimated} against {largest}"
             );
+        }
+    }
+
+    // DDSketch holds at most its estimate for values across a magnitude range
+    // in ascending, descending and scattered order, with and without
+    // negatives, built directly, from merged halves or from a decoded half:
+    // exactly it for no value or one, under twice the largest case past three.
+    for alpha in [0.01, 0.05] {
+        for (low, high) in [(1.0f64, 1.5f64), (1e-3, 1e3), (1.0, 1e6), (1e-9, 1e9)] {
+            for negatives in [false, true] {
+                for n in [0usize, 1, 2, 3, 10_000] {
+                    let estimated =
+                        DdSketch::estimated_memory_bytes(alpha, n, low, high, negatives);
+                    let mut largest = 0;
+                    for order in 0..3 {
+                        for source in ["direct", "merged", "decoded"] {
+                            let value = |i: usize| {
+                                let t = match order {
+                                    0 => i as f64 / (n.max(2) - 1) as f64,
+                                    1 => 1.0 - i as f64 / (n.max(2) - 1) as f64,
+                                    _ => {
+                                        ((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 11)
+                                            as f64
+                                            / (1u64 << 53) as f64
+                                    }
+                                };
+                                let magnitude = (low * (high / low).powf(t)).clamp(low, high);
+                                if negatives && i % 2 == 1 {
+                                    -magnitude
+                                } else {
+                                    magnitude
+                                }
+                            };
+                            let context = format!(
+                                "DdSketch alpha {alpha}, [{low}, {high}], negatives = {negatives}, \
+                                 order {order}, {source}, n = {n}"
+                            );
+                            let (sketch, bytes) = measured_bytes(|| {
+                                let mut sketch = DdSketch::new(alpha);
+                                let mut other = DdSketch::new(alpha);
+                                for i in 0..n / 2 {
+                                    sketch.add(&value(i));
+                                }
+                                if source == "decoded" {
+                                    let encoded = sketch.to_asapv1().unwrap();
+                                    sketch = DdSketch::from_asapv1(&encoded).unwrap();
+                                }
+                                for i in n / 2..n {
+                                    if source == "merged" {
+                                        other.add(&value(i));
+                                    } else {
+                                        sketch.add(&value(i));
+                                    }
+                                }
+                                sketch.merge(&other).unwrap();
+                                sketch
+                            });
+                            check(bytes, estimated, n <= 1, &context);
+                            assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+                            largest = largest.max(bytes);
+                        }
+                    }
+                    assert!(
+                        n == 2 || n == 3 || estimated < 2 * largest,
+                        "DdSketch alpha {alpha}, [{low}, {high}], negatives = {negatives}, \
+                         n = {n}: {estimated} against {largest}"
+                    );
+                }
+            }
         }
     }
 
