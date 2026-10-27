@@ -140,7 +140,7 @@ where
             &delta.deltas,
         )
         .map_err(|e| format!("CountSketchWithHeap delta: {e}"))?;
-        self.heap = delta.heap.clone();
+        self.heap.assign_from(&delta.heap);
         Ok(())
     }
 }

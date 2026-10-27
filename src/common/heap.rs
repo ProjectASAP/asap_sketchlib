@@ -68,7 +68,7 @@ type Index = HashMap<u64, Slot, DigestBuildHasher>;
 
 /// Bounded min-heap over [`HeapEntry`] with key lookup, retaining the `k` largest
 /// counts.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct TopKHeap<C: HeapCount = i64> {
     heap: CommonHeap<HeapEntry<C>, RetainLargest>,
     /// Digest of each resident, parallel to the heap array, so a sift patches
@@ -78,6 +78,22 @@ pub struct TopKHeap<C: HeapCount = i64> {
     /// Largest `positions.capacity()` seen, which gives the index's buckets.
     index_peak: usize,
     heap_size: usize,
+}
+
+impl<C: HeapCount> Clone for TopKHeap<C> {
+    /// Keeps the allocated slots and index buckets, so a clone grows as its
+    /// source would.
+    fn clone(&self) -> Self {
+        let mut slots = Vec::with_capacity(self.slots.capacity());
+        slots.extend_from_slice(&self.slots);
+        Self {
+            heap: self.heap.clone(),
+            slots,
+            positions: self.positions.clone(),
+            index_peak: self.index_peak,
+            heap_size: self.heap_size,
+        }
+    }
 }
 
 impl<C: HeapCount> TopKHeap<C> {
@@ -168,6 +184,23 @@ impl<C: HeapCount> TopKHeap<C> {
         println!("============ Heap Ends ============");
     }
 
+    /// Replaces the residents with `other`'s, keeping this heap's allocations
+    /// and growing them as inserts would.
+    pub(crate) fn assign_from(&mut self, other: &Self) {
+        self.heap.assign_from(&other.heap);
+        let slots =
+            vec_slots_after_pushes(self.slots.capacity(), other.slots.len(), size_of::<u64>());
+        self.slots.clear();
+        self.slots.reserve_exact(slots);
+        self.slots.extend_from_slice(&other.slots);
+        self.positions.clear();
+        for (digest, slot) in &other.positions {
+            self.positions.insert(*digest, slot.clone());
+        }
+        self.index_peak = self.index_peak.max(self.positions.capacity());
+        self.heap_size = other.heap_size;
+    }
+
     /// Clears the heap.
     pub fn clear(&mut self) {
         self.heap.clear();
@@ -221,10 +254,10 @@ impl<C: HeapCount> TopKHeap<C> {
             + spilled
     }
 
-    /// Bytes a heap of capacity `heap_size`, built by [`Self::new`] or decoded,
-    /// holds in steady state once keys shaped like `key` churn through it: the
-    /// struct, the entry and digest arrays, the digest index and each
-    /// resident's owned key bytes.
+    /// Bytes a heap of capacity `heap_size` holds in steady state once keys
+    /// shaped like `key` churn through it, whether built by [`Self::new`],
+    /// decoded or cloned from one of those: the struct, the entry and digest
+    /// arrays, the digest index and each resident's owned key bytes.
     /// A heap holds at most this, and exactly this once evictions have left
     /// its index enough tombstones to resize.
     ///

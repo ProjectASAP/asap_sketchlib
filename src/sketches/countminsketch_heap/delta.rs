@@ -148,7 +148,7 @@ where
             &delta.deltas,
         )
         .map_err(|e| format!("CountMinSketchWithHeap delta: {e}"))?;
-        self.heap = delta.heap.clone();
+        self.heap.assign_from(&delta.heap);
         Ok(())
     }
 }

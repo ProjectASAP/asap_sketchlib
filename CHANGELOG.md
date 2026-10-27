@@ -42,6 +42,10 @@ signals a backwards-compatible change.
   same entries holds, so a decoded sketch grows within
   `estimated_memory_bytes`. Delta decoders still reserve for their entries
   alone.
+- **Clones and applied deltas keep the heap's capacity.** `CommonHeap` and
+  `TopKHeap` clones keep their source's slots and index buckets, and
+  `merge_delta` on the WithHeap sketches refills the sketch's own heap, so
+  both grow within `estimated_memory_bytes`.
 ### Added
 
 - **Checked f64 updates and heap rescoring for the Count-Min and Count Sketch

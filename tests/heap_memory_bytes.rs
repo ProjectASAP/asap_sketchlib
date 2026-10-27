@@ -4,8 +4,9 @@
 //! allocates while a count is taken.
 
 use asap_sketchlib::{
-    CountMinF64, CountMinSketchWithHeap, CountSketch, CountSketchWithHeap, DataInput, FastPath,
-    HeapEntry, RegularPath, TopKHeap, UnivMonQ, UnivMonQConfig, Vector2D,
+    CountMinF64, CountMinSketchWithHeap, CountMinSketchWithHeapDelta, CountSketch,
+    CountSketchWithHeap, CountSketchWithHeapDelta, DataInput, FastPath, HeapEntry, RegularPath,
+    TopKHeap, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -219,6 +220,106 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
                 sketch
             });
             check(bytes, estimated, distinct > heap_size, &context);
+            assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+        }
+    }
+
+    // A clone keeps its source's allocation and a merged delta refills the
+    // sketch's own heap, so both grow as a built heap does: exactly to the
+    // estimate once churned.
+    for heap_size in [7usize, 1024, 2000] {
+        let size = heap_size as u64;
+        let estimated = TopKHeap::<i64>::estimated_memory_bytes(heap_size, &DataInput::U64(0));
+        let mut source = TopKHeap::<i64>::new(heap_size);
+        for i in 0..size - 1 {
+            source.update(&DataInput::U64(i), i as i64 + 1);
+        }
+        let (heap, bytes) = measured_bytes(|| {
+            let mut heap = source.clone();
+            for i in size..50 * size {
+                heap.update(&DataInput::U64(i), i as i64 + 1);
+            }
+            heap
+        });
+        let context = format!("cloned TopKHeap, heap_size = {heap_size}");
+        check(bytes, estimated, true, &context);
+        assert_eq!(heap.memory_bytes(), bytes, "{context}");
+    }
+    type CountSketchF64Heap = CountSketchWithHeap<Vector2D<f64>, FastPath>;
+    for (rows, cols, heap_size) in [(3usize, 64usize, 1024usize), (5, 512, 7)] {
+        let size = heap_size as u64;
+        let mut count_min = CountMinI64Heap::new(rows, cols, heap_size);
+        let mut count_sketch = CountSketchF64Heap::new(rows, cols, heap_size);
+        for i in 0..size - 1 {
+            count_min.update_weighted(&DataInput::U64(i), i as i64 + 1);
+            count_sketch.update_weighted(&DataInput::U64(i), (i + 1) as f64 * 1e6);
+        }
+        let count_min_delta = CountMinSketchWithHeapDelta::<i64>::from_asapv1(
+            &CountMinSketchWithHeapDelta::<i64>::new(
+                rows,
+                cols,
+                Vec::new(),
+                Vec::new(),
+                count_min.heap().clone(),
+            )
+            .unwrap()
+            .to_asapv1()
+            .unwrap(),
+        )
+        .unwrap();
+        let count_sketch_delta = CountSketchWithHeapDelta::<f64, FastPath>::from_asapv1(
+            &CountSketchWithHeapDelta::<f64, FastPath>::new(
+                rows,
+                cols,
+                Vec::new(),
+                Vec::new(),
+                count_sketch.heap().clone(),
+            )
+            .unwrap()
+            .to_asapv1()
+            .unwrap(),
+        )
+        .unwrap();
+        let estimated =
+            CountMinI64Heap::estimated_memory_bytes(rows, cols, heap_size, &DataInput::U64(0));
+        for delta in [false, true] {
+            let context =
+                format!("CountMinSketchWithHeap {rows}x{cols}, heap {heap_size}, delta = {delta}");
+            let (sketch, bytes) = measured_bytes(|| {
+                let mut sketch = if delta {
+                    let mut sketch = CountMinI64Heap::new(rows, cols, heap_size);
+                    sketch.merge_delta(&count_min_delta).unwrap();
+                    sketch
+                } else {
+                    count_min.clone()
+                };
+                for i in size..50 * size {
+                    sketch.update_weighted(&DataInput::U64(i), i as i64 + 1);
+                }
+                sketch
+            });
+            check(bytes, estimated, true, &context);
+            assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+        }
+        let estimated =
+            CountSketchF64Heap::estimated_memory_bytes(rows, cols, heap_size, &DataInput::U64(0));
+        for delta in [false, true] {
+            let context =
+                format!("CountSketchWithHeap {rows}x{cols}, heap {heap_size}, delta = {delta}");
+            let (sketch, bytes) = measured_bytes(|| {
+                let mut sketch = if delta {
+                    let mut sketch = CountSketchF64Heap::new(rows, cols, heap_size);
+                    sketch.merge_delta(&count_sketch_delta).unwrap();
+                    sketch
+                } else {
+                    count_sketch.clone()
+                };
+                for i in size..50 * size {
+                    sketch.update_weighted(&DataInput::U64(i), (i + 1) as f64 * 1e6);
+                }
+                sketch
+            });
+            check(bytes, estimated, true, &context);
             assert_eq!(sketch.memory_bytes(), bytes, "{context}");
         }
     }
