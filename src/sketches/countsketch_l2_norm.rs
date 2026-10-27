@@ -3,6 +3,7 @@
 //! [`CountSketchWithL2Norm`] is the per-layer sketch of `UnivMon` and
 //! `UnivMonTwoTier`; its L2 norm sets their terminal-mode heavy-hitter threshold.
 
+use crate::common::structures::matrix_storage::RowEstimates;
 use std::marker::PhantomData;
 
 use crate::common::structures::matrix_storage::cols_mask_bits;
@@ -229,7 +230,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
 
     /// Returns the median estimate of the squared L2 norm across rows.
     pub fn l2_squared(&self) -> f64 {
-        let mut values: Vec<f64> = self.row_l2_squared.as_slice()[..self.rows]
+        let mut values: RowEstimates = self.row_l2_squared.as_slice()[..self.rows]
             .iter()
             .map(|&v| v as f64)
             .collect();
@@ -254,7 +255,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     pub fn estimate_with_hash(&self, hashed_val: u128) -> f64 {
         let mask_bits = self.counts.mask_bits() as usize;
         let mask = (1u128 << mask_bits) - 1;
-        let mut lst = Vec::with_capacity(self.rows);
+        let mut lst = RowEstimates::with_capacity(self.rows);
         let mut shift_amount = 0;
         let mut sign_bit_pos = 127;
 

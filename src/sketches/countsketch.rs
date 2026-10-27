@@ -10,10 +10,12 @@
 use crate::asapv1::admission_rate::admit_all;
 use crate::common::hash::check_matrix_shape;
 use crate::common::structure_utils::AdmittedRows;
+use crate::common::structures::matrix_storage::RowEstimates;
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
-    FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded, nitro_delta_saturated_i32,
+    FastPathHasher, FixedMatrix, MATRIX_MAX_ROWS, MatrixFastHash, MatrixStorage, NitroTarget,
+    QuickMatrixI64, QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
+    nitro_delta_saturated_i32,
 };
 use std::marker::PhantomData;
 use std::ops::Neg;
@@ -381,7 +383,7 @@ where
     pub fn estimate(&self, value: &DataInput) -> f64 {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
-        let mut estimates = Vec::with_capacity(rows);
+        let mut estimates = RowEstimates::with_capacity(rows);
         for r in 0..rows {
             let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
@@ -404,6 +406,51 @@ where
         } else {
             (estimates[mid - 1] + estimates[mid]) / 2.0
         }
+    }
+}
+
+// Checked updates for f64 counters.
+impl<H: SketchHasher> CountSketch<Vector2D<f64>, RegularPath, H> {
+    /// Checks a weight [`Self::try_update_weighted`] accepts: finite. A
+    /// negative weight is a signed update.
+    pub fn check_weight(weight: f64) -> Result<(), String> {
+        if weight.is_finite() {
+            Ok(())
+        } else {
+            Err(format!("Count Sketch weight {weight} must be finite"))
+        }
+    }
+
+    /// [`Self::update_weighted`] that rejects a weight [`Self::check_weight`]
+    /// rejects, and an update that would carry a probed counter past
+    /// `f64::MAX` in either direction. On an error the sketch is unchanged.
+    pub fn try_update_weighted(&mut self, value: &DataInput, weight: f64) -> Result<(), String> {
+        Self::check_weight(weight)?;
+        let cols = self.counts.cols();
+        let probed = (0..self.counts.rows())
+            .map(|r| {
+                let hashed = H::hash64_seeded(r, value);
+                let col = ((hashed & LOWER_32_MASK) as usize) % cols;
+                let delta = if (hashed >> 63) & 1 == 1 {
+                    weight
+                } else {
+                    -weight
+                };
+                (col, delta)
+            })
+            .collect::<smallvec::SmallVec<[(usize, f64); MATRIX_MAX_ROWS]>>();
+        for (r, &(col, delta)) in probed.iter().enumerate() {
+            if !(self.counts.query_one_counter(r, col) + delta).is_finite() {
+                return Err(format!(
+                    "Count Sketch counter overflow adding weight {weight}"
+                ));
+            }
+        }
+        for (r, (col, delta)) in probed.into_iter().enumerate() {
+            self.counts
+                .update_one_counter(r, col, |a, b| *a += b, delta);
+        }
+        Ok(())
     }
 }
 

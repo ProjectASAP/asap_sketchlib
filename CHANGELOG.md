@@ -19,6 +19,32 @@ signals a backwards-compatible change.
   outside `[0, 1]`. Within `alpha` relative when both neighbours are
   indexable and share a sign; an absolute bound across zero. The legacy
   portable `DdSketch` had it before 0.4.0.
+### Changed
+
+- **Count Sketch estimates no longer allocate.** The per-row estimates a
+  median is taken over are collected on the stack instead of in a fresh
+  `Vec`: up to 20 rows for `Vector2D` (the fast and regular paths),
+  `BitMatrix`, `CountSketchWithL2Norm` (estimates and `l2_squared`) and
+  `CountSketchFold`, and a `[f64; ROWS]` array for the fixed-size matrices.
+  About 8 to 14 ns less per estimate on small shapes. Results are unchanged.
+### Fixed
+
+- **`Kll::update` regains most of its pre-0.4.0 speed.** With the lazily grown
+  buffer, `compress_while_updating` was inlined into the insert path, which
+  then no longer inlined into callers; a stream of updates ran about 10%
+  slower. Compaction is kept out of line again: within 4% of 0.3.x on a
+  loaded host, at parity on a quiet one.
+### Added
+
+- **Checked f64 updates and heap rescoring for the Count-Min and Count Sketch
+  heap sketches.** Over `Vector2D<f64>` counters, `check_weight` and
+  `try_update_weighted` on `CountMinSketch` and `CountSketch` reject a
+  non-finite weight (and a negative one for Count-Min) and a counter
+  overflow, leaving the sketch unchanged; `CountMinSketchWithHeap` and
+  `CountSketchWithHeap` gain the same `try_update_weighted`, which then
+  updates the heap. `rescore_heap` on both heap sketches re-reads every
+  resident's count from the counters, since an update rescores only the key
+  it touches.
 
 ## [0.4.0] - 2026-10-20
 
