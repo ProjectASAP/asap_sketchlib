@@ -29,7 +29,6 @@ pub(crate) const COUNT_SKETCH_WITH_HEAP_DELTA: &[u8] = &[0x0a, 0x80];
 pub(crate) const ELASTIC: &[u8] = &[0x0b, 0x00];
 pub(crate) const COCO: &[u8] = &[0x0c, 0x00];
 pub(crate) const UNIFORM_SAMPLING: &[u8] = &[0x0d, 0x00];
-#[cfg(feature = "experimental")]
 pub(crate) const KMV: &[u8] = &[0x0e, 0x00];
 pub(crate) const UNIVMON: &[u8] = &[0x10, 0x00];
 pub(crate) const UNIVMON_TWO_TIER: &[u8] = &[0x11, 0x00];

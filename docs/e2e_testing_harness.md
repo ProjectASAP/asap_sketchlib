@@ -77,6 +77,7 @@ tests/
 ├── e2e_octo.rs              # …the OctoSketch promotion protocol
 ├── e2e_heavy_hitters.rs     # …Space-Saving, CocoSketch and ElasticSketch
 ├── e2e_membership.rs        # …the Bloom filter's membership guarantees
+├── e2e_kmv.rs               # …the KMV distinct-count sketch
 ├── e2e_experimental.rs      # …the remaining feature-gated sketches
 └── bug_verification.rs      # regression tests for fixed defects
 ```

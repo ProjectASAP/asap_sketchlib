@@ -4,6 +4,8 @@
 //! - "On synopses for distinct-value estimation under multiset operations"
 //!   <https://dl.acm.org/doi/10.1145/1247480.1247504>
 
+use crate::common::heap::vec_slots_after_pushes;
+use crate::common::structures::heap::PREALLOCATED_SLOTS;
 use crate::{
     CommonHeap, DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, RetainSmallest,
     SketchHasher,
@@ -93,6 +95,22 @@ impl<H: SketchHasher> Kmv<H> {
     pub fn memory_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.retained_hashes.allocated_slots() * std::mem::size_of::<u64>()
+    }
+}
+
+// Memory estimate; the size is the same for every hasher.
+impl Kmv {
+    /// Bytes a sketch of `k`, built, decoded or cloned, holds after `distinct`
+    /// distinct inputs, merges included: [`Self::memory_bytes`] exactly, and an
+    /// upper bound when fewer arrive. The heap reserves `min(k, 1024)` slots
+    /// and doubles toward `k`. Saturates at `usize::MAX`.
+    pub fn estimated_memory_bytes(k: usize, distinct: usize) -> usize {
+        let slots = vec_slots_after_pushes(
+            k.min(PREALLOCATED_SLOTS),
+            k.min(distinct),
+            std::mem::size_of::<u64>(),
+        );
+        std::mem::size_of::<Self>().saturating_add(slots.saturating_mul(std::mem::size_of::<u64>()))
     }
 }
 

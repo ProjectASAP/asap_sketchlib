@@ -14,6 +14,7 @@ mod data_input;
 mod frameworks;
 mod frequency;
 mod heavy_hitters;
+mod kmv;
 mod matrix_instances;
 mod membership;
 mod nitro;

@@ -4,7 +4,7 @@
 //! Broadly, the sketches fall into a few common use cases:
 //!
 //! - frequency estimation: [`CountMinSketch`], [`CountSketch`]
-//! - cardinality estimation: [`HyperLogLog`]
+//! - cardinality estimation: [`HyperLogLog`], [`Kmv`]
 //! - quantiles and distributions: [`Kll`], [`DdSketch`]
 //! - specialized or composite structures: heap-backed, folded, and
 //!   runtime-oriented variants such as [`CountMinSketchWithHeap`], [`CountSketchWithHeap`],
@@ -99,9 +99,7 @@ pub use kll::Kll;
 pub mod kll_dynamic;
 pub use kll_dynamic::KllDynamic;
 
-#[cfg(feature = "experimental")]
 pub mod kmv;
-#[cfg(feature = "experimental")]
 pub use kmv::Kmv;
 
 #[cfg(feature = "experimental")]

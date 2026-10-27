@@ -23,6 +23,7 @@ mod hll;
 mod hydra;
 mod kll;
 mod kll_dynamic;
+mod kmv;
 mod nitro;
 mod octo_delta;
 mod set_aggregator;
@@ -33,8 +34,6 @@ mod univmon_q;
 
 #[cfg(feature = "experimental")]
 mod count_min_hll;
-#[cfg(feature = "experimental")]
-mod kmv;
 #[cfg(feature = "experimental")]
 mod microscope;
 #[cfg(feature = "experimental")]

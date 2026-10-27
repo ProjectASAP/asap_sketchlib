@@ -45,12 +45,25 @@ impl<T: Ord> CommonHeapOrder<T> for RetainSmallest {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 /// Capacity-bounded binary heap with pluggable ordering.
 pub struct CommonHeap<T, O: CommonHeapOrder<T>> {
     data: Vec<T>,
     size: usize,
     order: O,
+}
+
+impl<T: Clone, O: CommonHeapOrder<T> + Clone> Clone for CommonHeap<T, O> {
+    /// Keeps the allocated slots, so a clone grows as its source would.
+    fn clone(&self) -> Self {
+        let mut data = Vec::with_capacity(self.data.capacity());
+        data.extend_from_slice(&self.data);
+        Self {
+            data,
+            size: self.size,
+            order: self.order.clone(),
+        }
+    }
 }
 
 /// Slots reserved up front. A heap whose capacity is larger grows on demand.
@@ -74,14 +87,45 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
         }
     }
 
-    /// Wraps `data` that already satisfies the heap invariant for `order`.
-    #[cfg(feature = "experimental")]
+    /// Wraps `data` that already satisfies the heap invariant for `order`,
+    /// holding the slots a heap built by [`Self::with_capacity`] holds after
+    /// as many pushes.
     pub(crate) fn from_heap_vec(data: Vec<T>, capacity: usize, order: O) -> Self {
+        let slots = crate::common::heap::vec_slots_after_pushes(
+            capacity.min(PREALLOCATED_SLOTS),
+            data.len(),
+            size_of::<T>(),
+        );
+        let mut data = data;
+        if data.capacity() > slots {
+            data.shrink_to(slots);
+        } else {
+            data.reserve_exact(slots - data.len());
+        }
         Self {
             data,
             size: capacity,
             order,
         }
+    }
+
+    /// Replaces the contents with `other`'s, keeping this heap's allocation and
+    /// growing it as pushes would.
+    pub(crate) fn assign_from(&mut self, other: &Self)
+    where
+        T: Clone,
+        O: Clone,
+    {
+        let slots = crate::common::heap::vec_slots_after_pushes(
+            self.data.capacity(),
+            other.data.len(),
+            size_of::<T>(),
+        );
+        self.data.clear();
+        self.data.reserve_exact(slots);
+        self.data.extend_from_slice(&other.data);
+        self.size = other.size;
+        self.order = other.order.clone();
     }
 
     /// Returns the number of elements currently in the heap.

@@ -335,14 +335,18 @@ mod tests {
             sketch!("Hydra KLL", hydra_kll, Hydra),
             sketch!("Hydra UnivMon", hydra_um, Hydra),
         ];
-        #[cfg(feature = "experimental")]
         let cases = {
             let mut cases = cases;
             let mut kmv: Kmv = Kmv::new(4);
             kmv.update(&DataInput::U64(9));
+            cases.push(sketch!("KMV", kmv, Kmv));
+            cases
+        };
+        #[cfg(feature = "experimental")]
+        let cases = {
+            let mut cases = cases;
             let mut uniform = UniformSampling::with_seed(1.0, 7);
             uniform.update(2.5);
-            cases.push(sketch!("KMV", kmv, Kmv));
             cases.push(sketch!("Uniform", uniform, UniformSampling));
             cases
         };

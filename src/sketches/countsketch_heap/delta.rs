@@ -14,7 +14,7 @@ use crate::asapv1::kind;
 use crate::asapv1::kind::COUNT_SKETCH_WITH_HEAP_DELTA;
 use crate::sketches::countminsketch_heap::heap_wire::{
     DeltaCells, check_geometry, decode_metadata, decode_payload, encode_metadata, encode_payload,
-    heap_entries, rebuild_heap, wire_key_type,
+    heap_entries, rebuild_delta_heap, wire_key_type,
 };
 use crate::sketches::countsketch::{CsWireCounter, CsWireMode};
 use crate::{
@@ -105,7 +105,7 @@ where
         let shape =
             decode_metadata::<H>("CountSketchWithHeap", metadata, T::COUNTER_TYPE, Mode::MODE)?;
         let (cells, entries) = decode_payload::<DeltaCells<T>, _>(&shape.key_type, payload)?;
-        let heap = rebuild_heap(shape.heap_size, entries)?;
+        let heap = rebuild_delta_heap(shape.heap_size, entries)?;
         Self::new(shape.rows, shape.cols, cells.indices, cells.deltas, heap)
             .map_err(RmpDecodeError::Uncategorized)
     }
@@ -140,7 +140,7 @@ where
             &delta.deltas,
         )
         .map_err(|e| format!("CountSketchWithHeap delta: {e}"))?;
-        self.heap = delta.heap.clone();
+        self.heap.assign_from(&delta.heap);
         Ok(())
     }
 }

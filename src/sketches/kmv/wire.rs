@@ -78,9 +78,9 @@ struct KmvPayload {
     hashes: Vec<u64>,
 }
 
-/// Seats the retained hashes as the heap, with the backing vector sized from
-/// the payload so `k` sizes no allocation. A descending run already satisfies
-/// the max-heap invariant, so the hashes seat as they are.
+/// Seats the retained hashes as the heap, holding the slots a built heap with
+/// as many hashes holds. A descending run already satisfies the max-heap
+/// invariant, so the hashes seat as they are.
 fn rebuild_heap(k: usize, ascending: Vec<u64>) -> CommonHeap<u64, RetainSmallest> {
     let mut data = ascending;
     data.reverse();

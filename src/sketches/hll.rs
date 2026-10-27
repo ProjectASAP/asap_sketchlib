@@ -60,6 +60,14 @@ pub struct HyperLogLogImpl<
     admission_rate: f64,
 }
 
+/// One byte per register: `2^precision`, saturating at `usize::MAX`.
+fn register_bytes(precision: usize) -> usize {
+    u32::try_from(precision)
+        .ok()
+        .and_then(|precision| 1usize.checked_shl(precision))
+        .unwrap_or(usize::MAX)
+}
+
 /// Classic HyperLogLog cardinality estimate over a raw register slice.
 ///
 /// This is the estimator body shared by [`HyperLogLogImpl<Classic, _, _>`] and
@@ -206,6 +214,20 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
                 *reg = other_val;
             }
         }
+    }
+
+    /// Bytes this sketch holds: the struct and one byte per register.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() + Registers::NUM_REGISTERS
+    }
+
+    /// Bytes a sketch of `2^precision` registers holds: the struct and one
+    /// byte per register. `precision` alone decides it, whatever alias this is
+    /// called through; the crate builds 12, 14 and 16, and
+    /// [`impl_hll_registers!`](crate::impl_hll_registers) others. Saturates at
+    /// `usize::MAX`.
+    pub fn estimated_memory_bytes(precision: usize) -> usize {
+        size_of::<Self>().saturating_add(register_bytes(precision))
     }
 }
 
@@ -412,6 +434,20 @@ impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
     /// Returns the estimated cardinality from the HIP running estimate.
     pub fn estimate(&self) -> usize {
         self.est as usize
+    }
+
+    /// Bytes this sketch holds: the struct and one byte per register.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() + Registers::NUM_REGISTERS
+    }
+
+    /// Bytes a sketch of `2^precision` registers holds: the struct and one
+    /// byte per register. `precision` alone decides it, whatever alias this is
+    /// called through; the crate builds 12, 14 and 16, and
+    /// [`impl_hll_registers!`](crate::impl_hll_registers) others. Saturates at
+    /// `usize::MAX`.
+    pub fn estimated_memory_bytes(precision: usize) -> usize {
+        size_of::<Self>().saturating_add(register_bytes(precision))
     }
 }
 
