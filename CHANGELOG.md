@@ -35,6 +35,8 @@ signals a backwards-compatible change.
 - **`memory_bytes` and `estimated_memory_bytes`** on `CountSketchWithL2Norm`
   (`rows, cols`) and `UnivMon` (`heap_size, rows, cols, layers, key`): the
   pyramid's estimate is the steady state once every layer's heap has churned.
+- **`CountMinSketch::total()`**: the total admitted update weight, row 0's
+  counters summed in `f64`, exact below 2^53.
 ### Changed
 
 - **`Kmv` builds without the `experimental` feature**, with its ASAPv1 codec.

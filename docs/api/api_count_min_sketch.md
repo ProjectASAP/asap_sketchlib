@@ -50,12 +50,15 @@ the shape, allocation and admission rate.
 ```rust
 fn estimate(&self, value: &DataInput) -> S::Counter
 fn estimate_with_hash(&self, hashed_val: &H::HashType) -> S::Counter
+fn total(&self) -> f64
 fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn as_storage(&self) -> &S
 fn as_storage_mut(&mut self) -> &mut S
 fn memory_bytes(&self) -> usize
 ```
+
+`total` is row 0's counters summed in `f64`, exact below 2^53.
 
 `memory_bytes` is the struct plus its `rows * cols` counters, exact for
 `Vector2D` storage.
