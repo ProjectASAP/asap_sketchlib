@@ -123,9 +123,11 @@ where
         heap_size: usize,
         key: &DataInput,
     ) -> usize {
-        size_of::<Self>() - size_of::<TopKHeap<T::HeapCount>>()
-            + rows.saturating_mul(cols).saturating_mul(size_of::<T>())
-            + TopKHeap::<T::HeapCount>::estimated_memory_bytes(heap_size, key)
+        (size_of::<Self>() - size_of::<TopKHeap<T::HeapCount>>())
+            .saturating_add(rows.saturating_mul(cols).saturating_mul(size_of::<T>()))
+            .saturating_add(TopKHeap::<T::HeapCount>::estimated_memory_bytes(
+                heap_size, key,
+            ))
     }
 }
 

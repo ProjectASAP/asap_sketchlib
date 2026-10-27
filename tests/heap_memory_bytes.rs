@@ -69,6 +69,21 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
                 + 1024 * (std::mem::size_of::<HeapEntry<i64>>() + 8)
     );
 
+    // A shape past the address space prices at `usize::MAX`.
+    assert_eq!(
+        TopKHeap::<i64>::estimated_memory_bytes(usize::MAX, &DataInput::Str("key")),
+        usize::MAX
+    );
+    assert_eq!(
+        CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::estimated_memory_bytes(
+            5,
+            512,
+            1 << 61,
+            &DataInput::U64(0),
+        ),
+        usize::MAX
+    );
+
     // After `heap_size` distinct keys a heap holds at most the estimate; after
     // 50 times as many, each evicting the root, exactly it. `memory_bytes` is
     // the allocation throughout. Capacities sit on both sides of the
