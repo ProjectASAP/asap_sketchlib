@@ -404,16 +404,21 @@ pub(crate) fn owned_key_bytes(key: &DataInput) -> usize {
     }
 }
 
-/// Element slots a `Vec` holds after growing from `reserved` slots to `len`
-/// elements one push at a time: std doubles the capacity, with a minimum of
-/// 8 slots for 1-byte elements, 4 up to 1 KiB, and 1 above. Saturates at
-/// `usize::MAX`.
-pub(crate) fn vec_slots_after_pushes(reserved: usize, len: usize, element_bytes: usize) -> usize {
-    let minimum = match element_bytes {
+/// Smallest capacity std gives a growing `Vec`: 8 slots for 1-byte elements,
+/// 4 up to 1 KiB, and 1 above.
+pub(crate) fn vec_minimum_slots(element_bytes: usize) -> usize {
+    match element_bytes {
         1 => 8,
         2..=1024 => 4,
         _ => 1,
-    };
+    }
+}
+
+/// Element slots a `Vec` holds after growing from `reserved` slots to `len`
+/// elements one push at a time: std doubles the capacity, from at least
+/// [`vec_minimum_slots`]. Saturates at `usize::MAX`.
+pub(crate) fn vec_slots_after_pushes(reserved: usize, len: usize, element_bytes: usize) -> usize {
+    let minimum = vec_minimum_slots(element_bytes);
     let mut slots = reserved;
     while slots < len {
         slots = slots.saturating_mul(2).max(slots + 1).max(minimum);

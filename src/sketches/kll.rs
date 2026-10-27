@@ -12,6 +12,7 @@
 
 use rand::{Rng, rng};
 
+use crate::common::heap::vec_minimum_slots;
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, Vector1D};
@@ -129,6 +130,24 @@ fn compute_max_capacity(k: usize, m: usize) -> usize {
         scale *= CAPACITY_DECAY;
     }
     total
+}
+
+/// `k` and `m` as a sketch keeps them: `m` in `[2, MAX_K]`, `k` in `[m, MAX_K]`.
+fn normalized_k_m(k: usize, m: usize) -> (usize, usize) {
+    let m = m.clamp(2, MAX_K);
+    (k.clamp(m, MAX_K), m)
+}
+
+/// Level capacities by height from the top: `max(ceil(k * (2/3)^i), m)`,
+/// the last entry standing for every greater height.
+fn capacity_table(k: usize, m: usize) -> [u32; CAPACITY_CACHE_LEN] {
+    let mut table = [0; CAPACITY_CACHE_LEN];
+    let mut scale = 1.0_f64;
+    for cap in table.iter_mut() {
+        *cap = (((k as f64) * scale).ceil() as usize).max(m) as u32;
+        scale *= CAPACITY_DECAY;
+    }
+    table
 }
 
 /// Checked total weighted item count for compactor-level sizes given
@@ -307,12 +326,7 @@ impl<T: NumericalValue> Kll<T> {
     }
 
     fn init_internal(k: usize, m: usize, coin: Coin, seed: Option<u64>) -> Self {
-        let mut norm_m = m.min(MAX_K);
-        norm_m = norm_m.max(2);
-        let mut norm_k = k.max(norm_m);
-        if norm_k > MAX_K {
-            norm_k = MAX_K;
-        }
+        let (norm_k, norm_m) = normalized_k_m(k, m);
         let max_cap = compute_max_capacity(norm_k, norm_m);
         let mut s = Self {
             items: Box::default(),
@@ -365,6 +379,58 @@ impl<T: NumericalValue> Kll<T> {
             + self.cdf_cache.as_ref().map_or(0, |cdf| {
                 cdf.entries.capacity() * std::mem::size_of::<CdfEntry>()
             })
+    }
+
+    /// Upper bound on [`Self::memory_bytes`] for a sketch of `k` and `m`, as
+    /// [`Self::new`] takes them, holding a CDF from [`Self::cdf_cached`] after
+    /// `n` items through updates and merges. `n` counts every item since the
+    /// sketch was built or decoded, a decoded sketch's count included;
+    /// [`Self::clear`] keeps the buffer, so items before it count too.
+    ///
+    /// The struct and level array are exact; the buffer, compaction scratch
+    /// space and CDF are bounded by the items `n` can leave retained.
+    pub fn estimated_memory_bytes(k: usize, m: usize, n: usize) -> usize {
+        let (k, m) = normalized_k_m(k, m);
+        let capacities = capacity_table(k, m);
+        // A level is added once the top holds `k + 1` items of weight 2^top.
+        let mut num_levels = 1;
+        while num_levels < MAX_LEVELS
+            && 1usize
+                .checked_shl(num_levels as u32 - 1)
+                .and_then(|weight| weight.checked_mul(k + 1))
+                .is_some_and(|items| items <= n)
+        {
+            num_levels += 1;
+        }
+        let level_capacity: usize = (0..num_levels)
+            .map(|height| capacities[height.min(CAPACITY_CACHE_LEN - 1)] as usize)
+            .sum();
+        let retained = n.min(level_capacity);
+        let buffer = if n == 0 {
+            0
+        } else {
+            (2 * (n - 1).min(level_capacity))
+                .max(INITIAL_BUFFER_ITEMS)
+                .min(compute_max_capacity(k, m))
+        };
+        // A compaction copies the shorter of two runs, at most `k` and at most
+        // half of what is retained; none runs before `k + 1` items.
+        let copied = if n <= k {
+            0
+        } else {
+            k.min(n.min(level_capacity + 1) / 2)
+        };
+        let scratch = if copied == 0 {
+            0
+        } else {
+            (2 * (copied - 1))
+                .max(copied)
+                .max(vec_minimum_slots(std::mem::size_of::<T>()))
+        };
+        std::mem::size_of::<Self>()
+            + (MAX_LEVELS + 1) * std::mem::size_of::<usize>()
+            + (buffer + scratch) * std::mem::size_of::<T>()
+            + retained * std::mem::size_of::<CdfEntry>()
     }
 
     /// Reconstruct a KLL directly from the retained `items` in level order
@@ -552,13 +618,7 @@ impl<T: NumericalValue> Kll<T> {
 
     fn rebuild_capacity_cache(&mut self) {
         self.top_height = self.num_levels.saturating_sub(1);
-        let mut scale = 1.0_f64;
-        for idx in 0..CAPACITY_CACHE_LEN {
-            let scaled = ((self.k as f64) * scale).ceil() as usize;
-            let cap = scaled.max(self.m);
-            self.capacity_cache[idx] = cap as u32;
-            scale *= CAPACITY_DECAY;
-        }
+        self.capacity_cache = capacity_table(self.k, self.m);
         self.level0_capacity = self.capacity_for_level(0);
     }
 

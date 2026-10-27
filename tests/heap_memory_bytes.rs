@@ -1,12 +1,12 @@
-//! `TopKHeap`, `CountMinSketch`, `CountSketch`, their WithHeap forms and
-//! `UnivMonQ` memory methods checked against `size_of` and against the bytes
+//! `TopKHeap`, `CountMinSketch`, `CountSketch`, their WithHeap forms, `Kll`
+//! and `UnivMonQ` memory methods checked against `size_of` and against the bytes
 //! an instance holds, counted by a global allocator. One `#[test]` so no other test
 //! allocates while a count is taken.
 
 use asap_sketchlib::{
     CountMinF64, CountMinSketchWithHeap, CountMinSketchWithHeapDelta, CountSketch,
-    CountSketchWithHeap, CountSketchWithHeapDelta, DataInput, FastPath, HeapEntry, RegularPath,
-    TopKHeap, UnivMonQ, UnivMonQConfig, Vector2D,
+    CountSketchWithHeap, CountSketchWithHeapDelta, DataInput, FastPath, HeapEntry, Kll,
+    RegularPath, TopKHeap, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -353,6 +353,65 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
             bytes,
             "CountSketch {rows}x{cols}"
         );
+    }
+
+    // KLL holds at most its estimate once `n` values have arrived directly,
+    // through merges, a self-merge or after a decode, with a quantile cached:
+    // exactly it for no value or one, and under three times the largest case.
+    let kll_fill = |sketch: &mut Kll<f64>, values: std::ops::Range<usize>| {
+        for i in values {
+            sketch.update(&((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) as f64));
+        }
+    };
+    for (k, m) in [(200usize, 8usize), (64, 4)] {
+        for n in [0usize, 1, 150, 1_000, 100_000] {
+            let estimated = Kll::<f64>::estimated_memory_bytes(k, m, n);
+            let mut half = Kll::<f64>::with_seed(k, m, 9);
+            kll_fill(&mut half, 0..n / 2);
+            let encoded = half.to_asapv1().unwrap();
+            let mut largest = 0;
+            for scenario in 0..6 {
+                let context = format!("Kll k = {k}, m = {m}, n = {n}, scenario {scenario}");
+                let (sketch, bytes) = measured_bytes(|| {
+                    let mut sketch = Kll::<f64>::with_seed(k, m, 1);
+                    match scenario {
+                        0 => kll_fill(&mut sketch, 0..n),
+                        1 => {
+                            kll_fill(&mut sketch, 0..n / 2);
+                            let mut other = Kll::<f64>::with_seed(k, m, 2);
+                            kll_fill(&mut other, n / 2..n);
+                            sketch.merge(&other);
+                        }
+                        2 | 3 => {
+                            let parts = if scenario == 2 { 1 } else { 4 };
+                            for part in 0..parts {
+                                let mut other = Kll::<f64>::with_seed(k, m, part as u64 + 2);
+                                kll_fill(&mut other, part * n / parts..(part + 1) * n / parts);
+                                sketch.merge(&other);
+                            }
+                        }
+                        4 if n % 2 == 0 => {
+                            kll_fill(&mut sketch, 0..n / 2);
+                            let copy = sketch.clone();
+                            sketch.merge(&copy);
+                        }
+                        _ => {
+                            sketch = Kll::<f64>::from_asapv1(&encoded).unwrap();
+                            kll_fill(&mut sketch, n / 2..n);
+                        }
+                    }
+                    sketch.quantile_cached(0.5);
+                    sketch
+                });
+                check(bytes, estimated, n <= 1, &context);
+                assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+                largest = largest.max(bytes);
+            }
+            assert!(
+                estimated < 3 * largest,
+                "Kll k = {k}, m = {m}, n = {n}: {estimated} against {largest}"
+            );
+        }
     }
 
     // UnivMon-Q reports exactly what it allocated, fresh and after enough

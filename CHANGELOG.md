@@ -22,6 +22,8 @@ signals a backwards-compatible change.
 - **`estimated_memory_bytes(rows, cols)`** on `CountMinSketch` and
   `CountSketch`: the `memory_bytes` of a sketch with those dimensions, the
   counter width taken from the type.
+- **`Kll::estimated_memory_bytes(k, m, n)`**: an upper bound on the bytes a
+  sketch of `k` and `m` holds after `n` items, merges and a cached quantile.
 ### Changed
 
 - **Count Sketch estimates no longer allocate.** The per-row estimates a
