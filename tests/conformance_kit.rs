@@ -534,10 +534,8 @@ impl MergeOps for FoldCsAdapter {
     }
 }
 
-#[cfg(feature = "experimental")]
 struct KmvAdapter(RefCell<asap_sketchlib::Kmv>);
 
-#[cfg(feature = "experimental")]
 impl CardinalityOps for KmvAdapter {
     fn ingest(&mut self, key: &[u8]) {
         self.0.borrow_mut().update(&DataInput::Bytes(key));
@@ -700,7 +698,6 @@ fn folded_frequency_sketches_pass_frequency_and_merge_conformance() {
         .assert_ok();
 }
 
-#[cfg(feature = "experimental")]
 #[test]
 fn kmv_passes_cardinality_conformance() {
     let unique: Vec<u64> = (0..100_000u64)

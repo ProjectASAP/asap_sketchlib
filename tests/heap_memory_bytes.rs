@@ -4,14 +4,12 @@
 //! an instance holds, counted by a global allocator. One `#[test]` so no other test
 //! allocates while a count is taken.
 
-#[cfg(feature = "experimental")]
-use asap_sketchlib::Kmv;
 use asap_sketchlib::{
     Classic, CountMinF64, CountMinSketchWithHeap, CountMinSketchWithHeapDelta, CountSketch,
     CountSketchWithHeap, CountSketchWithHeapDelta, CountSketchWithL2Norm, DataInput, DdSketch,
     Ertl, FastPath, HeapEntry, HyperLogLog, HyperLogLogHip, HyperLogLogHipP12, HyperLogLogHipP16,
-    HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, Kll, RegularPath, TopKHeap, UnivMon, UnivMonQ,
-    UnivMonQConfig, Vector2D,
+    HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, Kll, Kmv, RegularPath, TopKHeap, UnivMon,
+    UnivMonQ, UnivMonQConfig, Vector2D,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -579,7 +577,6 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
     // KMV at k = 4323 holds exactly its estimate after `distinct` distinct
     // inputs, below the 1,024-slot reservation, between it and k, and past k,
     // and at most it when the inputs repeat.
-    #[cfg(feature = "experimental")]
     for distinct in [0usize, 1, 500, 1_024, 1_025, 3_000, 4_323, 20_000] {
         for (merged, repeats) in [(false, 1u64), (true, 1), (false, 2)] {
             let context =
@@ -605,7 +602,6 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
     }
 
     // A cloned KMV keeps its source's slots and grows as it would.
-    #[cfg(feature = "experimental")]
     for (k, cloned, distinct) in [(4_096usize, 1_500usize, 10_000usize), (4_323, 1_100, 3_000)] {
         let mut source: Kmv = Kmv::new(k);
         for i in 0..cloned as u64 {
@@ -630,7 +626,6 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
 
     // A decoded KMV grows as a built one does, and a shape past the address
     // space prices at `usize::MAX`.
-    #[cfg(feature = "experimental")]
     for (k, encoded, distinct) in [
         (4_000usize, 3_000usize, 13_000usize),
         (4_096, 10, 10_010),
@@ -657,7 +652,6 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         );
         assert_eq!(sketch.memory_bytes(), bytes, "{context}");
     }
-    #[cfg(feature = "experimental")]
     assert_eq!(
         Kmv::estimated_memory_bytes(usize::MAX, usize::MAX),
         usize::MAX

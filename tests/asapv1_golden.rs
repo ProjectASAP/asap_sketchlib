@@ -12,6 +12,9 @@
 
 use std::collections::HashSet;
 
+use asap_sketchlib::Kmv;
+#[cfg(feature = "experimental")]
+use asap_sketchlib::UniformSampling;
 use asap_sketchlib::common::input::HydraCounter;
 use asap_sketchlib::sketches::CountSketchDelta;
 use asap_sketchlib::sketches::hll::HllWireVariant;
@@ -29,8 +32,6 @@ use asap_sketchlib::{
     OwnedDataInput, RegularPath, SetAggregator, SetAggregatorDelta, TopKHeap, UnivMon, Vector2D,
     peek_kind_id,
 };
-#[cfg(feature = "experimental")]
-use asap_sketchlib::{Kmv, UniformSampling};
 
 fn decode_hex(s: &str) -> Vec<u8> {
     let s = s.trim();
@@ -115,7 +116,6 @@ const GOLDEN_CMS_ADMISSION: &str =
 const GOLDEN_CS_ADMISSION: &str = include_str!("../asapv1_golden/cs_i64_regular_2x4_admission.hex");
 const GOLDEN_DD_ADMISSION: &str =
     include_str!("../asapv1_golden/ddsketch_signed_a001_admission.hex");
-#[cfg(feature = "experimental")]
 const GOLDEN_KMV: &str = include_str!("../asapv1_golden/kmv_k8.hex");
 const GOLDEN_BLOOM_REGULAR: &str = include_str!("../asapv1_golden/bloom_regular_3x128.hex");
 const GOLDEN_BLOOM_FAST: &str = include_str!("../asapv1_golden/bloom_fast_5x32.hex");
@@ -1750,7 +1750,6 @@ fn ddsketch_signed_a001_admission_matches_golden() {
 // KMV: digests inserted directly -> serialize == golden, round-trips.
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "experimental")]
 #[test]
 fn kmv_k8_matches_golden() {
     let want = decode_hex(GOLDEN_KMV);

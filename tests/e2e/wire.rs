@@ -454,10 +454,9 @@ fn the_matrix_and_quantile_envelopes_carry_their_answers_unchanged() {
     );
 }
 
-#[cfg(feature = "experimental")]
 #[test]
-fn the_experimental_envelopes_round_trip_and_name_their_kinds() {
-    use asap_sketchlib::{Kmv, UniformSampling};
+fn the_kmv_envelope_round_trips_and_names_its_kind() {
+    use asap_sketchlib::Kmv;
 
     let mut kmv = Kmv::<DefaultXxHasher>::new(1_024);
     for k in uniform_u64(50_000, 10_000_000, 0x_5EED_1001) {
@@ -467,6 +466,12 @@ fn the_experimental_envelopes_round_trip_and_name_their_kinds() {
     assert_kind(&kmv_bytes, 0x0e, 0x00, "KMV");
     let decoded_kmv = Kmv::<DefaultXxHasher>::from_asapv1(&kmv_bytes).expect("decode KMV");
     assert_eq!(decoded_kmv.estimate(), kmv.estimate(), "KMV estimate");
+}
+
+#[cfg(feature = "experimental")]
+#[test]
+fn the_experimental_envelopes_round_trip_and_name_their_kinds() {
+    use asap_sketchlib::UniformSampling;
 
     let mut sampler = UniformSampling::with_seed(0.2, 0x_5EED_1002);
     for v in uniform_u64(20_000, 1_000_000, 0x_5EED_1003) {

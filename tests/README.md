@@ -29,7 +29,8 @@ its theorem.
 | `e2e/heavy_hitters.rs` | Space-Saving's error sandwich, `min_count` ceiling and Stream-Summary lists under sustained eviction, plus CocoSketch's exact mass partitions and multi-seed unbiasedness, and Elastic through the batteries and the heavy-hitter properties no battery models |
 | `e2e/membership.rs` | Bloom: no false negative, exact union, and the delivered false-positive rate against its own sizing |
 | `e2e/octo.rs` | OctoSketch delta-promotion invariants, the `octo-runtime` pipeline, and conformance to the paper's Theorems 1-4 and its sketch-merge baseline |
-| `e2e/experimental.rs` | The remaining `feature = "experimental"` sketches: KMV, UniformSampling, ExponentialHistogramUnivMon, CountMinHll |
+| `e2e/kmv.rs` | KMV's estimate against its relative standard error across regimes and hash seeds, and its merge |
+| `e2e/experimental.rs` | The remaining `feature = "experimental"` sketches: UniformSampling, ExponentialHistogramUnivMon, CountMinHll |
 | `bug_verification.rs` | Regression tests for fixed wrong-query-results bugs |
 | `heap_memory_bytes.rs` | Memory estimates checked against a counting global allocator; its own binary so no other test allocates during a count |
 | `pbt/` | Property tests under `proptest`, one target (`cargo test --test pbt`): merge algebra, path equivalence, wire and ASAPv1 round-trips, and the papers' own reference models. `PBT_COVERAGE.md` lists every law, one section per sketch |

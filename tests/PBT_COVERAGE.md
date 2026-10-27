@@ -2,8 +2,8 @@
 
 One `proptest` law per line. Each compares the sketch against an answer
 computed without it; what that answer is comes first in every section. One
-file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 342 laws;
-with `--all-features`, 407, adding the four **experimental** modules. Every
+file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 356 laws;
+with `--all-features`, 407, adding the three **experimental** modules. Every
 law was mutation-checked: break the implementation, the law goes red. Shared
 generators, `grid` and `round_trip!` live in `support.rs`.
 
@@ -477,7 +477,7 @@ A Count-Min grid of HLL registers. Compared against: a standalone `HyperLogLogIm
 - wire
   - ASAPv1 keeps storage, `(rows, cols, precision)`, per-key estimates
 
-## kmv.rs — 12 (experimental)
+## kmv.rs — 12
 
 Retained set == the `k` smallest distinct hashes, so laws are mostly equalities. Compared against: a `BTreeSet` truncated to `k`. Laws drive `update_with_hash`; one covers the key path. Hash domains: below the smallest bound, straddling the largest, full u64.
 

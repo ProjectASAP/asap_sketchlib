@@ -37,6 +37,7 @@ signals a backwards-compatible change.
   pyramid's estimate is the steady state once every layer's heap has churned.
 ### Changed
 
+- **`Kmv` builds without the `experimental` feature**, with its ASAPv1 codec.
 - **Count Sketch estimates no longer allocate.** The per-row estimates a
   median is taken over are collected on the stack instead of in a fresh
   `Vec`: up to 20 rows for `Vector2D` (the fast and regular paths),
