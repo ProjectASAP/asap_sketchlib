@@ -309,9 +309,11 @@ where
             }
             cursor += e - s;
         }
-        // Sentinel boundary for the top level; slots beyond stay 0, matching a
-        // live sketch (which only writes `levels[num_levels]`), so a decoded
-        // sketch's level array is identical to the source's.
+        // Sentinel boundary for the top level; slots beyond stay 0, as in a
+        // live sketch (which only writes `levels[num_levels]`). The decoded
+        // buffer holds just the retained items while the source's grew in
+        // doublings, so the boundaries match the source's relative to its
+        // first retained item, not absolutely.
         internal_levels[num_levels] = cursor;
         debug_assert_eq!(cursor, total);
 
