@@ -19,8 +19,9 @@ use crate::octo_delta::{
 };
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
-    FastPathHasher, FixedMatrix, MatrixFastHash, MatrixStorage, NitroTarget, QuickMatrixI64,
-    QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded, nitro_delta_saturated_i32,
+    FastPathHasher, FixedMatrix, MATRIX_MAX_ROWS, MatrixFastHash, MatrixStorage, NitroTarget,
+    QuickMatrixI64, QuickMatrixI128, RegularPath, SketchHasher, Vector2D, hash64_seeded,
+    nitro_delta_saturated_i32,
 };
 
 mod delta;
@@ -409,6 +410,42 @@ where
 
 /// Count-Min sketch with floating-point counters (no integer rounding).
 pub type CountMinF64<H = DefaultXxHasher> = CountMinSketch<Vector2D<f64>, RegularPath, H>;
+
+// Checked updates for f64 counters.
+impl<H: SketchHasher> CountMinSketch<Vector2D<f64>, RegularPath, H> {
+    /// Checks a weight [`Self::try_update_weighted`] accepts: finite and
+    /// nonnegative, since a Count-Min estimate is a minimum over rows and is an
+    /// upper bound only while every update adds.
+    pub fn check_weight(weight: f64) -> Result<(), String> {
+        if weight.is_finite() && weight >= 0.0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "CMS weight {weight} must be finite and nonnegative"
+            ))
+        }
+    }
+
+    /// [`Self::update_weighted`] that rejects a weight [`Self::check_weight`]
+    /// rejects, and an update that would carry a probed counter past
+    /// `f64::MAX`. On an error the sketch is unchanged.
+    pub fn try_update_weighted(&mut self, value: &DataInput, weight: f64) -> Result<(), String> {
+        Self::check_weight(weight)?;
+        let cols = self.counts.cols();
+        let probed_cols = (0..self.counts.rows())
+            .map(|r| ((H::hash64_seeded(r, value) & LOWER_32_MASK) as usize) % cols)
+            .collect::<smallvec::SmallVec<[usize; MATRIX_MAX_ROWS]>>();
+        for (r, &col) in probed_cols.iter().enumerate() {
+            if !(self.counts.query_one_counter(r, col) + weight).is_finite() {
+                return Err(format!("CMS counter overflow adding weight {weight}"));
+            }
+        }
+        for (r, col) in probed_cols.into_iter().enumerate() {
+            self.counts.increment_by_row(r, col, weight);
+        }
+        Ok(())
+    }
+}
 
 impl<S: MatrixStorage<Counter = i32>, H: SketchHasher> CountMinSketch<S, RegularPath, H> {
     /// Inserts an observation, emitting a delta at every promotion of the
