@@ -32,6 +32,9 @@ signals a backwards-compatible change.
   register bytes, the precision taken at run time.
 - **`Kmv::estimated_memory_bytes(k, distinct)`**: the bytes a sketch of `k`
   holds after `distinct` distinct inputs, an upper bound for fewer.
+- **`memory_bytes` and `estimated_memory_bytes`** on `CountSketchWithL2Norm`
+  (`rows, cols`) and `UnivMon` (`heap_size, rows, cols, layers, key`): the
+  pyramid's estimate is the steady state once every layer's heap has churned.
 ### Changed
 
 - **Count Sketch estimates no longer allocate.** The per-row estimates a

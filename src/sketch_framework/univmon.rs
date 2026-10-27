@@ -561,6 +561,46 @@ impl UnivMon {
     pub fn layer_heap_mut(&mut self, layer: usize) -> &mut TopKHeap {
         &mut self.layer_heaps[layer]
     }
+
+    /// Bytes this pyramid holds: the struct, each layer's sketch and heap
+    /// ([`CountSketchWithL2Norm::memory_bytes`], [`TopKHeap::memory_bytes`])
+    /// and the per-layer candidate flags.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.layer_sketches.capacity() * size_of::<CountSketchWithL2Norm>()
+            + self
+                .layer_sketches
+                .iter()
+                .map(|sketch| sketch.memory_bytes() - size_of::<CountSketchWithL2Norm>())
+                .sum::<usize>()
+            + self.layer_heaps.capacity() * size_of::<TopKHeap>()
+            + self
+                .layer_heaps
+                .iter()
+                .map(|heap| heap.memory_bytes() - size_of::<TopKHeap>())
+                .sum::<usize>()
+            + self.candidate_complete.capacity() * size_of::<bool>()
+    }
+
+    /// Bytes a pyramid of that shape, built by [`Self::new`], decoded or cloned,
+    /// holds in steady state once keys shaped like `key` churn through every
+    /// layer: the struct and, per layer,
+    /// [`CountSketchWithL2Norm::estimated_memory_bytes`],
+    /// [`TopKHeap::estimated_memory_bytes`] and a candidate flag. A pyramid
+    /// holds at most this, and exactly this once every layer's heap has
+    /// churned. Saturates at `usize::MAX`.
+    pub fn estimated_memory_bytes(
+        heap_size: usize,
+        rows: usize,
+        cols: usize,
+        layers: usize,
+        key: &DataInput,
+    ) -> usize {
+        let layer = CountSketchWithL2Norm::estimated_memory_bytes(rows, cols)
+            .saturating_add(TopKHeap::<i64>::estimated_memory_bytes(heap_size, key))
+            .saturating_add(size_of::<bool>());
+        size_of::<Self>().saturating_add(layers.saturating_mul(layer))
+    }
 }
 
 /// Object pool for `UnivMon` sketches.

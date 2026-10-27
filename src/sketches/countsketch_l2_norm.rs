@@ -28,6 +28,16 @@ pub struct CountSketchWithL2Norm<H: SketchHasher = DefaultXxHasher> {
 }
 
 impl CountSketchWithL2Norm {
+    /// Bytes a sketch of `rows * cols` counters holds: [`Self::memory_bytes`]
+    /// of one built with those dimensions, for every hasher.
+    pub fn estimated_memory_bytes(rows: usize, cols: usize) -> usize {
+        size_of::<Self>().saturating_add(
+            rows.saturating_mul(cols)
+                .saturating_add(rows)
+                .saturating_mul(size_of::<i64>()),
+        )
+    }
+
     /// Checks that a `rows` x `cols` `CountSketchWithL2Norm` fits its one 128-bit key hash.
     ///
     /// Row `r` reads its column from bits `[r * mask_bits, (r + 1) * mask_bits)`
@@ -105,6 +115,13 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     /// Number of columns in the sketch.
     pub fn cols(&self) -> usize {
         self.cols
+    }
+
+    /// Bytes this sketch holds: the struct, its `rows * cols` counters and its
+    /// per-row sums of squares.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>()
+            + (self.rows * self.cols + self.row_l2_squared.capacity()) * size_of::<i64>()
     }
 
     /// Exposes the backing matrix for inspection/testing.

@@ -1,5 +1,6 @@
 //! `TopKHeap`, `CountMinSketch`, `CountSketch`, their WithHeap forms, `Kll`,
-//! `DdSketch`, the HyperLogLogs, `Kmv` and `UnivMonQ` memory methods checked against `size_of` and against the bytes
+//! `DdSketch`, the HyperLogLogs, `Kmv`, `CountSketchWithL2Norm`, `UnivMon` and
+//! `UnivMonQ` memory methods checked against `size_of` and against the bytes
 //! an instance holds, counted by a global allocator. One `#[test]` so no other test
 //! allocates while a count is taken.
 
@@ -7,9 +8,10 @@
 use asap_sketchlib::Kmv;
 use asap_sketchlib::{
     Classic, CountMinF64, CountMinSketchWithHeap, CountMinSketchWithHeapDelta, CountSketch,
-    CountSketchWithHeap, CountSketchWithHeapDelta, DataInput, DdSketch, Ertl, FastPath, HeapEntry,
-    HyperLogLog, HyperLogLogHip, HyperLogLogHipP12, HyperLogLogHipP16, HyperLogLogP12,
-    HyperLogLogP14, HyperLogLogP16, Kll, RegularPath, TopKHeap, UnivMonQ, UnivMonQConfig, Vector2D,
+    CountSketchWithHeap, CountSketchWithHeapDelta, CountSketchWithL2Norm, DataInput, DdSketch,
+    Ertl, FastPath, HeapEntry, HyperLogLog, HyperLogLogHip, HyperLogLogHipP12, HyperLogLogHipP16,
+    HyperLogLogP12, HyperLogLogP14, HyperLogLogP16, Kll, RegularPath, TopKHeap, UnivMon, UnivMonQ,
+    UnivMonQConfig, Vector2D,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -658,6 +660,125 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
     #[cfg(feature = "experimental")]
     assert_eq!(
         Kmv::estimated_memory_bytes(usize::MAX, usize::MAX),
+        usize::MAX
+    );
+
+    // UnivMon holds at most its estimate, and exactly it once string keys with
+    // rising weights have churned every layer's heap; merged halves stay within it.
+    for (heap_size, rows, cols, layers) in [
+        (7usize, 3usize, 64usize, 4usize),
+        (20, 5, 512, 6),
+        (100, 5, 2048, 3),
+    ] {
+        let estimated = UnivMon::estimated_memory_bytes(
+            heap_size,
+            rows,
+            cols,
+            layers,
+            &DataInput::Str("flow-00000000"),
+        );
+        for distinct in [heap_size, (50 * heap_size) << (layers - 1)] {
+            for merged in [false, true] {
+                let churned = distinct > heap_size && !merged;
+                let context = format!(
+                    "UnivMon heap {heap_size}, {rows}x{cols}, {layers} layers, \
+                     distinct {distinct}, merged = {merged}"
+                );
+                let (sketch, bytes) = measured_bytes(|| {
+                    let mut sketch = UnivMon::new(heap_size, rows, cols, layers);
+                    let mut other = UnivMon::new(heap_size, rows, cols, layers);
+                    for i in 0..distinct {
+                        let name = format!("flow-{i:08}");
+                        let target = if merged && i % 2 == 1 {
+                            &mut other
+                        } else {
+                            &mut sketch
+                        };
+                        target.update_weighted(&DataInput::Str(&name), i as i64 + 1);
+                    }
+                    if merged {
+                        sketch.merge(&other);
+                    }
+                    sketch
+                });
+                check(bytes, estimated, churned, &context);
+                assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+            }
+        }
+        let (sketch, bytes) =
+            measured_bytes(|| <CountSketchWithL2Norm>::with_dimensions(rows, cols));
+        assert_eq!(
+            sketch.memory_bytes(),
+            bytes,
+            "CountSketchWithL2Norm {rows}x{cols}"
+        );
+        assert_eq!(
+            CountSketchWithL2Norm::estimated_memory_bytes(rows, cols),
+            bytes,
+            "CountSketchWithL2Norm {rows}x{cols}"
+        );
+    }
+
+    // A cloned pyramid keeps its heaps' allocations and grows as its source
+    // would, exactly to the estimate once churned.
+    for (heap_size, rows, cols, layers) in [(100usize, 5usize, 256usize, 4usize), (20, 5, 512, 6)] {
+        let mut source = UnivMon::new(heap_size, rows, cols, layers);
+        for i in 0..heap_size - 1 {
+            let name = format!("flow-{i:08}");
+            source.update_weighted(&DataInput::Str(&name), i as i64 + 1);
+        }
+        let distinct = (50 * heap_size) << (layers - 1);
+        let (sketch, bytes) = measured_bytes(|| {
+            let mut sketch = source.clone();
+            for i in heap_size..distinct {
+                let name = format!("flow-{i:08}");
+                sketch.update_weighted(&DataInput::Str(&name), i as i64 + 1);
+            }
+            sketch
+        });
+        let estimated = UnivMon::estimated_memory_bytes(
+            heap_size,
+            rows,
+            cols,
+            layers,
+            &DataInput::Str("flow-00000000"),
+        );
+        let context = format!("cloned UnivMon heap {heap_size}, {rows}x{cols}, {layers} layers");
+        check(bytes, estimated, true, &context);
+        assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+    }
+
+    // A decoded pyramid grows as a built one does, exactly to the estimate once
+    // churned, and a shape past the address space prices at `usize::MAX`.
+    for (encoded_keys, distinct) in [(100usize, 50_000usize), (5, 50_000), (100, 300)] {
+        let (heap_size, rows, cols, layers) = (20, 5, 512, 6);
+        let context = format!("decoded UnivMon, {encoded_keys} keys encoded, distinct {distinct}");
+        let mut source = UnivMon::new(heap_size, rows, cols, layers);
+        for i in 0..encoded_keys {
+            let name = format!("flow-{i:08}");
+            source.update_weighted(&DataInput::Str(&name), i as i64 + 1);
+        }
+        let encoded = source.to_asapv1().unwrap();
+        let (sketch, bytes) = measured_bytes(|| {
+            let mut sketch = UnivMon::from_asapv1(&encoded).unwrap();
+            for i in encoded_keys..distinct {
+                let name = format!("flow-{i:08}");
+                sketch.update_weighted(&DataInput::Str(&name), i as i64 + 1);
+            }
+            sketch
+        });
+        let estimated = UnivMon::estimated_memory_bytes(
+            heap_size,
+            rows,
+            cols,
+            layers,
+            &DataInput::Str("flow-00000000"),
+        );
+        check(bytes, estimated, distinct > 300, &context);
+        assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+    }
+    assert_eq!(
+        UnivMon::estimated_memory_bytes(1 << 61, 5, 512, 6, &DataInput::Str("flow")),
         usize::MAX
     );
 
