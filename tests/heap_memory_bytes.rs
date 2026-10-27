@@ -324,7 +324,8 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         }
     }
 
-    // Plain Count-Min and Count Sketch hold the struct and their counters.
+    // Plain Count-Min and Count Sketch hold the struct and their counters, as
+    // their estimates price them.
     for (rows, cols) in [(1usize, 1usize), (3, 64), (5, 2048), (64, 1024)] {
         let (sketch, bytes) = measured_bytes(|| {
             let mut sketch: CountMinF64 = CountMinF64::with_dimensions(rows, cols);
@@ -334,6 +335,11 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
             sketch
         });
         assert_eq!(sketch.memory_bytes(), bytes, "CountMinF64 {rows}x{cols}");
+        assert_eq!(
+            CountMinF64::estimated_memory_bytes(rows, cols),
+            bytes,
+            "CountMinF64 {rows}x{cols}"
+        );
         let (sketch, bytes) = measured_bytes(|| {
             let mut sketch = CountSketch::<Vector2D<i32>, FastPath>::with_dimensions(rows, cols);
             for i in 0..1_000u64 {
@@ -342,6 +348,11 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
             sketch
         });
         assert_eq!(sketch.memory_bytes(), bytes, "CountSketch {rows}x{cols}");
+        assert_eq!(
+            CountSketch::<Vector2D<i32>, FastPath>::estimated_memory_bytes(rows, cols),
+            bytes,
+            "CountSketch {rows}x{cols}"
+        );
     }
 
     // UnivMon-Q reports exactly what it allocated, fresh and after enough

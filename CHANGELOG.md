@@ -19,6 +19,9 @@ signals a backwards-compatible change.
   outside `[0, 1]`. Within `alpha` relative when both neighbours are
   indexable and share a sign; an absolute bound across zero. The legacy
   portable `DdSketch` had it before 0.4.0.
+- **`estimated_memory_bytes(rows, cols)`** on `CountMinSketch` and
+  `CountSketch`: the `memory_bytes` of a sketch with those dimensions, the
+  counter width taken from the type.
 ### Changed
 
 - **Count Sketch estimates no longer allocate.** The per-row estimates a
