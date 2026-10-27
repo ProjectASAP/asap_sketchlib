@@ -1,8 +1,10 @@
 //! `TopKHeap`, `CountMinSketch`, `CountSketch`, their WithHeap forms, `Kll`,
-//! `DdSketch`, the HyperLogLogs and `UnivMonQ` memory methods checked against `size_of` and against the bytes
+//! `DdSketch`, the HyperLogLogs, `Kmv` and `UnivMonQ` memory methods checked against `size_of` and against the bytes
 //! an instance holds, counted by a global allocator. One `#[test]` so no other test
 //! allocates while a count is taken.
 
+#[cfg(feature = "experimental")]
+use asap_sketchlib::Kmv;
 use asap_sketchlib::{
     Classic, CountMinF64, CountMinSketchWithHeap, CountMinSketchWithHeapDelta, CountSketch,
     CountSketchWithHeap, CountSketchWithHeapDelta, DataInput, DdSketch, Ertl, FastPath, HeapEntry,
@@ -569,6 +571,93 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
     }
     assert_eq!(
         HyperLogLog::<Classic>::estimated_memory_bytes(200),
+        usize::MAX
+    );
+
+    // KMV at k = 4323 holds exactly its estimate after `distinct` distinct
+    // inputs, below the 1,024-slot reservation, between it and k, and past k,
+    // and at most it when the inputs repeat.
+    #[cfg(feature = "experimental")]
+    for distinct in [0usize, 1, 500, 1_024, 1_025, 3_000, 4_323, 20_000] {
+        for (merged, repeats) in [(false, 1u64), (true, 1), (false, 2)] {
+            let context =
+                format!("Kmv distinct = {distinct}, merged = {merged}, repeats = {repeats}");
+            let (sketch, bytes) = measured_bytes(|| {
+                let mut sketch: Kmv = Kmv::new(4_323);
+                let mut other: Kmv = Kmv::new(4_323);
+                for i in 0..distinct as u64 {
+                    let target = if merged && i % 2 == 1 {
+                        &mut other
+                    } else {
+                        &mut sketch
+                    };
+                    target.update(&DataInput::U64(i / repeats));
+                }
+                sketch.merge(&other);
+                sketch
+            });
+            let estimated = Kmv::estimated_memory_bytes(4_323, distinct);
+            check(bytes, estimated, repeats == 1, &context);
+            assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+        }
+    }
+
+    // A cloned KMV keeps its source's slots and grows as it would.
+    #[cfg(feature = "experimental")]
+    for (k, cloned, distinct) in [(4_096usize, 1_500usize, 10_000usize), (4_323, 1_100, 3_000)] {
+        let mut source: Kmv = Kmv::new(k);
+        for i in 0..cloned as u64 {
+            source.update(&DataInput::U64(i));
+        }
+        let (sketch, bytes) = measured_bytes(|| {
+            let mut sketch = source.clone();
+            for i in cloned as u64..distinct as u64 {
+                sketch.update(&DataInput::U64(i));
+            }
+            sketch
+        });
+        let context = format!("cloned Kmv k = {k}, {cloned} cloned, distinct = {distinct}");
+        check(
+            bytes,
+            Kmv::estimated_memory_bytes(k, distinct),
+            true,
+            &context,
+        );
+        assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+    }
+
+    // A decoded KMV grows as a built one does, and a shape past the address
+    // space prices at `usize::MAX`.
+    #[cfg(feature = "experimental")]
+    for (k, encoded, distinct) in [
+        (4_000usize, 3_000usize, 13_000usize),
+        (4_096, 10, 10_010),
+        (4_323, 2_000, 2_500),
+    ] {
+        let context = format!("decoded Kmv k = {k}, {encoded} encoded, distinct = {distinct}");
+        let mut source: Kmv = Kmv::new(k);
+        for i in 0..encoded as u64 {
+            source.update(&DataInput::U64(i));
+        }
+        let bytes_on_wire = source.to_asapv1().unwrap();
+        let (sketch, bytes) = measured_bytes(|| {
+            let mut sketch: Kmv = Kmv::from_asapv1(&bytes_on_wire).unwrap();
+            for i in encoded as u64..distinct as u64 {
+                sketch.update(&DataInput::U64(i));
+            }
+            sketch
+        });
+        check(
+            bytes,
+            Kmv::estimated_memory_bytes(k, distinct),
+            true,
+            &context,
+        );
+        assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+    }
+    #[cfg(feature = "experimental")]
+    assert_eq!(
+        Kmv::estimated_memory_bytes(usize::MAX, usize::MAX),
         usize::MAX
     );
 

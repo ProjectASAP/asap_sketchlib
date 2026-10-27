@@ -30,6 +30,8 @@ signals a backwards-compatible change.
 - **`memory_bytes` and `estimated_memory_bytes(precision)`** on
   `HyperLogLogImpl` and `HyperLogLogHipImpl`: the struct plus `2^precision`
   register bytes, the precision taken at run time.
+- **`Kmv::estimated_memory_bytes(k, distinct)`**: the bytes a sketch of `k`
+  holds after `distinct` distinct inputs, an upper bound for fewer.
 ### Changed
 
 - **Count Sketch estimates no longer allocate.** The per-row estimates a
