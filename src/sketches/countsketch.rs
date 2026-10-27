@@ -10,6 +10,7 @@
 use crate::asapv1::admission_rate::admit_all;
 use crate::common::hash::check_matrix_shape;
 use crate::common::structure_utils::AdmittedRows;
+use crate::common::structures::matrix_storage::RowEstimates;
 use crate::{
     DataInput, DefaultMatrixI32, DefaultMatrixI64, DefaultMatrixI128, DefaultXxHasher, FastPath,
     FastPathHasher, FixedMatrix, MATRIX_MAX_ROWS, MatrixFastHash, MatrixStorage, NitroTarget,
@@ -382,7 +383,7 @@ where
     pub fn estimate(&self, value: &DataInput) -> f64 {
         let rows = self.counts.rows();
         let cols = self.counts.cols();
-        let mut estimates = Vec::with_capacity(rows);
+        let mut estimates = RowEstimates::with_capacity(rows);
         for r in 0..rows {
             let hashed = H::hash64_seeded(r, value);
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;

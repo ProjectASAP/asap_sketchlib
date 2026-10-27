@@ -294,11 +294,11 @@ macro_rules! impl_fixed_matrix {
                 Hash: $crate::MatrixFastHash,
                 F: Fn(&Self::Counter, usize, &Hash) -> f64,
             {
-                let mut estimates = Vec::with_capacity($rows);
-                for row in 0..$rows {
+                let mut estimates = [0.0_f64; $rows];
+                for (row, estimate) in estimates.iter_mut().enumerate() {
                     let col = hashed_val.col_for_row(row, $cols);
                     let idx = row * $cols + col;
-                    estimates.push(op(&self.data[idx], row, hashed_val));
+                    *estimate = op(&self.data[idx], row, hashed_val);
                 }
                 $crate::compute_median_inline_f64(&mut estimates)
             }
