@@ -36,6 +36,12 @@ signals a backwards-compatible change.
   loaded host, at parity on a quiet one.
 - **`TopKHeap::estimated_memory_bytes` and the WithHeap estimates saturate**
   at `usize::MAX` for shapes past the address space instead of overflowing.
+- **Decoded top-k heaps reserve as built ones do.** The ASAPv1 state
+  decoders of `CountMinSketchWithHeap`, `CountSketchWithHeap`, `UnivMon`,
+  `UnivMonTwoTier` and `Kmv` give the heap the slots a built heap with the
+  same entries holds, so a decoded sketch grows within
+  `estimated_memory_bytes`. Delta decoders still reserve for their entries
+  alone.
 ### Added
 
 - **Checked f64 updates and heap rescoring for the Count-Min and Count Sketch

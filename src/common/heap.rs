@@ -221,9 +221,10 @@ impl<C: HeapCount> TopKHeap<C> {
             + spilled
     }
 
-    /// Bytes a heap built by [`Self::new`]`(heap_size)` holds in steady state
-    /// once keys shaped like `key` churn through it: the struct, the entry and
-    /// digest arrays, the digest index and each resident's owned key bytes.
+    /// Bytes a heap of capacity `heap_size`, built by [`Self::new`] or decoded,
+    /// holds in steady state once keys shaped like `key` churn through it: the
+    /// struct, the entry and digest arrays, the digest index and each
+    /// resident's owned key bytes.
     /// A heap holds at most this, and exactly this once evictions have left
     /// its index enough tombstones to resize.
     ///

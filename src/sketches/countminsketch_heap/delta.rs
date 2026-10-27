@@ -20,7 +20,7 @@ use crate::{
 use super::CountMinSketchWithHeap;
 use super::heap_wire::{
     DeltaCells, check_geometry, decode_metadata, decode_payload, encode_metadata, encode_payload,
-    heap_entries, rebuild_heap, wire_key_type,
+    heap_entries, rebuild_delta_heap, wire_key_type,
 };
 
 /// A change to a `rows x cols` [`CountMinSketchWithHeap`] state: each value of `deltas` is
@@ -113,7 +113,7 @@ where
             Mode::MODE,
         )?;
         let (cells, entries) = decode_payload::<DeltaCells<T>, _>(&shape.key_type, payload)?;
-        let heap = rebuild_heap(shape.heap_size, entries)?;
+        let heap = rebuild_delta_heap(shape.heap_size, entries)?;
         Self::new(shape.rows, shape.cols, cells.indices, cells.deltas, heap)
             .map_err(RmpDecodeError::Uncategorized)
     }

@@ -191,6 +191,38 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         }
     }
 
+    // A decoded top-k sketch grows as a built one does: at most the estimate
+    // after its first keys, exactly it once churned.
+    type CountMinI64Heap = CountMinSketchWithHeap<Vector2D<i64>, RegularPath>;
+    for (rows, cols, heap_size) in [(3usize, 64usize, 7usize), (5, 2048, 100), (5, 100, 2000)] {
+        let estimated =
+            CountMinI64Heap::estimated_memory_bytes(rows, cols, heap_size, &DataInput::U64(0));
+        for (encoded_keys, distinct) in [
+            (3usize, heap_size),
+            (3, 50 * heap_size),
+            (heap_size, 50 * heap_size),
+        ] {
+            let context = format!(
+                "decoded CountMinSketchWithHeap {rows}x{cols}, heap {heap_size}, \
+                 {encoded_keys} keys encoded, distinct {distinct}"
+            );
+            let mut source = CountMinI64Heap::new(rows, cols, heap_size);
+            for i in 0..encoded_keys as u64 {
+                source.update_weighted(&DataInput::U64(i), i as i64 + 1);
+            }
+            let encoded = source.to_asapv1().unwrap();
+            let (sketch, bytes) = measured_bytes(|| {
+                let mut sketch = CountMinI64Heap::from_asapv1(&encoded).unwrap();
+                for i in encoded_keys as u64..distinct as u64 {
+                    sketch.update_weighted(&DataInput::U64(i), i as i64 + 1);
+                }
+                sketch
+            });
+            check(bytes, estimated, distinct > heap_size, &context);
+            assert_eq!(sketch.memory_bytes(), bytes, "{context}");
+        }
+    }
+
     // Plain Count-Min and Count Sketch hold the struct and their counters.
     for (rows, cols) in [(1usize, 1usize), (3, 64), (5, 2048), (64, 1024)] {
         let (sketch, bytes) = measured_bytes(|| {

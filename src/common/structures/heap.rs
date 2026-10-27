@@ -74,9 +74,22 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
         }
     }
 
-    /// Wraps `data` that already satisfies the heap invariant for `order`.
+    /// Wraps `data` that already satisfies the heap invariant for `order`,
+    /// holding the slots a heap built by [`Self::with_capacity`] holds after
+    /// as many pushes.
     #[cfg(feature = "experimental")]
     pub(crate) fn from_heap_vec(data: Vec<T>, capacity: usize, order: O) -> Self {
+        let slots = crate::common::heap::vec_slots_after_pushes(
+            capacity.min(PREALLOCATED_SLOTS),
+            data.len(),
+            size_of::<T>(),
+        );
+        let mut data = data;
+        if data.capacity() > slots {
+            data.shrink_to(slots);
+        } else {
+            data.reserve_exact(slots - data.len());
+        }
         Self {
             data,
             size: capacity,

@@ -562,19 +562,37 @@ pub(crate) fn decode_payload<B: HeapBody, N: HeapCount>(
     Ok((body, keys.into_iter().zip(heap_counts).collect()))
 }
 
+/// Seats a decoded state's entries into a heap of capacity `heap_size`, reserved
+/// as [`TopKHeap::new`] reserves (at most 1024 slots), so it holds and grows as
+/// a built heap with the same entries. See [`rebuild_entries`].
+pub(crate) fn rebuild_heap<N: HeapCount>(
+    heap_size: usize,
+    entries: Vec<(OwnedDataInput, N)>,
+) -> Result<TopKHeap<N>, RmpDecodeError> {
+    rebuild_entries(heap_size, entries, false)
+}
+
+/// Seats a decoded delta's entries into a heap of capacity `heap_size` that
+/// reserves for those entries alone, since a delta's heap never grows.
+pub(crate) fn rebuild_delta_heap<N: HeapCount>(
+    heap_size: usize,
+    entries: Vec<(OwnedDataInput, N)>,
+) -> Result<TopKHeap<N>, RmpDecodeError> {
+    rebuild_entries(heap_size, entries, true)
+}
+
 /// Seats the decoded entries into a heap of capacity `heap_size`, rebuilding the
-/// index as it goes. `heap_size` is checked against the entry count first and
-/// the heap reserves from that count, so a declared capacity never sizes an
-/// allocation on its own.
+/// index as it goes. `heap_size` is checked against the entry count first.
 ///
 /// The keys are checked for duplicates on their **wire** representation before
 /// any is seated — floats by their bits, so two identical `NaN`s are one key
 /// twice even though they do not compare equal — then for the emitted order,
 /// and the seated count is checked afterwards, which catches keys that are
 /// distinct on the wire but equal to the heap.
-pub(crate) fn rebuild_heap<N: HeapCount>(
+fn rebuild_entries<N: HeapCount>(
     heap_size: usize,
     entries: Vec<(OwnedDataInput, N)>,
+    reserve_for_entries: bool,
 ) -> Result<TopKHeap<N>, RmpDecodeError> {
     if entries.len() > heap_size {
         return Err(RmpDecodeError::Uncategorized(format!(
@@ -592,7 +610,11 @@ pub(crate) fn rebuild_heap<N: HeapCount>(
             "ASAPv1 top-k heap: entries are not in descending count, ties by key".to_string(),
         ));
     }
-    let mut heap = TopKHeap::with_expected_len(heap_size, entries.len());
+    let mut heap = if reserve_for_entries {
+        TopKHeap::with_expected_len(heap_size, entries.len())
+    } else {
+        TopKHeap::new(heap_size)
+    };
     let seated = entries.len();
     for (key, count) in entries {
         heap.update_owned(&key, count);
