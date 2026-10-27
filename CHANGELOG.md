@@ -48,6 +48,9 @@ signals a backwards-compatible change.
   `BitMatrix`, `CountSketchWithL2Norm` (estimates and `l2_squared`) and
   `CountSketchFold`, and a `[f64; ROWS]` array for the fixed-size matrices.
   About 8 to 14 ns less per estimate on small shapes. Results are unchanged.
+- **KLL merges require the same `k` and `m`.** `Kll::merge` and
+  `KllDynamic::merge` panic when either differs, where they merged before;
+  `Hydra::merge` and `EhBucketSketch::merge` return `Err` for such KLL states.
 ### Fixed
 
 - **`Kll::update` regains most of its pre-0.4.0 speed.** With the lazily grown

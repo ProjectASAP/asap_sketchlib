@@ -358,7 +358,17 @@ impl<T: NumericalValue> KllDynamic<T> {
     /// items, then re-run the same randomized halve-and-promote compaction
     /// ordinary inserts use), adapted to `KllDynamic`'s growable (rather
     /// than fixed-capacity) backing storage.
+    ///
+    /// # Panics
+    ///
+    /// When `k` or `m` differs between the two sketches.
     pub fn merge(&mut self, other: &KllDynamic<T>) {
+        if (self.k, self.m) != (other.k, other.m) {
+            panic!(
+                "k/m mismatch while merging KllDynamic sketches: (k={}, m={}) vs (k={}, m={})",
+                self.k, self.m, other.k, other.m
+            );
+        }
         if other.items.is_empty() {
             return; // `other` is empty: nothing to merge.
         }
@@ -717,6 +727,24 @@ mod tests {
         let median = cdf.value_at(0.5);
         // Median should be 30
         assert!(median == 30.0, "Median = {median}");
+    }
+
+    #[test]
+    #[should_panic(expected = "k/m mismatch while merging KllDynamic sketches")]
+    fn merge_requires_the_same_k() {
+        let mut a = KllDynamic::<f64>::with_k_and_seed(200, 1);
+        let mut b = KllDynamic::<f64>::with_k_and_seed(100, 2);
+        b.update(&1.0);
+        a.merge(&b);
+    }
+
+    #[test]
+    #[should_panic(expected = "k/m mismatch while merging KllDynamic sketches")]
+    fn merge_requires_the_same_m() {
+        let mut a = KllDynamic::<f64>::with_seed(200, 8, 1);
+        let mut b = KllDynamic::<f64>::with_seed(200, 4, 2);
+        b.update(&1.0);
+        a.merge(&b);
     }
 
     #[test]

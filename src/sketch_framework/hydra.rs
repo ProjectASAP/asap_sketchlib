@@ -1243,6 +1243,18 @@ mod tests {
     }
 
     #[test]
+    fn merge_refuses_kll_cells_of_a_different_k() {
+        let mut a =
+            Hydra::with_schema(2, 8, ["region"], HydraCounter::Kll(Kll::with_k(200))).unwrap();
+        let b = Hydra::with_schema(2, 8, ["region"], HydraCounter::Kll(Kll::with_k(100))).unwrap();
+        let problem = a.merge(&b).expect_err("different k must not merge");
+        assert!(problem.contains("k/m mismatch"), "got {problem}");
+        let same =
+            Hydra::with_schema(2, 8, ["region"], HydraCounter::Kll(Kll::with_k(200))).unwrap();
+        assert!(a.merge(&same).is_ok());
+    }
+
+    #[test]
     fn test_kll_quantile_query() {
         // Assuming KLL has a default implementation
         let mut counter = HydraCounter::Kll(Kll::default());
