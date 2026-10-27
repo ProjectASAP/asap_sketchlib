@@ -27,6 +27,9 @@ signals a backwards-compatible change.
 - **`DdSketch::memory_bytes`**, and **`DdSketch::estimated_memory_bytes(alpha,
   n, min_magnitude, max_magnitude, negatives)`**: an upper bound on the bytes
   after `n` values in that magnitude range, in any order and through merges.
+- **`memory_bytes` and `estimated_memory_bytes(precision)`** on
+  `HyperLogLogImpl` and `HyperLogLogHipImpl`: the struct plus `2^precision`
+  register bytes, the precision taken at run time.
 ### Changed
 
 - **Count Sketch estimates no longer allocate.** The per-row estimates a

@@ -1,12 +1,13 @@
 //! `TopKHeap`, `CountMinSketch`, `CountSketch`, their WithHeap forms, `Kll`,
-//! `DdSketch` and `UnivMonQ` memory methods checked against `size_of` and against the bytes
+//! `DdSketch`, the HyperLogLogs and `UnivMonQ` memory methods checked against `size_of` and against the bytes
 //! an instance holds, counted by a global allocator. One `#[test]` so no other test
 //! allocates while a count is taken.
 
 use asap_sketchlib::{
-    CountMinF64, CountMinSketchWithHeap, CountMinSketchWithHeapDelta, CountSketch,
-    CountSketchWithHeap, CountSketchWithHeapDelta, DataInput, DdSketch, FastPath, HeapEntry, Kll,
-    RegularPath, TopKHeap, UnivMonQ, UnivMonQConfig, Vector2D,
+    Classic, CountMinF64, CountMinSketchWithHeap, CountMinSketchWithHeapDelta, CountSketch,
+    CountSketchWithHeap, CountSketchWithHeapDelta, DataInput, DdSketch, Ertl, FastPath, HeapEntry,
+    HyperLogLog, HyperLogLogHip, HyperLogLogHipP12, HyperLogLogHipP16, HyperLogLogP12,
+    HyperLogLogP14, HyperLogLogP16, Kll, RegularPath, TopKHeap, UnivMonQ, UnivMonQConfig, Vector2D,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicIsize, Ordering};
@@ -482,6 +483,94 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
             }
         }
     }
+
+    // HyperLogLog holds the struct and one byte per register, whatever its
+    // variant; the estimate takes the precision at run time.
+    fn hll_bytes<T>(build: impl FnOnce() -> T, memory_bytes: impl Fn(&T) -> usize) -> usize {
+        let (sketch, bytes) = measured_bytes(build);
+        assert_eq!(memory_bytes(&sketch), bytes);
+        bytes
+    }
+    let fill = |update: &mut dyn FnMut(&DataInput)| {
+        for i in 0..10_000u64 {
+            update(&DataInput::U64(i));
+        }
+    };
+    for (precision, bytes) in [
+        (
+            12,
+            hll_bytes(
+                || {
+                    let mut sketch = HyperLogLogP12::<Classic>::new();
+                    fill(&mut |key| sketch.update(key));
+                    sketch
+                },
+                HyperLogLogP12::<Classic>::memory_bytes,
+            ),
+        ),
+        (
+            14,
+            hll_bytes(
+                || {
+                    let mut sketch = HyperLogLogP14::<Ertl>::new();
+                    fill(&mut |key| sketch.update(key));
+                    sketch
+                },
+                HyperLogLogP14::<Ertl>::memory_bytes,
+            ),
+        ),
+        (
+            16,
+            hll_bytes(
+                || {
+                    let mut sketch = HyperLogLogP16::<Classic>::new();
+                    fill(&mut |key| sketch.update(key));
+                    sketch
+                },
+                HyperLogLogP16::<Classic>::memory_bytes,
+            ),
+        ),
+    ] {
+        assert_eq!(
+            HyperLogLog::<Classic>::estimated_memory_bytes(precision),
+            bytes,
+            "HyperLogLog p = {precision}"
+        );
+    }
+    for (precision, bytes) in [
+        (
+            12,
+            hll_bytes(
+                || {
+                    let mut sketch = HyperLogLogHipP12::new();
+                    fill(&mut |key| sketch.update(key));
+                    sketch
+                },
+                HyperLogLogHipP12::memory_bytes,
+            ),
+        ),
+        (
+            16,
+            hll_bytes(
+                || {
+                    let mut sketch = HyperLogLogHipP16::new();
+                    fill(&mut |key| sketch.update(key));
+                    sketch
+                },
+                HyperLogLogHipP16::memory_bytes,
+            ),
+        ),
+    ] {
+        assert_eq!(
+            HyperLogLogHip::estimated_memory_bytes(precision),
+            bytes,
+            "HyperLogLogHip p = {precision}"
+        );
+    }
+    assert_eq!(
+        HyperLogLog::<Classic>::estimated_memory_bytes(200),
+        usize::MAX
+    );
 
     // UnivMon-Q reports exactly what it allocated, fresh and after enough
     // values to churn its candidate tables and fill its ordered samples.
