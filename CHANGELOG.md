@@ -37,6 +37,8 @@ signals a backwards-compatible change.
   pyramid's estimate is the steady state once every layer's heap has churned.
 - **`CountMinSketch::total()`**: the total admitted update weight, row 0's
   counters summed in `f64`, exact below 2^53.
+- **`ElasticSketch::top_k(k)`**: the `k` heavy-part flows with the largest
+  estimates, by estimate descending, ties by flow id.
 ### Changed
 
 - **`Kmv` builds without the `experimental` feature**, with its ASAPv1 codec.

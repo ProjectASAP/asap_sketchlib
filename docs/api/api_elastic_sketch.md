@@ -287,11 +287,13 @@ doubled to 24 and compressed by 3.
 ```rust
 fn heavy_hitters(&self, threshold: i32) -> Vec<(String, i32)>
 fn heavy_changes(&self, other: &ElasticSketch<H>, threshold: i32) -> Vec<(String, i32, i32)>
+fn top_k(&self, k: usize) -> Vec<(String, i32)>
 ```
 
 Section 5 lists six tasks the sketch is meant to serve. Two are implemented
 here, both sorted by flow id and both skipping the stale copies an expansion
-leaves behind, so no flow is reported twice.
+leaves behind, so no flow is reported twice. `top_k` ranks the same residents
+by estimate descending, ties by flow id.
 
 **Heavy hitter detection.** "For this task, we query the size of each flow in
 the heavy part. If one's size is larger than the predefined threshold, then we

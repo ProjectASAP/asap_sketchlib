@@ -454,6 +454,15 @@ impl<H: SketchHasher> ElasticSketch<H> {
             .collect()
     }
 
+    /// The `k` heavy-part flows with the largest estimates (as in
+    /// [`Self::heavy_hitters`]), by estimate descending, ties by flow id.
+    pub fn top_k(&self, k: usize) -> Vec<(String, i32)> {
+        let mut flows = self.resident_flows();
+        flows.sort_by_key(|flow| std::cmp::Reverse(flow.1));
+        flows.truncate(k);
+        flows
+    }
+
     /// Section 5's heavy change detection over two adjacent windows: every flow
     /// held by either heavy part whose size moved by more than `threshold`.
     ///
@@ -1625,6 +1634,45 @@ mod tests {
                 ("flow::alpha".to_string(), 50),
                 ("flow::beta".to_string(), 30),
                 ("flow::gamma".to_string(), 25),
+            ]
+        );
+    }
+
+    #[test]
+    fn top_k_ranks_residents_by_estimate_then_flow_id() {
+        let sk = sketch_with_resident_flows(
+            256,
+            &[
+                ("flow::alpha", 50),
+                ("flow::beta", 30),
+                ("flow::gamma", 30),
+                ("flow::delta", 3),
+            ],
+        );
+
+        assert_eq!(
+            sk.top_k(3),
+            vec![
+                ("flow::alpha".to_string(), 50),
+                ("flow::beta".to_string(), 30),
+                ("flow::gamma".to_string(), 30),
+            ]
+        );
+        assert_eq!(sk.top_k(0), vec![]);
+        assert_eq!(sk.top_k(10).len(), 4);
+        assert_eq!(sk.top_k(4).last(), Some(&("flow::delta".to_string(), 3)));
+    }
+
+    #[test]
+    fn top_k_reports_each_flow_once_after_expansion() {
+        let mut sk = sketch_with_resident_flows(8, &[("flow::alpha", 50), ("flow::beta", 30)]);
+        sk.expand_heavy();
+
+        assert_eq!(
+            sk.top_k(5),
+            vec![
+                ("flow::alpha".to_string(), 50),
+                ("flow::beta".to_string(), 30),
             ]
         );
     }
