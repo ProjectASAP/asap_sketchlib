@@ -126,6 +126,11 @@ impl UnivMon {
     /// Checks a pyramid shape without building it; [`Self::new`] builds exactly
     /// the shapes this accepts. `Err` names the broken rule; the rules are in
     /// `docs/api/api_univmon.md`.
+    ///
+    /// More than [`MATRIX_MAX_ROWS`](crate::common::MATRIX_MAX_ROWS) rows pass:
+    /// such a pyramid builds and works in memory, but
+    /// [`to_asapv1`](Self::to_asapv1) refuses it. A caller that needs an
+    /// encodable state must also check `rows <= MATRIX_MAX_ROWS`.
     pub fn check_shape(
         heap_size: usize,
         rows: usize,

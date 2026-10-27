@@ -470,6 +470,9 @@ impl<T: NumericalValue> Kll<T> {
 
     // -- Compaction ----------------------------------------------------------
 
+    /// Kept out of line: it runs once per level-0 fill, and inlined into
+    /// `push_value` it made the insert path too large to inline into callers.
+    #[inline(never)]
     fn compress_while_updating(&mut self) {
         let mut h = 0;
         loop {

@@ -10,6 +10,13 @@ signals a backwards-compatible change.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Kll::update` regains most of its pre-0.4.0 speed.** With the lazily grown
+  buffer, `compress_while_updating` was inlined into the insert path, which
+  then no longer inlined into callers; a stream of updates ran about 10%
+  slower. Compaction is kept out of line again: within 4% of 0.3.x on a
+  loaded host, at parity on a quiet one.
 ### Added
 
 - **Checked f64 updates and heap rescoring for the Count-Min and Count Sketch
