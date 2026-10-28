@@ -1,24 +1,33 @@
-//! Capability table: per sketch family, the statistics one state answers,
-//! how merge inputs may relate, and each statistic's error after a merge.
-//! A row lists the family's own readouts, not an inner sketch's reached
-//! through an accessor.
+//! Family-capability table: per sketch algorithm, the statistics one state
+//! answers, how merge inputs may relate, and each statistic's error after a
+//! merge. A row lists the family's own estimates, not an inner sketch's
+//! reached through an accessor, and not an exact aggregate kept in a side
+//! field next to the sketch (DDSketch's sum, min and max; a Space-Saving
+//! total): those belong to a separate exact operator (#250). A total the
+//! sketch derives from its own counters (Count-Min's, UnivMon's) stays. The names are the ASAPPlanner's, which reads this table
+//! directly.
+//!
+//! The enums are exhaustive on purpose: a downstream `match` without a
+//! wildcard stops compiling when a family or statistic is added, instead of
+//! skipping it.
 
 /// A public sketch family: one row of the table.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SketchFamily {
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub enum SketchAlgorithm {
     /// `CountMinSketch` over every storage and path, and `CountMinF64`.
-    CountMin,
+    Cms,
     CountSketch,
     CountSketchWithL2Norm,
     /// `CountMinSketchWithHeap`.
-    CountMinWithHeap,
+    CmsWithHeap,
     CountSketchWithHeap,
     /// `CountMinSketchWithSpaceSaving`.
-    CountMinWithSpaceSaving,
+    CmsWithSpaceSaving,
     CountSketchWithSpaceSaving,
     /// `CountMinSketchFold`.
-    CountMinFold,
+    CmsFold,
     CountSketchFold,
     /// `HyperLogLog` (Classic or Ertl) at any precision.
     Hll,
@@ -27,7 +36,7 @@ pub enum SketchFamily {
     Kmv,
     Kll,
     KllDynamic,
-    DdSketch,
+    DDSketch,
     SpaceSaving,
     /// `ElasticSketch`.
     Elastic,
@@ -40,7 +49,7 @@ pub enum SketchFamily {
     /// Quantile and rank are `None` when `ordered_samples` is 0.
     UnivMonQ,
     /// `Hydra` over Count-Min cells, per subpopulation.
-    HydraCountMin,
+    HydraCms,
     /// `Hydra` over Count Sketch cells, per subpopulation.
     HydraCountSketch,
     /// `Hydra` over KLL cells, per subpopulation.
@@ -50,18 +59,21 @@ pub enum SketchFamily {
     /// `Hydra` over UnivMon cells, per subpopulation.
     HydraUnivMon,
     #[cfg(feature = "experimental")]
-    CountMinHll,
+    CmsHll,
     #[cfg(feature = "experimental")]
     MicroCm,
     #[cfg(feature = "experimental")]
     UniformSampling,
 }
 
-/// A statistic a sketch state answers.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Statistic {
-    /// Total update weight.
+/// The kind of a statistic a sketch state answers, without its arguments.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub enum StatisticKind {
+    /// Total update weight, read from the sketch's own counters: a
+    /// Count-Min row's sum, UnivMon's L1, a Hydra Count-Min's group total or
+    /// a Hydra UnivMon cell's L1.
     Total,
     ItemFrequency,
     Quantile,
@@ -75,9 +87,6 @@ pub enum Statistic {
     /// Sum of `g` over the item frequencies.
     GSum,
     TopK,
-    Sum,
-    Min,
-    Max,
     Membership,
     /// Distinct values under one key.
     KeyDistinct,
@@ -89,7 +98,7 @@ pub enum Statistic {
 
 /// How the inputs of a merge may relate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MergeInputs {
+pub enum MergeInputRule {
     /// A shared update counts twice.
     Disjoint,
     /// The merge is idempotent.
@@ -101,32 +110,35 @@ pub enum MergeInputs {
 pub enum MergedError {
     /// Exact for the updates the sketch admitted.
     Exact,
-    /// As one state built over the union, given equal parameters.
+    /// As one state built over the union, given equal parameters: the merge
+    /// adds no error of its own. Whatever guarantee one state has, the merged
+    /// state keeps; a family with none (HydraKll) gains none.
     AsIfBuiltOverUnion,
-    NoGuarantee,
+    /// The merge is allowed, but the merged readout has no guarantee.
+    Approximate,
 }
 
 /// One row of the table.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Capability {
+pub struct FamilyCapability {
     /// `None` when the family has no merge.
-    pub merge: Option<MergeInputs>,
-    pub readouts: &'static [(Statistic, MergedError)],
+    pub merge_inputs: Option<MergeInputRule>,
+    pub readouts: &'static [(StatisticKind, MergedError)],
 }
 
-impl Capability {
+impl FamilyCapability {
     /// Whether one state answers `statistic`.
-    pub fn answers(&self, statistic: Statistic) -> bool {
+    pub fn answers(&self, statistic: StatisticKind) -> bool {
         self.readout(statistic).is_some()
     }
 
     /// `None` when the family has no merge or does not answer `statistic`.
-    pub fn merged_error(&self, statistic: Statistic) -> Option<MergedError> {
-        self.merge.and(self.readout(statistic))
+    pub fn merged_error(&self, statistic: StatisticKind) -> Option<MergedError> {
+        self.merge_inputs.and(self.readout(statistic))
     }
 
-    fn readout(&self, statistic: Statistic) -> Option<MergedError> {
+    fn readout(&self, statistic: StatisticKind) -> Option<MergedError> {
         self.readouts
             .iter()
             .find(|(answered, _)| *answered == statistic)
@@ -134,104 +146,99 @@ impl Capability {
     }
 }
 
-impl SketchFamily {
+impl SketchAlgorithm {
     /// Every family, each once.
-    pub const ALL: &'static [SketchFamily] = &[
-        SketchFamily::CountMin,
-        SketchFamily::CountSketch,
-        SketchFamily::CountSketchWithL2Norm,
-        SketchFamily::CountMinWithHeap,
-        SketchFamily::CountSketchWithHeap,
-        SketchFamily::CountMinWithSpaceSaving,
-        SketchFamily::CountSketchWithSpaceSaving,
-        SketchFamily::CountMinFold,
-        SketchFamily::CountSketchFold,
-        SketchFamily::Hll,
-        SketchFamily::HllHip,
-        SketchFamily::Kmv,
-        SketchFamily::Kll,
-        SketchFamily::KllDynamic,
-        SketchFamily::DdSketch,
-        SketchFamily::SpaceSaving,
-        SketchFamily::Elastic,
-        SketchFamily::Coco,
-        SketchFamily::Bloom,
-        SketchFamily::SetAggregator,
-        SketchFamily::UnivMon,
-        SketchFamily::UnivMonTwoTier,
-        SketchFamily::UnivMonQ,
-        SketchFamily::HydraCountMin,
-        SketchFamily::HydraCountSketch,
-        SketchFamily::HydraKll,
-        SketchFamily::HydraHll,
-        SketchFamily::HydraUnivMon,
+    pub const ALL: &'static [SketchAlgorithm] = &[
+        SketchAlgorithm::Cms,
+        SketchAlgorithm::CountSketch,
+        SketchAlgorithm::CountSketchWithL2Norm,
+        SketchAlgorithm::CmsWithHeap,
+        SketchAlgorithm::CountSketchWithHeap,
+        SketchAlgorithm::CmsWithSpaceSaving,
+        SketchAlgorithm::CountSketchWithSpaceSaving,
+        SketchAlgorithm::CmsFold,
+        SketchAlgorithm::CountSketchFold,
+        SketchAlgorithm::Hll,
+        SketchAlgorithm::HllHip,
+        SketchAlgorithm::Kmv,
+        SketchAlgorithm::Kll,
+        SketchAlgorithm::KllDynamic,
+        SketchAlgorithm::DDSketch,
+        SketchAlgorithm::SpaceSaving,
+        SketchAlgorithm::Elastic,
+        SketchAlgorithm::Coco,
+        SketchAlgorithm::Bloom,
+        SketchAlgorithm::SetAggregator,
+        SketchAlgorithm::UnivMon,
+        SketchAlgorithm::UnivMonTwoTier,
+        SketchAlgorithm::UnivMonQ,
+        SketchAlgorithm::HydraCms,
+        SketchAlgorithm::HydraCountSketch,
+        SketchAlgorithm::HydraKll,
+        SketchAlgorithm::HydraHll,
+        SketchAlgorithm::HydraUnivMon,
         #[cfg(feature = "experimental")]
-        SketchFamily::CountMinHll,
+        SketchAlgorithm::CmsHll,
         #[cfg(feature = "experimental")]
-        SketchFamily::MicroCm,
+        SketchAlgorithm::MicroCm,
         #[cfg(feature = "experimental")]
-        SketchFamily::UniformSampling,
+        SketchAlgorithm::UniformSampling,
     ];
 
     /// This family's row of the capability table.
-    pub fn capability(self) -> Capability {
-        use MergeInputs::{Disjoint, MayOverlap};
-        use MergedError::{AsIfBuiltOverUnion as U, Exact as E, NoGuarantee as N};
-        use Statistic::*;
-        const UNIVMON: &[(Statistic, MergedError)] = &[
+    pub fn capability(self) -> FamilyCapability {
+        use MergeInputRule::{Disjoint, MayOverlap};
+        use MergedError::{Approximate as A, AsIfBuiltOverUnion as U, Exact as E};
+        use StatisticKind::*;
+        const UNIVMON: &[(StatisticKind, MergedError)] = &[
             (Total, E),
             (FrequencyL2, U),
             (Distinct, U),
-            (FrequencyEntropy, N),
-            (GSum, N),
+            (FrequencyEntropy, A),
+            (GSum, A),
         ];
-        const FREQUENCY_TOP_K: &[(Statistic, MergedError)] = &[(ItemFrequency, U), (TopK, N)];
-        let (merge, readouts): (_, &'static [(Statistic, MergedError)]) = match self {
-            Self::CountMin => (Some(Disjoint), &[(ItemFrequency, U), (Total, E)]),
+        const FREQUENCY_TOP_K: &[(StatisticKind, MergedError)] = &[(ItemFrequency, U), (TopK, A)];
+        let (merge_inputs, readouts): (_, &'static [(StatisticKind, MergedError)]) = match self {
+            Self::Cms => (Some(Disjoint), &[(ItemFrequency, U), (Total, E)]),
             Self::CountSketch => (Some(Disjoint), &[(ItemFrequency, U)]),
             Self::CountSketchWithL2Norm => {
                 (Some(Disjoint), &[(ItemFrequency, U), (FrequencyL2, U)])
             }
-            Self::CountMinWithHeap
+            Self::CmsWithHeap
             | Self::CountSketchWithHeap
-            | Self::CountMinWithSpaceSaving
+            | Self::CmsWithSpaceSaving
             | Self::CountSketchWithSpaceSaving
-            | Self::CountMinFold
+            | Self::CmsFold
             | Self::CountSketchFold => (Some(Disjoint), FREQUENCY_TOP_K),
             Self::Hll => (Some(MayOverlap), &[(Distinct, U)]),
-            Self::HllHip => (None, &[(Distinct, N)]),
+            Self::HllHip => (None, &[(Distinct, A)]),
             Self::Kmv => (Some(MayOverlap), &[(Distinct, U)]),
             Self::Kll | Self::KllDynamic => (Some(Disjoint), &[(Quantile, U), (Rank, U)]),
-            Self::DdSketch => (
-                Some(Disjoint),
-                &[(Quantile, U), (Total, E), (Sum, E), (Min, E), (Max, E)],
-            ),
-            Self::SpaceSaving => (Some(Disjoint), &[(ItemFrequency, N), (TopK, N), (Total, E)]),
-            Self::Elastic => (Some(Disjoint), &[(ItemFrequency, N), (TopK, N)]),
-            Self::Coco => (
-                Some(Disjoint),
-                &[(ItemFrequency, N), (PartialKeySum, N), (Total, E)],
-            ),
+            Self::DDSketch => (Some(Disjoint), &[(Quantile, U)]),
+            Self::SpaceSaving => (Some(Disjoint), &[(ItemFrequency, A), (TopK, A)]),
+            Self::Elastic => (Some(Disjoint), &[(ItemFrequency, A), (TopK, A)]),
+            Self::Coco => (Some(Disjoint), &[(ItemFrequency, A), (PartialKeySum, A)]),
             Self::Bloom => (Some(MayOverlap), &[(Membership, U)]),
             Self::SetAggregator => (Some(MayOverlap), &[(Distinct, E), (Membership, E)]),
             Self::UnivMon | Self::UnivMonTwoTier => (Some(Disjoint), UNIVMON),
             Self::UnivMonQ => (
                 Some(Disjoint),
+                // Quantile and rank hold only when occurrence source ids are
+                // unique across the merged states, which the sketch does not
+                // check; distinct count has no proof for UnivMon-Q's strata;
+                // G-sum reads the same rebuilt candidates as UnivMon's.
                 &[
                     (ItemFrequency, U),
-                    (Total, E),
                     (FrequencyL2, U),
-                    (Distinct, U),
-                    (Quantile, U),
-                    (Rank, U),
-                    (Min, E),
-                    (Max, E),
-                    (GSum, U),
-                    (FrequencyEntropy, N),
-                    (TopK, N),
+                    (Distinct, A),
+                    (Quantile, A),
+                    (Rank, A),
+                    (GSum, A),
+                    (FrequencyEntropy, A),
+                    (TopK, A),
                 ],
             ),
-            Self::HydraCountMin => (Some(Disjoint), &[(ItemFrequency, U), (Total, U)]),
+            Self::HydraCms => (Some(Disjoint), &[(ItemFrequency, U), (Total, U)]),
             Self::HydraCountSketch => (Some(Disjoint), &[(ItemFrequency, U)]),
             Self::HydraKll => (Some(Disjoint), &[(Quantile, U), (Rank, U)]),
             Self::HydraHll => (Some(MayOverlap), &[(Distinct, U)]),
@@ -241,61 +248,64 @@ impl SketchFamily {
                     (Total, U),
                     (Distinct, U),
                     (FrequencyL2, U),
-                    (FrequencyEntropy, N),
+                    (FrequencyEntropy, A),
                 ],
             ),
             #[cfg(feature = "experimental")]
-            Self::CountMinHll => (Some(MayOverlap), &[(KeyDistinct, U)]),
+            Self::CmsHll => (Some(MayOverlap), &[(KeyDistinct, U)]),
             #[cfg(feature = "experimental")]
-            Self::MicroCm => (Some(Disjoint), &[(ItemFrequency, N)]),
+            Self::MicroCm => (Some(Disjoint), &[(ItemFrequency, A)]),
             #[cfg(feature = "experimental")]
-            Self::UniformSampling => (Some(Disjoint), &[(Sample, N), (Total, E)]),
+            Self::UniformSampling => (Some(Disjoint), &[(Sample, A)]),
         };
-        Capability { merge, readouts }
+        FamilyCapability {
+            merge_inputs,
+            readouts,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::SketchFamily;
+    use super::SketchAlgorithm;
 
     /// No wildcard: a new variant fails to compile until listed here.
-    fn expected_index(family: SketchFamily) -> usize {
+    fn expected_index(family: SketchAlgorithm) -> usize {
         match family {
-            SketchFamily::CountMin => 0,
-            SketchFamily::CountSketch => 1,
-            SketchFamily::CountSketchWithL2Norm => 2,
-            SketchFamily::CountMinWithHeap => 3,
-            SketchFamily::CountSketchWithHeap => 4,
-            SketchFamily::CountMinWithSpaceSaving => 5,
-            SketchFamily::CountSketchWithSpaceSaving => 6,
-            SketchFamily::CountMinFold => 7,
-            SketchFamily::CountSketchFold => 8,
-            SketchFamily::Hll => 9,
-            SketchFamily::HllHip => 10,
-            SketchFamily::Kmv => 11,
-            SketchFamily::Kll => 12,
-            SketchFamily::KllDynamic => 13,
-            SketchFamily::DdSketch => 14,
-            SketchFamily::SpaceSaving => 15,
-            SketchFamily::Elastic => 16,
-            SketchFamily::Coco => 17,
-            SketchFamily::Bloom => 18,
-            SketchFamily::SetAggregator => 19,
-            SketchFamily::UnivMon => 20,
-            SketchFamily::UnivMonTwoTier => 21,
-            SketchFamily::UnivMonQ => 22,
-            SketchFamily::HydraCountMin => 23,
-            SketchFamily::HydraCountSketch => 24,
-            SketchFamily::HydraKll => 25,
-            SketchFamily::HydraHll => 26,
-            SketchFamily::HydraUnivMon => 27,
+            SketchAlgorithm::Cms => 0,
+            SketchAlgorithm::CountSketch => 1,
+            SketchAlgorithm::CountSketchWithL2Norm => 2,
+            SketchAlgorithm::CmsWithHeap => 3,
+            SketchAlgorithm::CountSketchWithHeap => 4,
+            SketchAlgorithm::CmsWithSpaceSaving => 5,
+            SketchAlgorithm::CountSketchWithSpaceSaving => 6,
+            SketchAlgorithm::CmsFold => 7,
+            SketchAlgorithm::CountSketchFold => 8,
+            SketchAlgorithm::Hll => 9,
+            SketchAlgorithm::HllHip => 10,
+            SketchAlgorithm::Kmv => 11,
+            SketchAlgorithm::Kll => 12,
+            SketchAlgorithm::KllDynamic => 13,
+            SketchAlgorithm::DDSketch => 14,
+            SketchAlgorithm::SpaceSaving => 15,
+            SketchAlgorithm::Elastic => 16,
+            SketchAlgorithm::Coco => 17,
+            SketchAlgorithm::Bloom => 18,
+            SketchAlgorithm::SetAggregator => 19,
+            SketchAlgorithm::UnivMon => 20,
+            SketchAlgorithm::UnivMonTwoTier => 21,
+            SketchAlgorithm::UnivMonQ => 22,
+            SketchAlgorithm::HydraCms => 23,
+            SketchAlgorithm::HydraCountSketch => 24,
+            SketchAlgorithm::HydraKll => 25,
+            SketchAlgorithm::HydraHll => 26,
+            SketchAlgorithm::HydraUnivMon => 27,
             #[cfg(feature = "experimental")]
-            SketchFamily::CountMinHll => 28,
+            SketchAlgorithm::CmsHll => 28,
             #[cfg(feature = "experimental")]
-            SketchFamily::MicroCm => 29,
+            SketchAlgorithm::MicroCm => 29,
             #[cfg(feature = "experimental")]
-            SketchFamily::UniformSampling => 30,
+            SketchAlgorithm::UniformSampling => 30,
         }
     }
 
@@ -306,8 +316,8 @@ mod tests {
         } else {
             28
         };
-        assert_eq!(SketchFamily::ALL.len(), expected_len);
-        for (position, &family) in SketchFamily::ALL.iter().enumerate() {
+        assert_eq!(SketchAlgorithm::ALL.len(), expected_len);
+        for (position, &family) in SketchAlgorithm::ALL.iter().enumerate() {
             assert_eq!(expected_index(family), position, "{family:?}");
         }
     }

@@ -12,11 +12,17 @@ signals a backwards-compatible change.
 
 ### Added
 
-- **Capability table** (`asap_sketchlib::capability`, re-exported at the
-  root): `SketchFamily::capability()` gives, for each public sketch family,
-  the `Statistic`s one state answers, whether states merge and whether the
-  inputs may overlap (`MergeInputs`), and the error of each statistic read
-  from a merged state (`MergedError`). `SketchFamily::ALL` lists the families.
+- **Family-capability table** (`asap_sketchlib::capability`, re-exported at
+  the root): `SketchAlgorithm::capability()` gives, for each public sketch
+  family, the `StatisticKind`s one state answers, whether states merge and
+  whether the inputs may overlap (`MergeInputRule`), and the error of each
+  statistic read from a merged state (`MergedError`).
+  `SketchAlgorithm::ALL` lists the families. The names are the ASAPPlanner's,
+  which reads the table directly; the enums are exhaustive and serde-derived.
+  Rows list each sketch's own estimates only: exact aggregates kept in side
+  fields next to a sketch (DDSketch's sum/min/max, a Space-Saving total) are
+  a separate exact operator (#250); a total read from the sketch's own
+  counters (Count-Min, UnivMon) stays.
 - **`DdSketch::quantile_interpolated(q)`**: the quantile interpolated linearly
   between the order statistics at rank `q * (n - 1)`, as PromQL
   `quantile_over_time` and SQL `percentile_cont` compute it, over both signed
