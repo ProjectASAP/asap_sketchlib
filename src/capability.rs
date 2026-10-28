@@ -70,7 +70,8 @@ pub enum SketchAlgorithm {
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
 pub enum StatisticKind {
-    /// Estimated total update weight of one subpopulation of a Hydra.
+    /// Estimated total update weight of one subpopulation of a Hydra: a
+    /// Hydra Count-Min's group total, or a Hydra UnivMon cell's L1 norm.
     Total,
     ItemFrequency,
     Quantile,

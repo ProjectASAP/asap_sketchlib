@@ -120,7 +120,8 @@ fn hydra(cell: HydraCounter) -> Hydra {
 const K: DataInput = DataInput::U64(1);
 const G: [Option<&str>; 1] = [Some("x")];
 
-/// Total and ItemFrequency on Disjoint rows, the cheap readouts on MayOverlap rows.
+/// Total and ItemFrequency on Disjoint rows (and UnivMon's L2, which a self
+/// merge also doubles), the cheap readouts on MayOverlap rows.
 #[rustfmt::skip]
 fn probe(family: SketchAlgorithm) -> Vec<(StatisticKind, f64, f64)> {
     let add3 = |h: &mut Hydra| h.update(&["x"], &K, Some(3)).unwrap();
@@ -160,6 +161,8 @@ fn probe(family: SketchAlgorithm) -> Vec<(StatisticKind, f64, f64)> {
             |a, b| a.merge(b), |s| vec![(Membership, s.contains(&K) as u8 as f64)]),
         F::SetAggregator => self_merge(SetAggregator::new(), |s| s.update("a"), |a, b| a.merge(b).unwrap(),
             |s| vec![(Distinct, s.values.len() as f64), (Membership, s.values.contains("a") as u8 as f64)]),
+        F::UnivMon => self_merge(UnivMon::new(4, 3, 64, 4), |s| s.update_weighted(&K, 3),
+            |a, b| a.merge(b), |s| vec![(FrequencyL2, s.estimate_l2())]),
         F::UnivMonQ => self_merge(UnivMonQ::<DefaultXxHasher>::default(), |s| (0..3).for_each(|_| s.update(&3.0f64)),
             |a, b| a.merge(b).unwrap(), |s| vec![(ItemFrequency, s.estimate_frequency(3.0) as f64)]),
         F::HydraCms => self_merge(hydra(HydraCounter::CountMinSketch(CountMinSketch::with_dimensions(3, 64))), add3, merge,
@@ -181,7 +184,7 @@ fn probe(family: SketchAlgorithm) -> Vec<(StatisticKind, f64, f64)> {
 }
 
 /// A MayOverlap merge of a state with itself changes no readout; a Disjoint
-/// one doubles Total and ItemFrequency.
+/// one doubles Total, ItemFrequency and a single item's L2 norm.
 #[test]
 fn self_merge_follows_the_merge_column() {
     for &family in SketchAlgorithm::ALL {
