@@ -60,10 +60,12 @@ This is the canonical API entry point for `asap_sketchlib`.
 - [OctoSketch](./api/api_octo.md) - `Ready`
   - Reference: Zhang, Chen & Liu, "OctoSketch: Enabling Real-Time, Continuous Network Monitoring over Multiple Cores," NSDI 2024. [https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda](https://www.usenix.org/conference/nsdi24/presentation/zhang-yinda)
 
-## Capability Table
+## Family-Capability Table
 
-`SketchFamily::capability()` gives each family's readouts, merge input rule
-and merged error; `SketchFamily::ALL` lists the families.
+`SketchAlgorithm::capability()` gives each family's readouts
+(`StatisticKind`), merge input rule (`MergeInputRule`) and merged error
+(`MergedError`); `SketchAlgorithm::ALL` lists the families. Exact aggregates
+(total, sum, min, max) are not sketch readouts (#250).
 
 ## Common Utility APIs
 

@@ -27,7 +27,9 @@ pub mod sketches;
 pub mod test_utils;
 
 pub use asapv1::envelope::peek_kind_id;
-pub use capability::{Capability, MergeInputs, MergedError, SketchFamily, Statistic};
+pub use capability::{
+    FamilyCapability, MergeInputRule, MergedError, SketchAlgorithm, StatisticKind,
+};
 pub use common::*;
 pub use sketch_framework::*;
 pub use sketches::*;
