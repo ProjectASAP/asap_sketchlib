@@ -83,7 +83,7 @@ beside `wire.rs`, declared `pub(crate)` so the other user can import it by path:
 Converted:
 
 - **HLL** (`src/sketches/hll/wire.rs`) — all variants (Classic → `0x01 0x01`,
-  Ertl-MLE → `0x01 0x02`, HIP → `0x01 0x03`) × precisions (P12/P14/P16) ×
+  Ertl-MLE → `0x01 0x02`, HIP → `0x01 0x04`) × precisions (P12/P14/P16) ×
   `H: HashProfile`. HLL is **fully wire-covered**. (HIP is a non-generic struct
   hashed through the default functions, so it is wire-eligible under the standard
   profile only.)

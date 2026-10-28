@@ -442,18 +442,18 @@ macro_rules! hip_laws {
             const M: usize = <$buckets>::NUM_REGISTERS;
             const P: u32 = <$buckets>::PRECISION as u32;
 
-            /// The registers, read back from the ASAPv1 payload. The struct
-            /// holds them privately behind the `kxq0`/`kxq1` accumulators, and
-            /// those accumulators are what the increment law checks, so the
-            /// envelope is the one view of the registers that stays independent
-            /// of it.
+            /// The registers, read back from the ASAPv1 payload (the
+            /// register bin, then `hip_est`). The struct holds them privately
+            /// behind the `kxq0`/`kxq1` accumulators, and those accumulators
+            /// are what the increment law checks, so the envelope is the one
+            /// view of the registers that stays independent of it.
             fn registers_of(sketch: &S) -> Vec<u8> {
                 let bytes = sketch.to_asapv1().expect("encode");
                 let at = 8 + bytes[7] as usize;
                 let metadata_len =
                     u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
                 let payload = &bytes[at + 8 + metadata_len..];
-                let (registers, _, _, _): (serde_bytes::ByteBuf, f64, f64, f64) =
+                let (registers, _): (serde_bytes::ByteBuf, f64) =
                     rmp_serde::from_slice(payload).expect("decode");
                 registers.into_vec()
             }

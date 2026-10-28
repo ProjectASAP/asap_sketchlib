@@ -173,7 +173,7 @@ fn large_precision_allocates_on_the_heap() {
 
 /// The ASAPv1 envelope writes `precision` into the metadata and validates the
 /// register length on the way back in.
-/// Covers all three variants, including HIP's extra running scalars.
+/// Covers all three variants, including HIP's running estimate.
 #[test]
 fn custom_precision_round_trips_through_the_asapv1_wire_format() {
     let mut classic = HyperLogLogImpl::<Classic, HllBucketListP13>::new();
@@ -200,8 +200,16 @@ fn custom_precision_round_trips_through_the_asapv1_wire_format() {
 
     let bytes = hip.to_asapv1().expect("hip encode");
     let restored = HyperLogLogHipImpl::<HllBucketListP13>::from_asapv1(&bytes).expect("hip decode");
-    // HIP's estimate is a running scalar, so this also checks that kxq0/kxq1/est
-    // survived the round-trip rather than being recomputed from registers.
+    // HIP's estimate is a running scalar carried on the wire; kxq0/kxq1 are
+    // recomputed from the registers, so a restored sketch must keep counting
+    // exactly as the original does.
+    assert_eq!(restored.estimate(), hip.estimate());
+    let (mut hip, mut restored) = (hip, restored);
+    for i in 0..2_000u64 {
+        let value = DataInput::String(item(5_000 + i as usize));
+        hip.update(&value);
+        restored.update(&value);
+    }
     assert_eq!(restored.estimate(), hip.estimate());
 
     // A payload whose register count does not match the target precision is

@@ -84,11 +84,15 @@ These produce/consume the **ASAPv1** wire envelope — see the
 `Variant: HllWireVariant` and `H: HashProfile`, so every
 (variant × precision × hasher) combination serializes — **HLL is fully
 wire-covered**. Each variant maps to its own `kind_id` (Classic → `0x01 0x01`,
-Ertl-MLE → `0x01 0x02`, HIP → `0x01 0x03`); `precision` and the
+Ertl-MLE → `0x01 0x02`, HIP → `0x01 0x04`); `precision` and the
 `HashProfile`-derived hash spec live in the envelope metadata, and the payload is
-the register bytes (plus three HIP scalars for the HIP variant). `HyperLogLogHip`
-is a non-generic struct that hashes through the default functions, so it is
-wire-eligible under the **standard** hash profile only.
+the register bytes (plus the running estimate `hip_est` for the HIP variant).
+HIP's `kxq0` / `kxq1` sums are recomputed from the registers on decode, bit for
+bit, so a decoded HIP sketch keeps counting exactly as the encoded one would.
+`HyperLogLogHip::from_asapv1` also reads the retired `0x01 0x03` payload, which
+carried those two sums, and drops them; `to_asapv1` never writes it.
+`HyperLogLogHip` is a non-generic struct that hashes through the default
+functions, so it is wire-eligible under the **standard** hash profile only.
 
 ## Deltas
 

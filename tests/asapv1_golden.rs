@@ -44,8 +44,12 @@ fn decode_hex(s: &str) -> Vec<u8> {
 
 const GOLDEN_CLASSIC: &str = include_str!("../asapv1_golden/hll_classic_p12.hex");
 const GOLDEN_ERTL: &str = include_str!("../asapv1_golden/hll_ertl_mle_p12.hex");
-const GOLDEN_HIP: &str = include_str!("../asapv1_golden/hll_hip_p12.hex");
-const GOLDEN_HIP_P14: &str = include_str!("../asapv1_golden/hll_hip_p14.hex");
+// The retired HIP kind `01 03`, decode-only.
+const GOLDEN_HIP_WITH_KXQ: &str = include_str!("../asapv1_golden/hll_hip_p12.hex");
+const GOLDEN_HIP_WITH_KXQ_P14: &str = include_str!("../asapv1_golden/hll_hip_p14.hex");
+// The current HIP kind `01 04`: registers and estimate.
+const GOLDEN_HIP: &str = include_str!("../asapv1_golden/hll_hip_est_p12.hex");
+const GOLDEN_HIP_P14: &str = include_str!("../asapv1_golden/hll_hip_est_p14.hex");
 const GOLDEN_CLASSIC_P14: &str = include_str!("../asapv1_golden/hll_classic_p14.hex");
 const GOLDEN_ERTL_P14: &str = include_str!("../asapv1_golden/hll_ertl_mle_p14.hex");
 const GOLDEN_CLASSIC_P14_DELTA: &str = include_str!("../asapv1_golden/hll_classic_p14_delta.hex");
@@ -230,6 +234,19 @@ fn hll_hip_p14_matches_golden() {
     let want = decode_hex(GOLDEN_HIP_P14);
     let native = HyperLogLogHipP14::from_asapv1(&want).expect("native decode");
     assert_eq!(native.to_asapv1().expect("re-serialize"), want);
+}
+
+/// Each retired `01 03` fixture decodes, its `kxq0` / `kxq1` dropped and
+/// recomputed from the registers, and re-encodes as its `hll_hip_est_*` twin.
+#[test]
+fn hll_hip_retired_fixtures_decode_to_their_est_twins() {
+    let p12 = HyperLogLogHipP12::from_asapv1(&decode_hex(GOLDEN_HIP_WITH_KXQ)).expect("decode");
+    assert_eq!(p12.to_asapv1().expect("re-encode"), decode_hex(GOLDEN_HIP));
+    let p14 = HyperLogLogHipP14::from_asapv1(&decode_hex(GOLDEN_HIP_WITH_KXQ_P14)).expect("decode");
+    assert_eq!(
+        p14.to_asapv1().expect("re-encode"),
+        decode_hex(GOLDEN_HIP_P14)
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -356,7 +356,8 @@ mod tests {
             .expect("arity");
 
         let dd = &positive.to_asapv1().unwrap();
-        let hip = &hex(include_str!("../../asapv1_golden/hll_hip_p12.hex"));
+        let hip = &hex(include_str!("../../asapv1_golden/hll_hip_est_p12.hex"));
+        let hip_with_kxq = &hex(include_str!("../../asapv1_golden/hll_hip_p12.hex"));
         let cms = &hex(include_str!("../../asapv1_golden/cms_f64_fast_2x3.hex"));
         let cms_delta = &hex(include_str!(
             "../../asapv1_golden/cms_f64_fast_2x3_delta.hex"
@@ -389,9 +390,11 @@ mod tests {
 
         let rows = vec![
             row("DDSketch alpha", dd, 0.25, F32, dd_ok),
-            row("HLL hip_kxq0", hip, 1.5, F32, hip_ok),
-            row("HLL hip_kxq1", hip, 2.5, F32, hip_ok),
             row("HLL hip_est", hip, 3.0, Int, hip_ok),
+            row("HLL hip_est", hip, 3.0, F32, hip_ok),
+            row("HLL retired hip_kxq0", hip_with_kxq, 1.5, F32, hip_ok),
+            row("HLL retired hip_kxq1", hip_with_kxq, 2.5, F32, hip_ok),
+            row("HLL retired hip_est", hip_with_kxq, 3.0, Int, hip_ok),
             row("CMS f64 count", cms, 1.5, F32, cms_ok),
             row("CMS f64 delta", cms_delta, 2.5, Int, delta_ok),
             row("CS f64 count", cs, -2.25, F32, cs_ok),
