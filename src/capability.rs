@@ -1,9 +1,10 @@
 //! Family-capability table: per sketch algorithm, the statistics one state
 //! answers, how merge inputs may relate, and each statistic's error after a
 //! merge. A row lists the family's own estimates, not an inner sketch's
-//! reached through an accessor, and not an exact aggregate (total, sum,
-//! min, max) kept next to the sketch: those belong to a separate exact
-//! operator (#250). The names are the ASAPPlanner's, which reads this table
+//! reached through an accessor, and not an exact aggregate kept in a side
+//! field next to the sketch (DDSketch's sum, min and max; a Space-Saving
+//! total): those belong to a separate exact operator (#250). A total the
+//! sketch derives from its own counters (Count-Min's, UnivMon's) stays. The names are the ASAPPlanner's, which reads this table
 //! directly.
 //!
 //! The enums are exhaustive on purpose: a downstream `match` without a
@@ -70,8 +71,9 @@ pub enum SketchAlgorithm {
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
 pub enum StatisticKind {
-    /// Estimated total update weight of one subpopulation of a Hydra: a
-    /// Hydra Count-Min's group total, or a Hydra UnivMon cell's L1 norm.
+    /// Total update weight, read from the sketch's own counters: a
+    /// Count-Min row's sum, UnivMon's L1, a Hydra Count-Min's group total or
+    /// a Hydra UnivMon cell's L1.
     Total,
     ItemFrequency,
     Quantile,
@@ -189,6 +191,7 @@ impl SketchAlgorithm {
         use MergedError::{Approximate as A, AsIfBuiltOverUnion as U, Exact as E};
         use StatisticKind::*;
         const UNIVMON: &[(StatisticKind, MergedError)] = &[
+            (Total, E),
             (FrequencyL2, U),
             (Distinct, U),
             (FrequencyEntropy, A),
@@ -196,7 +199,7 @@ impl SketchAlgorithm {
         ];
         const FREQUENCY_TOP_K: &[(StatisticKind, MergedError)] = &[(ItemFrequency, U), (TopK, A)];
         let (merge_inputs, readouts): (_, &'static [(StatisticKind, MergedError)]) = match self {
-            Self::Cms => (Some(Disjoint), &[(ItemFrequency, U)]),
+            Self::Cms => (Some(Disjoint), &[(ItemFrequency, U), (Total, E)]),
             Self::CountSketch => (Some(Disjoint), &[(ItemFrequency, U)]),
             Self::CountSketchWithL2Norm => {
                 (Some(Disjoint), &[(ItemFrequency, U), (FrequencyL2, U)])

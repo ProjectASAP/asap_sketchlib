@@ -65,7 +65,8 @@ This is the canonical API entry point for `asap_sketchlib`.
 `SketchAlgorithm::capability()` gives each family's readouts
 (`StatisticKind`), merge input rule (`MergeInputRule`) and merged error
 (`MergedError`); `SketchAlgorithm::ALL` lists the families. Exact aggregates
-(total, sum, min, max) are not sketch readouts (#250).
+kept in side fields (DDSketch's sum/min/max, a Space-Saving total) are not
+sketch readouts (#250); a total read from the sketch's own counters is.
 
 ## Common Utility APIs
 

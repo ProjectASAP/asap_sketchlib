@@ -19,8 +19,10 @@ signals a backwards-compatible change.
   statistic read from a merged state (`MergedError`).
   `SketchAlgorithm::ALL` lists the families. The names are the ASAPPlanner's,
   which reads the table directly; the enums are exhaustive and serde-derived.
-  Rows list each sketch's own estimates only: exact aggregates kept next to a
-  sketch (total, sum, min, max) are a separate exact operator (#250).
+  Rows list each sketch's own estimates only: exact aggregates kept in side
+  fields next to a sketch (DDSketch's sum/min/max, a Space-Saving total) are
+  a separate exact operator (#250); a total read from the sketch's own
+  counters (Count-Min, UnivMon) stays.
 - **`DdSketch::quantile_interpolated(q)`**: the quantile interpolated linearly
   between the order statistics at rank `q * (n - 1)`, as PromQL
   `quantile_over_time` and SQL `percentile_cont` compute it, over both signed

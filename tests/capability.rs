@@ -12,6 +12,7 @@ use asap_sketchlib::*;
 type Readouts = &'static [(StatisticKind, MergedError)];
 
 const UNIVMON: Readouts = &[
+    (Total, E),
     (FrequencyL2, U),
     (Distinct, U),
     (FrequencyEntropy, A),
@@ -22,7 +23,7 @@ const QUANTILE_RANK: Readouts = &[(Quantile, U), (Rank, U)];
 
 #[rustfmt::skip]
 const DECIDED: &[(SketchAlgorithm, Option<MergeInputRule>, Readouts)] = &[
-    (F::Cms, Some(D), &[(ItemFrequency, U)]),
+    (F::Cms, Some(D), &[(ItemFrequency, U), (Total, E)]),
     (F::CountSketch, Some(D), &[(ItemFrequency, U)]),
     (F::CountSketchWithL2Norm, Some(D), &[(ItemFrequency, U), (FrequencyL2, U)]),
     (F::CmsWithHeap, Some(D), FREQ_TOP_K),
@@ -130,7 +131,7 @@ fn probe(family: SketchAlgorithm) -> Vec<(StatisticKind, f64, f64)> {
     let keys = |n: u64| (0..n).map(DataInput::U64);
     match family {
         F::Cms => self_merge(CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(3, 64), |s| s.update_weighted(&K, 3),
-            |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate(&K) as f64)]),
+            |a, b| a.merge(b), |s| vec![(Total, s.total()), (ItemFrequency, s.estimate(&K) as f64)]),
         F::CountSketch => self_merge(CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(3, 64), |s| s.update_weighted(&K, 3),
             |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate(&K))]),
         F::CountSketchWithL2Norm => self_merge(CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(3, 64),
@@ -162,7 +163,9 @@ fn probe(family: SketchAlgorithm) -> Vec<(StatisticKind, f64, f64)> {
         F::SetAggregator => self_merge(SetAggregator::new(), |s| s.update("a"), |a, b| a.merge(b).unwrap(),
             |s| vec![(Distinct, s.values.len() as f64), (Membership, s.values.contains("a") as u8 as f64)]),
         F::UnivMon => self_merge(UnivMon::new(4, 3, 64, 4), |s| s.update_weighted(&K, 3),
-            |a, b| a.merge(b), |s| vec![(FrequencyL2, s.estimate_l2())]),
+            |a, b| a.merge(b), |s| vec![(Total, s.estimate_l1()), (FrequencyL2, s.estimate_l2())]),
+        F::UnivMonTwoTier => self_merge(UnivMonTwoTier::with_defaults(), |s| s.update_weighted(&K, 3),
+            |a, b| a.merge(b), |s| vec![(Total, s.estimate_l1())]),
         F::UnivMonQ => self_merge(UnivMonQ::<DefaultXxHasher>::default(), |s| (0..3).for_each(|_| s.update(&3.0f64)),
             |a, b| a.merge(b).unwrap(), |s| vec![(ItemFrequency, s.estimate_frequency(3.0) as f64)]),
         F::HydraCms => self_merge(hydra(HydraCounter::CountMinSketch(CountMinSketch::with_dimensions(3, 64))), add3, merge,
