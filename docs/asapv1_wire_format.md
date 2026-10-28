@@ -747,7 +747,7 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 
 **DDSketch carries no hash-spec group.** It never hashes: it maps a raw `f64` through a logarithm and carries no hasher type parameter at all. The hash spec answers "how were keys hashed", and a sketch that does not hash has no truthful answer, so the group is omitted entirely. This is the Q-KLL precedent, and the reason DDSketch's metadata schema is not `HashProfile`-derived the way HLL's and Count-Min's are.
 
-**No `sum`, `min` or `max`.** Every DDSketch readout comes from the buckets: a quantile, `q = 0` and `q = 1` included, is its bucket's representative and within `alpha` of a sample. A sum, minimum or maximum of the values is not a DDSketch readout but a separate exact aggregate kept beside the sketch. Carrying them in the state would also break deltas: a delta names buckets, not values, so a receiver could only fold in bucket representatives and would end with different scalars than the producer.
+**No `sum`, `min` or `max`.** Every DDSketch readout comes from the buckets: a quantile, `q = 0` and `q = 1` included, is its bucket's representative and within `alpha` of a sample of indexable magnitude (a nonzero magnitude below the indexable range is counted as zero and reads `0.0`). A sum, minimum or maximum of the values is not a DDSketch readout but a separate exact aggregate kept beside the sketch. Carrying them in the state would also break deltas: a delta names buckets, not values, so a receiver could only fold in bucket representatives and would end with different scalars than the producer.
 
 **The retired `0x05 0x00`.** It carried `sum` / `min` / `max` as three f64 fields between `offset` and `negative_counts` (eight fields in all). A decoder still accepts it, reads the three scalars as float64 (Section 4) and drops them, and the result re-encodes as `0x05 0x01`. Nothing encodes `0x05 0x00`; per Q-VER the id is never reused.
 
@@ -1177,16 +1177,16 @@ The `kind_id` is carried rather than a name, because Section 1's registry is alr
 
 **Feature-gating contract (cross-language; Go must honour it).**
 
-1. The nested-id namespace is **fixed and identical in every build**. All ten ids dispatch whether or not the `experimental` feature is on. An id is registry bytes, never an enum ordinal and never a discriminant, so no id's meaning can shift because a variant is compiled out.
+1. The nested-id namespace is **fixed and identical in every build**. All eleven ids (the ten encoded ones plus the retired `0x05 0x00`, which decodes into the DDSketch arm) dispatch whether or not the `experimental` feature is on. An id is registry bytes, never an enum ordinal and never a discriminant, so no id's meaning can shift because a variant is compiled out.
 2. A decoder built **without** `experimental` that meets `0x0d 0x00` **fails closed**, before the blocks are assembled into anything, with an error naming the variant (`UniformSampling`) **and** the feature. It never misparses, skips, substitutes another variant, or falls through the unknown-id path.
 3. An encoder built **without** `experimental` can never emit that id: the enum arm does not exist.
-4. An id outside the ten is rejected as unknown.
+4. An id outside the eleven is rejected as unknown.
 5. The id-to-name lookup exists for **error messages only**. Encoding and decoding both dispatch on the bytes; the name influences neither.
 
 **Decode rules.** Fail **closed** on each, with an error and never a panic:
 
 1. `kind_id` is `0x14 0x00`; any other id is rejected. The metadata is `metadata_version = 1` and nothing else; an unknown key or a missing key is rejected.
-2. The nested `kind_id` is one of the ten; anything else, **including a sibling algorithm's id within the same family**, is rejected as unknown — and rejected **before** the triple is assembled into an envelope. Nothing is ever built from an id the table does not carry, so an id too long for the envelope's one-byte `kind_id_len` field never reaches the framing that would have to hold it: it draws the same unknown-id error as any other stranger.
+2. The nested `kind_id` is one of the eleven in the table (ten encoded, plus the retired `0x05 0x00`); anything else, **including a sibling algorithm's id within the same family**, is rejected as unknown — and rejected **before** the triple is assembled into an envelope. Nothing is ever built from an id the table does not carry, so an id too long for the envelope's one-byte `kind_id_len` field never reaches the framing that would have to hold it: it draws the same unknown-id error as any other stranger.
 3. A nested id this build does not carry is rejected before `descriptor` and `state` are assembled into anything, with an error naming the variant and the feature. The availability check runs **first**, ahead of rule 2's: a feature-gated id is a known id, so `0x0d 0x00` in a build without `experimental` always draws the feature error and never the unknown-id one.
 4. `descriptor` and `state` are handed to that variant's own decoder, wrapped in the variant's own `kind_id`. Every check that decoder makes applies here: geometry bounds, length agreement, allocation guards, and the hash-profile pin.
 5. A `descriptor` / `state` pair that does not belong to the declared id fails inside that variant's decoder; no partial state is produced.

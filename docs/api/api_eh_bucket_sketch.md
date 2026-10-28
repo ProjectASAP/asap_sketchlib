@@ -65,7 +65,8 @@ stripped, so each variant's own validation applies unchanged. An
 `ExponentialHistogram` bucket inlines the same triple, so there is one
 EhBucketSketch encoding.
 
-The ten nested kind_ids:
+The ten encoded nested kind_ids, plus the retired `0x05 0x00`, which decodes
+into `DdSketch`:
 
 | Variant | Nested kind_id | Registry name | Feature |
 | ------- | -------------- | ------------- | ------- |

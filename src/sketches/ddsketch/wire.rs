@@ -397,6 +397,43 @@ mod tests {
         assert!(DdSketch::from_asapv1(&short).is_err());
     }
 
+    /// The retired scalars are read as float64 (Section 4) and then dropped:
+    /// an int or a float32 in their place is refused, and any float64 value,
+    /// NaN included, decodes.
+    #[test]
+    fn ddsketch_retired_scalars_must_be_float64() {
+        let metadata = encode_metadata(ALPHA, 1.0).unwrap();
+        let retired = |payload: Vec<u8>| {
+            DdSketch::from_asapv1(&envelope::encode(
+                kind::DDSKETCH_WITH_SCALARS,
+                &metadata,
+                &payload,
+            ))
+        };
+        let empty: Vec<u64> = Vec::new();
+        let int_sum =
+            rmp_serde::to_vec(&(vec![3u64], 7i32, 6i64, 1.5f64, 2.5f64, &empty, 0i32, 0u64));
+        assert!(retired(int_sum.unwrap()).is_err(), "int sum");
+        let f32_min =
+            rmp_serde::to_vec(&(vec![3u64], 7i32, 6.0f64, 1.5f32, 2.5f64, &empty, 0i32, 0u64));
+        assert!(retired(f32_min.unwrap()).is_err(), "float32 min");
+        let nan = rmp_serde::to_vec(&(
+            vec![3u64],
+            7i32,
+            f64::NAN,
+            f64::NAN,
+            f64::NAN,
+            &empty,
+            0i32,
+            0u64,
+        ));
+        let decoded = retired(nan.unwrap()).expect("NaN scalars are dropped");
+        assert_eq!(decoded.get_count(), 3);
+        let floats =
+            rmp_serde::to_vec(&(vec![3u64], 7i32, 6.0f64, 1.5f64, 2.5f64, &empty, 0i32, 0u64));
+        assert!(retired(floats.unwrap()).is_ok(), "control");
+    }
+
     #[test]
     fn ddsketch_empty_round_trip() {
         let sketch = DdSketch::new(ALPHA);

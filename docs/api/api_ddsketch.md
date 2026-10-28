@@ -36,9 +36,10 @@ fn quantile_interpolated(&self, q: f64) -> Result<Option<f64>, String>
 fn get_count(&self) -> u64
 ```
 
-Every answer is a bucket's representative: within `alpha` of a sample, the
-extremes included (`q <= 0` reads the lowest occupied bucket, `q >= 1` the
-highest). The sketch keeps no sum, minimum or maximum: those are not DDSketch
+Every answer is a bucket's representative: within `alpha` of a sample of
+indexable magnitude, the extremes included (`q <= 0` reads the lowest occupied
+bucket, `q >= 1` the highest). A nonzero magnitude below the indexable range is
+counted as zero and reads `0.0`. The sketch keeps no sum, minimum or maximum: those are not DDSketch
 readouts, and a caller that needs them keeps a separate exact aggregate beside
 the sketch.
 

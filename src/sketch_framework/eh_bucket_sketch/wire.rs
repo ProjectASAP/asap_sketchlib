@@ -23,7 +23,8 @@
 //!
 //! ## The kind_id namespace is fixed in every build
 //!
-//! All ten ids dispatch whatever features are on. A decoder built without
+//! All eleven ids (ten encoded, plus the retired `0x05 0x00`) dispatch
+//! whatever features are on. A decoder built without
 //! `experimental` rejects `0x0d 0x00` by name with the feature named, and its
 //! encoder can never emit it. A DDSketch bucket encodes as `0x05 0x01`; the
 //! retired `0x05 0x00` still decodes into the same variant, its `sum` / `min` /
@@ -86,7 +87,8 @@ pub(crate) struct SketchState {
     pub(crate) state: Vec<u8>,
 }
 
-/// Rejects a kind_id outside the ten.
+/// Rejects a kind_id outside the eleven (ten encoded, plus the retired
+/// `0x05 0x00`).
 pub(crate) fn unknown_variant(kind_id: &[u8]) -> RmpDecodeError {
     RmpDecodeError::Uncategorized(format!(
         "ASAPv1 EhBucketSketch: kind_id {kind_id:02x?} is not a wire variant"
@@ -414,8 +416,9 @@ pub(crate) mod tests {
         }
     }
 
-    /// The ten nested kind_ids and their registry names are the same in every
-    /// build, and every variant emits the id the table gives it.
+    /// The ten encoded nested kind_ids, plus the retired `0x05 0x00`, and their
+    /// registry names are the same in every build, and every variant emits the
+    /// id the table gives it.
     #[test]
     fn eh_bucket_sketch_kind_ids_are_build_independent() {
         let table: [(&[u8], &str); 10] = [

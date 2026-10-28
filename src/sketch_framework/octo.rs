@@ -4198,8 +4198,13 @@ mod runtime_tests {
                 "q={q}: got {got}, truth {truth}, relative {relative:.4}"
             );
         }
-        let (min, max) = (parent.min().unwrap(), parent.max().unwrap());
-        assert!(min <= exact[0] * (1.0 + alpha) && max >= exact[exact.len() - 1] * (1.0 - alpha));
+        // The extremes are the lowest and highest occupied buckets, each
+        // within alpha of the stream's true minimum and maximum.
+        let (lo, hi) = (exact[0], exact[exact.len() - 1]);
+        let min = parent.get_value_at_quantile(0.0).unwrap();
+        let max = parent.get_value_at_quantile(1.0).unwrap();
+        assert!((min - lo).abs() <= alpha * lo, "q=0: {min} vs min {lo}");
+        assert!((max - hi).abs() <= alpha * hi, "q=1: {max} vs max {hi}");
     }
 
     #[test]

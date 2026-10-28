@@ -333,7 +333,9 @@ impl DdSketch {
     /// empty or `q` is NaN: the representative of the bucket holding the
     /// order statistic at nearest rank `ceil(q * n)` (1-based). `q <= 0` reads
     /// the lowest occupied bucket and `q >= 1` the highest, so every answer,
-    /// the extremes included, is within `alpha` relative of a sample.
+    /// the extremes included, is within `alpha` relative of a sample when that
+    /// sample's magnitude is indexable. A nonzero magnitude below the
+    /// indexable range is counted as zero and reads `0.0`.
     pub fn get_value_at_quantile(&self, q: f64) -> Option<f64> {
         if self.count == 0 || q.is_nan() {
             return None;
@@ -386,26 +388,40 @@ impl DdSketch {
     /// representative of the bucket holding it, `0.0` in the zero bucket.
     fn value_at_rank(&self, rank: u64) -> f64 {
         debug_assert!(rank < self.count);
+        // The last occupied bucket walked, returned if the buckets ever held
+        // fewer samples than `count` says (no code path allows it).
+        let mut last = 0.0;
         let mut seen = 0u64;
         let negative = self.negative_store.counts.as_slice();
         for (i, &count) in negative.iter().enumerate().rev() {
+            if count == 0 {
+                continue;
+            }
             seen += count;
+            last = -self.bin_representative(self.negative_store.offset + i as i32);
             if seen > rank {
-                return -self.bin_representative(self.negative_store.offset + i as i32);
+                return last;
             }
         }
-        seen += self.zero_count;
-        if seen > rank {
-            return 0.0;
+        if self.zero_count > 0 {
+            seen += self.zero_count;
+            last = 0.0;
+            if seen > rank {
+                return last;
+            }
         }
         let positive = self.positive_store.counts.as_slice();
         for (i, &count) in positive.iter().enumerate() {
+            if count == 0 {
+                continue;
+            }
             seen += count;
+            last = self.bin_representative(self.positive_store.offset + i as i32);
             if seen > rank {
-                return self.bin_representative(self.positive_store.offset + i as i32);
+                return last;
             }
         }
-        unreachable!("rank {rank} is below the bucket total {}", self.count)
+        last
     }
 
     /// Returns the total number of samples inserted so far.
@@ -645,6 +661,23 @@ mod tests {
             sketch.try_add(v).expect("finite, indexable value");
         }
         sketch
+    }
+
+    /// If `count` ever exceeded the buckets, a quantile reads the last occupied
+    /// bucket instead of panicking.
+    #[test]
+    fn a_rank_past_the_buckets_reads_the_last_occupied_bucket() {
+        let mut sketch = DdSketch::new(0.01);
+        sketch.add(&-4.0);
+        sketch.count += 5;
+        assert_eq!(
+            sketch.get_value_at_quantile(1.0),
+            Some(-sketch.bin_representative(sketch.key_for(4.0)))
+        );
+        sketch.add(&8.0);
+        let top = sketch.bin_representative(sketch.key_for(8.0));
+        assert_eq!(sketch.get_value_at_quantile(1.0), Some(top));
+        assert_eq!(sketch.quantile_interpolated(1.0), Ok(Some(top)));
     }
 
     #[test]
