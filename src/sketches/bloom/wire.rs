@@ -4,14 +4,20 @@
 //! ASAPv1 serialization (the metadata/payload DTOs, the kind_id constant, and
 //! the `to_asapv1` / `from_asapv1` impls) while the
 //! algorithm lives in the parent module file. Being a descendant module, it
-//! reads the sketch's private `bits` / `inserted` fields directly without
-//! widening any field visibility. See `docs/asapv1_wire_format.md` §3.4.
+//! reads the sketch's private `bits` field directly without widening any field
+//! visibility. See `docs/asapv1_wire_format.md` §3.4.
 //!
-//! Bloom is one algorithm — a single kind_id `0x17 0x00`. The structural
-//! parameters — the grid dimensions (`rows` / `cols`) and the column-derivation
-//! **mode** (fast/regular, the [`BloomMode`] tag the filter already carries) —
-//! live in the metadata, so the payload is `[words, inserted]`: the packed bit
-//! words row-major, plus the insert counter.
+//! The structural parameters — the grid dimensions (`rows` / `cols`) and the
+//! column-derivation **mode** (fast/regular, the [`BloomMode`] tag the filter
+//! already carries) — live in the metadata, so the payload is `[words]`: the
+//! packed bit words row-major.
+//!
+//! ## Kind ids
+//!
+//! The filter encodes as `0x17 0x01`: the bit grid alone. The retired
+//! `0x17 0x00` also carried an `inserted` counter after the words; it still
+//! decodes, with the counter read and dropped, so bytes written before the
+//! change stay readable. Nothing encodes it.
 //!
 //! ## Wire-eligible geometries
 //!
@@ -27,7 +33,7 @@ use std::marker::PhantomData;
 
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
-use crate::asapv1::kind::BLOOM;
+use crate::asapv1::kind::{BLOOM, BLOOM_WITH_INSERTED};
 use crate::{BitMatrix, HashProfile, SketchHasher};
 
 use super::{BLOOM_MAX_BITS, BLOOM_MAX_SLICES, Bloom, BloomMode};
@@ -76,15 +82,13 @@ fn bloom_metadata<H: HashProfile>(rows: u32, cols: u32, mode: &str) -> BloomMeta
     }
 }
 
-/// Bloom payload (ASAPv1 §3.4), a msgpack **array** (`to_vec`, positional):
-/// `[words, inserted]`. `words` is the bit grid packed row-major, one row after
-/// another, each row padded out to a whole number of `u64`s; the stride is
-/// `ceil(cols / 64)`, derived from the metadata dimensions. `inserted` is the
-/// insert counter, which no other field determines.
+/// Bloom payload (ASAPv1 §3.4, kind `0x17 0x01`), a msgpack **array**
+/// (`to_vec`, positional): `[words]`, the bit grid packed row-major, one row
+/// after another, each row padded out to a whole number of `u64`s; the stride
+/// is `ceil(cols / 64)`, derived from the metadata dimensions.
 #[derive(Debug, Serialize, Deserialize)]
 struct BloomPayload {
     words: Vec<u64>,
-    inserted: u64,
 }
 
 /// Checks a `(rows, cols)` pair against the wire-eligible subset: both non-zero,
@@ -117,15 +121,15 @@ fn check_geometry(rows: usize, cols: usize) -> Result<(), String> {
 }
 
 // Wire serialization for the Bloom filter. `wire` is a descendant of the sketch
-// module, so these impls read the private `bits` / `inserted` fields and
-// construct the struct directly.
+// module, so these impls read the private `bits` field and construct the struct
+// directly.
 impl<Mode, H> Bloom<Mode, H>
 where
     Mode: BloomMode,
     H: SketchHasher + HashProfile,
 {
     /// Serializes the filter into an ASAPv1 MessagePack envelope
-    /// (kind_id `0x17 0x00`). The metadata is derived from the hasher's
+    /// (kind_id `0x17 0x01`). The metadata is derived from the hasher's
     /// [`HashProfile`], so it truthfully describes how the filter was hashed.
     ///
     /// A geometry outside the wire-eligible subset (see the module docs) is an
@@ -141,21 +145,22 @@ where
         ))?;
         let payload = rmp_serde::to_vec(&BloomPayload {
             words: self.bits.words().to_vec(),
-            inserted: self.inserted,
         })?;
         Ok(envelope::encode(kind::BLOOM, &metadata, &payload))
     }
 
-    /// Deserializes a filter from an ASAPv1 MessagePack envelope. The grid
-    /// dimensions are read from the (validated) metadata and the word stride is
-    /// derived from them; the payload carries only the words and the insert
-    /// counter. Every inconsistency fails closed.
+    /// Deserializes a filter from an ASAPv1 MessagePack envelope of kind
+    /// `0x17 0x01`, or of the retired `0x17 0x00`, whose `inserted` counter is
+    /// read and dropped. The grid dimensions are read from the (validated)
+    /// metadata and the word stride is derived from them; the payload carries
+    /// only the words. Every inconsistency fails closed.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != kind::BLOOM {
+        if kind_id != BLOOM && kind_id != BLOOM_WITH_INSERTED {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "Bloom kind_id mismatch: stored {kind_id:?}, expected {BLOOM:?}"
+                "Bloom kind_id mismatch: stored {kind_id:?}, expected {BLOOM:?} \
+                 (or the retired {BLOOM_WITH_INSERTED:?})"
             )));
         }
         let meta: BloomMetadata = envelope::decode_block(metadata)?;
@@ -176,7 +181,13 @@ where
                 "Bloom word count overflows: rows={rows}, words_per_row={words_per_row}"
             ))
         })?;
-        let p: BloomPayload = envelope::decode_block(payload)?;
+        let p: BloomPayload = if kind_id == BLOOM {
+            envelope::decode_block(payload)?
+        } else {
+            // The retired payload `[words, inserted]`: the counter is dropped.
+            let (words, _inserted): (Vec<u64>, u64) = envelope::decode_block(payload)?;
+            BloomPayload { words }
+        };
         if p.words.len() != expected_words {
             return Err(RmpDecodeError::Uncategorized(format!(
                 "Bloom words length {} != rows*words_per_row {expected_words}",
@@ -202,7 +213,6 @@ where
         Ok(Bloom {
             bits: BitMatrix::from_words(rows, cols, p.words)
                 .map_err(RmpDecodeError::Uncategorized)?,
-            inserted: p.inserted,
             _mode: PhantomData,
             _hasher: PhantomData,
         })
@@ -261,9 +271,9 @@ mod tests {
         assert_eq!(bytes[7], 2, "kind_id_len");
         // Literal, not `kind::BLOOM`: the constant compared against itself pins
         // nothing, and these bytes are what a Go reader dispatches on.
-        assert_eq!(&bytes[8..10], &[0x17, 0x00]);
+        assert_eq!(&bytes[8..10], &[0x17, 0x01]);
         let (kind_id, metadata, _) = envelope::split(&bytes).expect("split");
-        assert_eq!(kind_id, &[0x17, 0x00]);
+        assert_eq!(kind_id, &[0x17, 0x01]);
         let meta: BloomMetadata = from_slice(metadata).expect("metadata");
         assert_eq!(meta.metadata_version, 1);
         assert_eq!((meta.rows, meta.cols), (7, 1 << 14));
@@ -275,7 +285,6 @@ mod tests {
             bytes,
             "Bloom serialized bytes differed after round trip"
         );
-        assert_eq!(decoded.inserted(), filter.inserted());
         assert_eq!(decoded.fill_ratio(), filter.fill_ratio());
         assert_answers_preserved(|k| filter.contains(k), |k| decoded.contains(k));
     }
@@ -290,7 +299,6 @@ mod tests {
         let decoded = Bloom::<FastPath>::from_asapv1(&bytes).expect("decode");
 
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
-        assert_eq!(decoded.inserted(), filter.inserted());
         assert_answers_preserved(|k| filter.contains(k), |k| decoded.contains(k));
     }
 
@@ -301,7 +309,6 @@ mod tests {
         let decoded = Bloom::<RegularPath>::from_asapv1(&bytes).expect("decode");
 
         assert!(decoded.is_empty(), "an empty filter decoded with bits set");
-        assert_eq!(decoded.inserted(), 0);
         assert_eq!(decoded.rows(), filter.rows());
         assert_eq!(decoded.cols(), filter.cols());
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
@@ -444,11 +451,52 @@ mod tests {
     /// Builds a real envelope with real metadata around a hand-built payload,
     /// so the crafted-bytes tests exercise the decoder's own rules rather than
     /// the envelope's framing.
-    fn crafted(rows: u32, cols: u32, mode: &str, words: Vec<u64>, inserted: u64) -> Vec<u8> {
+    fn crafted(rows: u32, cols: u32, mode: &str, words: Vec<u64>) -> Vec<u8> {
         let metadata =
             rmp_serde::to_vec_named(&bloom_metadata::<DefaultXxHasher>(rows, cols, mode)).unwrap();
-        let payload = rmp_serde::to_vec(&BloomPayload { words, inserted }).unwrap();
+        let payload = rmp_serde::to_vec(&BloomPayload { words }).unwrap();
         envelope::encode(kind::BLOOM, &metadata, &payload)
+    }
+
+    /// Builds an envelope of `kind_id` around the retired two-field payload
+    /// `[words, inserted]` (2x64, regular path).
+    fn crafted_with_inserted(kind_id: &[u8], words: Vec<u64>, inserted: u64) -> Vec<u8> {
+        let metadata =
+            rmp_serde::to_vec_named(&bloom_metadata::<DefaultXxHasher>(2, 64, "regular")).unwrap();
+        let payload = rmp_serde::to_vec(&(words, inserted)).unwrap();
+        envelope::encode(kind_id, &metadata, &payload)
+    }
+
+    /// The retired `0x17 0x00` still decodes: the `inserted` counter is read
+    /// and dropped, the bits are kept, and the filter re-encodes as
+    /// `0x17 0x01` with the words alone.
+    #[test]
+    fn the_retired_kind_decodes_and_re_encodes_without_the_counter() {
+        let words = vec![0b1011, 1 << 63];
+        let retired = crafted_with_inserted(&[0x17, 0x00], words.clone(), 300);
+        let decoded = Bloom::<RegularPath>::from_asapv1(&retired).expect("decode retired");
+        assert_eq!(decoded.as_bits().words(), &words[..]);
+        let re_encoded = decoded.to_asapv1().expect("re-encode");
+        assert_eq!(&re_encoded[8..10], &[0x17, 0x01]);
+        assert_eq!(re_encoded, crafted(2, 64, "regular", words));
+    }
+
+    /// The current kind carries the words alone: a `0x17 0x01` payload that
+    /// still carries a counter is rejected, and so is a retired `0x17 0x00`
+    /// payload without one.
+    #[test]
+    fn each_kind_rejects_the_other_kinds_payload() {
+        let with_counter = crafted_with_inserted(&[0x17, 0x01], vec![0, 0], 0);
+        assert!(
+            Bloom::<RegularPath>::from_asapv1(&with_counter).is_err(),
+            "a 0x17 0x01 payload carrying a counter must be rejected"
+        );
+        let mut without_counter = crafted(2, 64, "regular", vec![0, 0]);
+        without_counter[9] = 0x00;
+        assert!(
+            Bloom::<RegularPath>::from_asapv1(&without_counter).is_err(),
+            "a 0x17 0x00 payload without its counter must be rejected"
+        );
     }
 
     /// The message a rejected decode fails with, so a test can pin *which*
@@ -465,11 +513,7 @@ mod tests {
     fn bloom_rejects_foreign_kind_id() {
         let metadata =
             rmp_serde::to_vec_named(&bloom_metadata::<DefaultXxHasher>(2, 64, "regular")).unwrap();
-        let payload = rmp_serde::to_vec(&BloomPayload {
-            words: vec![0, 0],
-            inserted: 0,
-        })
-        .unwrap();
+        let payload = rmp_serde::to_vec(&BloomPayload { words: vec![0, 0] }).unwrap();
         let bytes = envelope::encode(&[0x02, 0x00], &metadata, &payload);
         assert!(
             Bloom::<RegularPath>::from_asapv1(&bytes).is_err(),
@@ -482,7 +526,7 @@ mod tests {
     #[test]
     fn bloom_rejects_zero_dimension() {
         for (rows, cols) in [(0u32, 64u32), (4, 0)] {
-            let err = decode_error(&crafted(rows, cols, "regular", Vec::new(), 0));
+            let err = decode_error(&crafted(rows, cols, "regular", Vec::new()));
             assert!(
                 err.contains("dimensions must be non-zero"),
                 "rows={rows}, cols={cols} must be rejected by the dimension rule, got {err}"
@@ -495,12 +539,12 @@ mod tests {
     /// rejects it and not the word count.
     #[test]
     fn bloom_rejects_non_power_of_two_cols() {
-        let err = decode_error(&crafted(2, 96, "regular", vec![0; 4], 0));
+        let err = decode_error(&crafted(2, 96, "regular", vec![0; 4]));
         assert!(
             err.contains("not a power of two"),
             "a non-power-of-two cols must be rejected as such, got {err}"
         );
-        let ok = crafted(2, 128, "regular", vec![0; 4], 0);
+        let ok = crafted(2, 128, "regular", vec![0; 4]);
         assert!(
             Bloom::<RegularPath>::from_asapv1(&ok).is_ok(),
             "the power-of-two control case must still decode"
@@ -513,7 +557,7 @@ mod tests {
     #[test]
     fn bloom_rejects_too_many_rows() {
         let rows = BLOOM_MAX_SLICES + 1;
-        let err = decode_error(&crafted(rows as u32, 64, "regular", vec![0; rows], 0));
+        let err = decode_error(&crafted(rows as u32, 64, "regular", vec![0; rows]));
         assert!(
             err.contains("BLOOM_MAX_SLICES"),
             "rows past BLOOM_MAX_SLICES must be rejected as such, got {err}"
@@ -524,7 +568,6 @@ mod tests {
             64,
             "regular",
             vec![0; BLOOM_MAX_SLICES],
-            0,
         );
         assert!(Bloom::<RegularPath>::from_asapv1(&ok).is_ok());
     }
@@ -535,7 +578,7 @@ mod tests {
     #[test]
     fn bloom_rejects_oversized_bit_capacity() {
         let cols = (BLOOM_MAX_BITS / 2) as u32;
-        let err = decode_error(&crafted(4, cols, "regular", vec![0; 2], 0));
+        let err = decode_error(&crafted(4, cols, "regular", vec![0; 2]));
         assert!(
             err.contains("BLOOM_MAX_BITS"),
             "the capacity rule must fire before the word count is even derived, got {err}"
@@ -549,13 +592,13 @@ mod tests {
         // 3 rows x 128 cols needs 3 * 2 = 6 words.
         for words in [vec![0u64; 5], vec![0u64; 7]] {
             let len = words.len();
-            let err = decode_error(&crafted(3, 128, "regular", words, 0));
+            let err = decode_error(&crafted(3, 128, "regular", words));
             assert!(
                 err.contains("words length"),
                 "{len} words for a 3x128 grid must be rejected by the stride rule, got {err}"
             );
         }
-        let ok = crafted(3, 128, "regular", vec![0; 6], 0);
+        let ok = crafted(3, 128, "regular", vec![0; 6]);
         assert!(Bloom::<RegularPath>::from_asapv1(&ok).is_ok());
     }
 
@@ -568,7 +611,7 @@ mod tests {
         // Bit 8 is the first padding bit and bit 63 the last; both are rejected,
         // and either row is checked.
         for words in [vec![0xFF, 1 << 8], vec![1 << 63, 0], vec![0, 1 << 40]] {
-            let err = decode_error(&crafted(2, 8, "regular", words, 0));
+            let err = decode_error(&crafted(2, 8, "regular", words));
             assert!(
                 err.contains("row padding"),
                 "bits set in the row padding must be rejected as such, got {err}"
@@ -576,12 +619,9 @@ mod tests {
         }
         // Same words with the padding clear decode, and report the fill the
         // eight live bits imply rather than the inflated one.
-        let clean = crafted(2, 8, "regular", vec![0xFF, 0], 0);
+        let clean = crafted(2, 8, "regular", vec![0xFF, 0]);
         let decoded = Bloom::<RegularPath>::from_asapv1(&clean).expect("clean decode");
         assert_eq!(decoded.fill_ratio(), 0.5);
-        // Eight bits set against an insert counter of zero: emptiness is a
-        // property of the bits.
-        assert_eq!(decoded.inserted(), 0);
         assert!(!decoded.is_empty(), "a filter with bits set reported empty");
     }
 
@@ -627,28 +667,24 @@ mod tests {
         use crate::asapv1::envelope::hex;
         use std::marker::PhantomData;
 
-        fn bloom<Mode: BloomMode>(
-            rows: usize,
-            cols: usize,
-            words: &[u64],
-            inserted: u64,
-        ) -> Bloom<Mode> {
+        fn bloom<Mode: BloomMode>(rows: usize, cols: usize, words: &[u64]) -> Bloom<Mode> {
             Bloom {
                 bits: BitMatrix::from_words(rows, cols, words.to_vec()).expect("valid grid"),
-                inserted,
                 _mode: PhantomData,
                 _hasher: PhantomData,
             }
         }
 
-        let regular = bloom::<RegularPath>(3, 128, &[1, 1 << 63, 0, 0xff, u64::MAX, 0x10000], 300);
+        let regular = bloom::<RegularPath>(3, 128, &[1, 1 << 63, 0, 0xff, u64::MAX, 0x10000]);
         let golden = hex(include_str!(
-            "../../../asapv1_golden/bloom_regular_3x128.hex"
+            "../../../asapv1_golden/bloom_bits_regular_3x128.hex"
         ));
         assert_eq!(regular.to_asapv1().unwrap(), golden);
 
-        let fast = bloom::<FastPath>(5, 32, &[1, 0x8000_0000, 0, 0xffff_ffff, 0x10000], 9);
-        let golden = hex(include_str!("../../../asapv1_golden/bloom_fast_5x32.hex"));
+        let fast = bloom::<FastPath>(5, 32, &[1, 0x8000_0000, 0, 0xffff_ffff, 0x10000]);
+        let golden = hex(include_str!(
+            "../../../asapv1_golden/bloom_bits_fast_5x32.hex"
+        ));
         assert_eq!(fast.to_asapv1().unwrap(), golden);
     }
 }

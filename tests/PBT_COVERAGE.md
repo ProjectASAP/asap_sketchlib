@@ -21,15 +21,15 @@ Compared against: the bit grid read via `as_bits`, and the stream's distinct key
   - `contains(k)` for every inserted `k`; 1-7 slices x 8-255 bits
   - once `contains(p)`, always `contains(p)`; every probe re-read after every insert
 - both hash paths, `RegularPath` and `FastPath`, through their own `update` / `contains`
-  - no member lost; `slices <= bits set <= slices * distinct` (non-empty stream); `fill_ratio() == bits set / bit_capacity()`; `bit_capacity() <= BLOOM_MAX_BITS`; `inserted() == arrivals`. Geometries 1-4 x 1-8 (saturates) and 1-7 x 256-1023 (mostly zero)
+  - no member lost; `slices <= bits set <= slices * distinct` (non-empty stream); `fill_ratio() == bits set / bit_capacity()`; `bit_capacity() <= BLOOM_MAX_BITS`. Geometries 1-4 x 1-8 (saturates) and 1-7 x 256-1023 (mostly zero)
 - grid
   - `grid(S(xs)) == grid(S(perm(xs)))`
-  - after `clear`: grid, `inserted()`, `is_empty()`, `fill_ratio()` equal a fresh `with_dimensions`; no former member `contains`
+  - after `clear`: grid, `is_empty()`, `fill_ratio()` equal a fresh `with_dimensions`; no former member `contains`
   - all bits set: every probe `contains`; `fill_ratio() == 1.0`; `estimated_fpp() == 1.0`
 - merge
   - `merge(a, b)` contains every member of `a` and of `b`
   - `merge(a, b) == merge(b, a)`; `merge(a, a) == a`
-  - `grid(merge(S(xs), S(ys))) == grid(S(xs ++ ys))`; `inserted()` adds
+  - `grid(merge(S(xs), S(ys))) == grid(S(xs ++ ys))`
 - sizing
   - `dimensions_for(expected, target)`: `1 <= slices <= BLOOM_MAX_SLICES`; width a power of two; `slices * width <= BLOOM_MAX_BITS`. `expected` up to `usize::MAX`; `target` includes `0.0`, `-0.0`, `1.0`, `-1.0`, `MIN_POSITIVE`, `EPSILON`, `MAX`, `MIN`
 - wire

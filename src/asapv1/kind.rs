@@ -42,7 +42,11 @@ pub(crate) const UNIVMON: &[u8] = &[0x10, 0x00];
 pub(crate) const UNIVMON_TWO_TIER: &[u8] = &[0x11, 0x00];
 pub(crate) const EXPONENTIAL_HISTOGRAM: &[u8] = &[0x13, 0x00];
 pub(crate) const EH_BUCKET_SKETCH: &[u8] = &[0x14, 0x00];
-pub(crate) const BLOOM: &[u8] = &[0x17, 0x00];
+/// Bloom: the packed bit grid (spec §3.4).
+pub(crate) const BLOOM: &[u8] = &[0x17, 0x01];
+/// Retired Bloom kind that also carried the `inserted` counter: decoded, with
+/// the counter dropped, and never encoded.
+pub(crate) const BLOOM_WITH_INSERTED: &[u8] = &[0x17, 0x00];
 pub(crate) const SPACE_SAVING: &[u8] = &[0x18, 0x00];
 pub(crate) const COUNT_SKETCH_WITH_L2_NORM: &[u8] = &[0x19, 0x00];
 pub(crate) const UNIVMON_Q: &[u8] = &[0x1a, 0x00];

@@ -62,7 +62,6 @@ impl BloomMode for FastPath {
 #[derive(Clone, Debug)]
 pub struct Bloom<Mode = RegularPath, H: SketchHasher = DefaultXxHasher> {
     bits: BitMatrix,
-    inserted: u64,
     _mode: PhantomData<Mode>,
     _hasher: PhantomData<H>,
 }
@@ -85,7 +84,6 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
         );
         Self {
             bits: BitMatrix::new(rows, cols),
-            inserted: 0,
             _mode: PhantomData,
             _hasher: PhantomData,
         }
@@ -166,12 +164,6 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
         self.bits.size_in_bytes()
     }
 
-    /// Number of `update` calls this filter has seen, duplicates included.
-    #[inline(always)]
-    pub fn inserted(&self) -> u64 {
-        self.inserted
-    }
-
     /// Fraction of bits set.
     pub fn fill_ratio(&self) -> f64 {
         self.bits.fill_ratio()
@@ -182,10 +174,9 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
         self.bits.count_ones() == 0
     }
 
-    /// Clears every bit and the insert counter.
+    /// Clears every bit.
     pub fn clear(&mut self) {
         self.bits.clear();
-        self.inserted = 0;
     }
 
     /// Read access to the underlying bit grid.
@@ -215,7 +206,6 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
     /// result is exactly the filter the concatenated streams would have built.
     pub fn merge(&mut self, other: &Self) {
         self.bits.union_from(&other.bits);
-        self.inserted = self.inserted.saturating_add(other.inserted);
     }
 }
 // Regular-path membership: one seeded hash per slice.
@@ -230,7 +220,6 @@ impl<H: SketchHasher> Bloom<RegularPath, H> {
             let col = ((hashed & LOWER_32_MASK) as usize) % cols;
             self.bits.set(r, col);
         }
-        self.inserted = self.inserted.saturating_add(1);
     }
 
     /// Records every value in `values`.
@@ -264,7 +253,6 @@ impl<H: SketchHasher> Bloom<FastPath, H> {
         let hashed_val = <BitMatrix as FastPathHasher<H>>::hash_for_matrix(&self.bits, value);
         self.bits
             .fast_insert(|cell, _, _| *cell = true, (), &hashed_val);
-        self.inserted = self.inserted.saturating_add(1);
     }
 
     /// Records every value in `values`.
@@ -585,68 +573,40 @@ mod tests {
         }
     }
 
-    /// `inserted` counts calls, not distinct keys — it is the denominator a
-    /// caller compares against `predicted_fpp`, so silently deduplicating it
-    /// would make the filter look better sized than it is. `clear` has to take
-    /// it back down with the bits.
+    /// `clear` takes the filter back to the empty state: no bit set, a zero
+    /// fill ratio, and no former member reported present.
     #[test]
-    fn the_insert_counter_counts_calls_and_clear_returns_it_to_zero() {
+    fn clear_returns_the_filter_to_empty() {
         let mut filter = Bloom::<RegularPath>::with_dimensions(4, 256);
-        assert_eq!(filter.inserted(), 0, "a fresh filter has a non-zero count");
+        assert!(filter.is_empty(), "a fresh filter has bits set");
 
         let repeated = DataInput::Str("same");
         for _ in 0..5 {
             filter.update(&repeated);
         }
-        assert_eq!(
-            filter.inserted(),
-            5,
-            "five inserts of one key counted as {}",
-            filter.inserted()
-        );
+        filter.update_batch(&keys(3));
         assert!(!filter.is_empty(), "an inserted-into filter reports empty");
 
-        filter.update_batch(&keys(3));
-        assert_eq!(
-            filter.inserted(),
-            8,
-            "update_batch of three left the count at {}",
-            filter.inserted()
-        );
-
         filter.clear();
-        assert_eq!(
-            filter.inserted(),
-            0,
-            "clear left the count at {}",
-            filter.inserted()
-        );
         assert!(filter.is_empty(), "clear left bits set");
         assert_eq!(filter.fill_ratio(), 0.0, "clear left a non-zero fill ratio");
+        assert!(!filter.contains(&repeated), "clear left a member present");
     }
 
-    /// A merge unions the bits, so the merged filter has seen both streams and
-    /// its count has to say so; a count that stayed put would understate the
-    /// load the filter is carrying.
+    /// A merge unions the bits, so the merged filter answers yes for every
+    /// member of either side and keeps its geometry.
     #[test]
-    fn merging_identical_geometries_sums_the_insert_counts() {
+    fn merging_identical_geometries_unions_the_members() {
         let mut left = Bloom::<RegularPath>::with_dimensions(5, 512);
         let mut right = Bloom::<RegularPath>::with_dimensions(5, 512);
-        for key in keys(30) {
-            left.update(&key);
+        for value in 0..30u64 {
+            left.update(&DataInput::U64(value));
         }
         for value in 30..70u64 {
             right.update(&DataInput::U64(value));
         }
-        let expected = left.inserted() + right.inserted();
 
         left.merge(&right);
-        assert_eq!(
-            left.inserted(),
-            expected,
-            "merged count is {} not {expected}",
-            left.inserted()
-        );
         for value in 0..70u64 {
             assert!(
                 left.contains(&DataInput::U64(value)),

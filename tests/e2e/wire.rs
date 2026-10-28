@@ -57,12 +57,12 @@ fn a_bloom_envelope_round_trips_on_both_paths_and_names_its_kind() {
     }
 
     let regular_bytes = regular.to_asapv1().expect("encode regular");
-    assert_kind(&regular_bytes, 0x17, 0x00, "Bloom<RegularPath>");
+    assert_kind(&regular_bytes, 0x17, 0x01, "Bloom<RegularPath>");
     let decoded_regular =
         Bloom::<RegularPath>::from_asapv1(&regular_bytes).expect("decode regular");
 
     let fast_bytes = fast.to_asapv1().expect("encode fast");
-    assert_kind(&fast_bytes, 0x17, 0x00, "Bloom<FastPath>");
+    assert_kind(&fast_bytes, 0x17, 0x01, "Bloom<FastPath>");
     let decoded_fast = Bloom::<FastPath>::from_asapv1(&fast_bytes).expect("decode fast");
 
     for i in 0..2_000i64 {
@@ -83,9 +83,9 @@ fn a_bloom_envelope_round_trips_on_both_paths_and_names_its_kind() {
         );
     }
     assert_eq!(
-        decoded_regular.inserted(),
-        regular.inserted(),
-        "insert count"
+        decoded_regular.as_bits().count_ones(),
+        regular.as_bits().count_ones(),
+        "bits set"
     );
 }
 
