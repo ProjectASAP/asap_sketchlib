@@ -199,4 +199,76 @@ mod tests {
             CountMinSketch::<Vector2D<i32>, RegularPath>::from_storage(Vector2D::unfilled(2, 3));
         assert!(unfilled.merge_delta(&delta(vec![0], vec![1])).is_err());
     }
+
+    /// Unit roundoff of `f64` under round-to-nearest: one add or subtract is off
+    /// by at most `u * |result|`.
+    const U: f64 = f64::EPSILON / 2.0;
+
+    /// A receiver holding `old` after one `f64` delta `new - old`, the way a
+    /// producer forming the delta from its own cells would send it.
+    fn receive_one(old: f64, new: f64) -> f64 {
+        let delta =
+            CountMinSketchDelta::<f64, RegularPath>::new(1, 1, vec![0], vec![new - old]).unwrap();
+        let mut receiver = CountMinSketch::<Vector2D<f64>, RegularPath>::from_storage(
+            Vector2D::from_fn(1, 1, |_, _| old),
+        );
+        receiver.merge_delta(&delta).unwrap();
+        receiver.as_storage().as_slice()[0]
+    }
+
+    #[test]
+    fn f64_receiver_differs_from_producer_within_the_documented_bound() {
+        // old = 1, new = 1e-17: `new - old` rounds to -1, so old + delta = 0.
+        let received = receive_one(1.0, 1e-17);
+        assert_ne!(received, 1e-17);
+        assert!((received - 1e-17).abs() <= U * 1.0 + U * received.abs());
+
+        // 1000 applies on a cell whose value jumps between magnitudes 1e-20 and
+        // 1e3 with mixed signs (seeded): `new - old` then often rounds, and the
+        // error accumulates.
+        let mut receiver = CountMinSketch::<Vector2D<f64>, RegularPath>::from_storage(
+            Vector2D::from_fn(1, 1, |_, _| 0.0),
+        );
+        let (mut producer, mut bound, mut state) = (0.0_f64, 0.0_f64, 12345_u64);
+        let mut next_unit = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 11) as f64 / (1_u64 << 53) as f64
+        };
+        for _ in 0..1000 {
+            let magnitude = 10_f64.powf(-20.0 + 23.0 * next_unit());
+            let new = if next_unit() < 0.5 {
+                -magnitude
+            } else {
+                magnitude
+            };
+            let d = new - producer;
+            if d == 0.0 {
+                continue; // a delta is never zero
+            }
+            let delta =
+                CountMinSketchDelta::<f64, RegularPath>::new(1, 1, vec![0], vec![d]).unwrap();
+            receiver.merge_delta(&delta).unwrap();
+            let received = receiver.as_storage().as_slice()[0];
+            bound += U * d.abs() + U * received.abs();
+            producer = new;
+        }
+        let error = (receiver.as_storage().as_slice()[0] - producer).abs();
+        assert!(error > 0.0, "the walk must incur rounding error");
+        assert!(error <= bound, "error {error} exceeds bound {bound}");
+    }
+
+    #[test]
+    fn integer_receiver_equals_producer_exactly() {
+        let (old, new) = ([1_i64, 1 << 53, 7], [0_i64, (1 << 53) + 1, 7_000_000_000]);
+        let deltas: Vec<i64> = old.iter().zip(&new).map(|(o, n)| n - o).collect();
+        let delta =
+            CountMinSketchDelta::<i64, RegularPath>::new(1, 3, vec![0, 1, 2], deltas).unwrap();
+        let mut receiver = CountMinSketch::<Vector2D<i64>, RegularPath>::from_storage(
+            Vector2D::from_fn(1, 3, |_, c| old[c]),
+        );
+        receiver.merge_delta(&delta).unwrap();
+        assert_eq!(receiver.as_storage().as_slice(), &new);
+    }
 }
