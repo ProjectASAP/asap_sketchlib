@@ -47,7 +47,6 @@ fn try_update_weighted(&mut self, value: &DataInput, weight: f64) -> Result<(), 
 // CountSketchWithL2Norm
 fn update_weighted(&mut self, val: &DataInput, weight: i64)
 fn update_weighted_with_hash(&mut self, hashed_val: u128, weight: i64)
-fn update_weighted_with_hash_without_l2(&mut self, hashed_val: u128, c: i64)
 ```
 
 `clear` zeroes every counter and returns the Nitro sampler to its start, keeping
@@ -101,16 +100,17 @@ payload is just `[counts]`, packed row-major with signed cells. The wire covers 
 `cols <= u32::MAX`; `to_asapv1` and `from_asapv1` refuse a wider matrix in
 either mode.
 
-`CountSketchWithL2Norm` has its own ASAPv1 kind (`0x19 0x00`) and the same two methods,
+`CountSketchWithL2Norm` has its own ASAPv1 kind (`0x19 0x01`) and the same two methods,
 available for any `H: HashProfile`. Its counters are always `i64` and its
 column derivation is fixed by the algorithm, so the metadata carries no
 `counter_type` and no `mode` — only `seed_index`, `rows` and `cols`. It
 carries the same `1 <= rows <= 20` wire bound. The
-payload is `[counts, l2]`: the matrix packed row-major, then one L2
-accumulator per row. `l2` is carried rather than recomputed, because
-`update_weighted_with_hash_without_l2` moves counters without it and the
-accumulator saturates one way. The same `(counts, l2)` pair is what a `UnivMon`
-layer inlines into its own payload.
+payload is `[counts]`, the matrix packed row-major. Each row's L2 accumulator
+always equals that row's sum of squared counters (saturated at `i64::MAX`), so
+it stays in memory as a cache and the decoder recomputes it. The retired kind
+`0x19 0x00` also carried it as `[counts, l2]`; `from_asapv1` still reads it,
+dropping `l2`, and `to_asapv1` never writes it. The same `counts` run is what a
+`UnivMon` layer inlines into its own payload.
 
 ## Deltas
 

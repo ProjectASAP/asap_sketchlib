@@ -65,21 +65,22 @@ stripped, so each variant's own validation applies unchanged. An
 `ExponentialHistogram` bucket inlines the same triple, so there is one
 EhBucketSketch encoding.
 
-The ten encoded nested kind_ids, plus the retired `0x05 0x00`, which decodes
-into `DdSketch`:
+The ten encoded nested kind_ids. The retired `0x05 0x00`, `0x10 0x00` and
+`0x19 0x00` also decode, into `DdSketch`, `UnivMon` and
+`CountSketchWithL2Norm`:
 
 | Variant | Nested kind_id | Registry name | Feature |
 | ------- | -------------- | ------------- | ------- |
 | `CountMinSketch` | `0x02 0x00` | Count-Min | default |
 | `CocoSketch` | `0x0c 0x00` | Coco | default |
-| `CountSketchWithL2Norm` | `0x19 0x00` | CountSketchWithL2Norm | default |
+| `CountSketchWithL2Norm` | `0x19 0x01` (retired `0x19 0x00` decodes) | CountSketchWithL2Norm | default |
 | `CountSketch` | `0x04 0x00` | Count Sketch | default |
 | `DdSketch` | `0x05 0x01` (the retired `0x05 0x00` still decodes) | DDSketch | default |
 | `ElasticSketch` | `0x0b 0x00` | Elastic | default |
 | `Hll` | `0x01 0x02` | HLL Ertl-MLE | default |
 | `Kll` | `0x06 0x00` | KLL compact | default |
 | `Uniform` | `0x0d 0x00` | UniformSampling | `experimental` |
-| `UnivMon` | `0x10 0x00` | UnivMon | default |
+| `UnivMon` | `0x10 0x01` (retired `0x10 0x00` decodes) | UnivMon | default |
 
 Each id is pinned to one algorithm: `Hll` is Ertl-MLE, so `0x01 0x01` (Classic)
 and `0x01 0x03` (HIP) are rejected, and `Kll` is compact, so `0x06 0x01`

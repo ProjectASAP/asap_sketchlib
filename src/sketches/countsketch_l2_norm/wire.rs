@@ -8,24 +8,27 @@
 //! `seed_index` fields directly without widening any field visibility. See
 //! `docs/asapv1_wire_format.md`.
 //!
-//! CountSketchWithL2Norm is one algorithm — a single kind_id `0x19 0x00`. The dimensions
+//! CountSketchWithL2Norm is one algorithm, kind_id `0x19 0x01`. The dimensions
 //! (`rows` / `cols`) and the seed-list index the sketch hashes with
 //! (`seed_index`) are construction config and live in the metadata, so the
-//! payload is `[counts, l2]`.
+//! payload is `[counts]`.
 //!
 //! ## The shared sub-payload
 //!
 //! [`CountSketchWithL2Norm`] is also the per-layer counter of `UnivMon` and
-//! `UnivMonTwoTier`. Those sketches inline the same
-//! `(counts, l2)` state into their own positional arrays instead of nesting an
-//! envelope per layer, so [`layer_state`] and [`rebuild_layer`] are the one
-//! place that state is read and rebuilt.
+//! `UnivMonTwoTier`. Those sketches inline the same `counts` into their own
+//! positional arrays instead of nesting an envelope per layer, so
+//! [`layer_state`] and [`rebuild_layer`] are the one place that state is read
+//! and rebuilt.
 //!
-//! ## `l2` is carried, not recomputed
+//! ## `l2` is recomputed, not carried
 //!
-//! A row's `l2` is its running sum of squares, clamped to `[0, i64::MAX]`. It
-//! is not `sum(counts[row]^2)`: `update_weighted_with_hash_without_l2`
-//! moves counters without it and saturation is one-way, so it is state.
+//! A row's L2 accumulator always equals
+//! [`row_capped_square_sum`](super::row_capped_square_sum) of its counters
+//! (read clamped at `i64::MAX`, it is the row's sum of squares), so the
+//! decoder recomputes it and the encoder rejects a cached value that disagrees.
+//! The retired kind `0x19 0x00` also carried it as `[counts, l2]`; it still
+//! decodes, its `l2` read and dropped, and is never encoded.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
@@ -33,11 +36,11 @@ use std::marker::PhantomData;
 
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
-use crate::asapv1::kind::COUNT_SKETCH_WITH_L2_NORM;
+use crate::asapv1::kind::{COUNT_SKETCH_WITH_L2_NORM, COUNT_SKETCH_WITH_L2_NORM_CARRYING_L2};
 use crate::common::hash::check_matrix_rows;
 use crate::{HashProfile, SketchHasher, Vector1D, Vector2D};
 
-use super::CountSketchWithL2Norm;
+use super::{CountSketchWithL2Norm, clamp_to_i64, row_capped_square_sum};
 
 /// CountSketchWithL2Norm descriptor metadata (ASAPv1 §2), a msgpack **map**
 /// (`to_vec_named`) with keys in this declaration order — the canonical order
@@ -83,13 +86,53 @@ pub(crate) fn count_sketch_with_l2_norm_metadata<H: HashProfile>(
     }
 }
 
-/// CountSketchWithL2Norm payload (ASAPv1 §3.x), a msgpack **array** (`to_vec`,
-/// positional): `[counts, l2]`. `counts` is packed row-major over `rows*cols`
-/// signed cells; `l2` is one accumulator per row.
+/// CountSketchWithL2Norm payload (ASAPv1 §3.19), a msgpack **array**
+/// (`to_vec`, positional): `[counts]`, packed row-major over `rows*cols`
+/// signed cells.
 #[derive(Debug, Serialize, Deserialize)]
 struct CountSketchWithL2NormPayload {
     counts: Vec<i64>,
-    l2: Vec<i64>,
+}
+
+/// The retired `0x19 0x00` payload, `[counts, l2]`: decoded only, its `l2`
+/// dropped.
+#[derive(Debug, Serialize, Deserialize)]
+struct CountSketchWithL2NormPayloadCarryingL2 {
+    counts: Vec<i64>,
+    l2: RetiredL2,
+}
+
+/// A retired payload's `l2` array. Decoding reads every element as an `i64`,
+/// so anything but an integer array is still rejected, and keeps none of
+/// them: the decoded value is always empty and allocates nothing. Encoding
+/// writes the held values, which only tests use to craft retired bytes.
+#[derive(Debug, Default)]
+pub(crate) struct RetiredL2(pub(crate) Vec<i64>);
+
+impl Serialize for RetiredL2 {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for RetiredL2 {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct SkipI64s;
+        impl<'de> serde::de::Visitor<'de> for SkipI64s {
+            type Value = RetiredL2;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an array of i64 l2 accumulators")
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<RetiredL2, A::Error> {
+                while seq.next_element::<i64>()?.is_some() {}
+                Ok(RetiredL2::default())
+            }
+        }
+        deserializer.deserialize_seq(SkipI64s)
+    }
 }
 
 /// Rejects a zero dimension, a row count past `MATRIX_MAX_ROWS`, and a
@@ -122,47 +165,53 @@ pub(crate) fn check_seed_index(seed_index: usize, seed_list_len: usize) -> Resul
     Ok(())
 }
 
-/// The `(counts, l2)` sub-payload one CountSketchWithL2Norm contributes, in the order the
-/// wire emits it. Rejects a matrix whose cell count disagrees with its own
-/// dimensions, a mis-sized `l2`, and a negative accumulator — states the
-/// decoder refuses.
+/// The `counts` sub-payload one CountSketchWithL2Norm contributes, in the
+/// order the wire emits it. Rejects a matrix whose cell count disagrees with
+/// its own dimensions, and a cached accumulator that is not its row's
+/// [`row_capped_square_sum`], the value the decoder recomputes; the error
+/// names the first such row.
 pub(crate) fn layer_state<H: SketchHasher>(
     sketch: &CountSketchWithL2Norm<H>,
-) -> Result<(&[i64], &[i64]), RmpEncodeError> {
+) -> Result<&[i64], RmpEncodeError> {
     check_dimensions(sketch.rows, sketch.cols).map_err(RmpEncodeError::Syntax)?;
     let cells = sketch.rows.saturating_mul(sketch.cols);
     let counts = sketch.counts.as_slice();
-    let l2 = sketch.row_l2_squared.as_slice();
     if counts.len() != cells {
         return Err(RmpEncodeError::Syntax(format!(
             "ASAPv1 CountSketchWithL2Norm state: counts length {} != rows*cols {cells}",
             counts.len()
         )));
     }
-    if l2.len() != sketch.rows {
+    let cached = sketch.row_l2_squared.as_slice();
+    if cached.len() != sketch.rows {
         return Err(RmpEncodeError::Syntax(format!(
-            "ASAPv1 CountSketchWithL2Norm state: l2 length {} != rows {}",
-            l2.len(),
+            "ASAPv1 CountSketchWithL2Norm state: {} cached l2 accumulators over {} rows",
+            cached.len(),
             sketch.rows
         )));
     }
-    if let Some(negative) = l2.iter().find(|&&value| value < 0) {
-        return Err(RmpEncodeError::Syntax(format!(
-            "ASAPv1 CountSketchWithL2Norm state: l2 accumulator {negative} is negative"
-        )));
+    for (row, (counters, &held)) in counts.chunks_exact(sketch.cols).zip(cached).enumerate() {
+        let recomputed = row_capped_square_sum(counters);
+        if held != recomputed {
+            return Err(RmpEncodeError::Syntax(format!(
+                "ASAPv1 CountSketchWithL2Norm state: row {row}'s cached l2 accumulator {held} (l2 squared {}) is not the {recomputed} its counters give (l2 squared {})",
+                clamp_to_i64(held),
+                clamp_to_i64(recomputed)
+            )));
+        }
     }
-    Ok((counts, l2))
+    Ok(counts)
 }
 
-/// Rebuilds one CountSketchWithL2Norm from a validated sub-payload. The lengths are
-/// checked against the declared geometry before the matrix is built, so a
-/// crafted `rows`/`cols` never drives an allocation.
+/// Rebuilds one CountSketchWithL2Norm from a validated `counts` sub-payload,
+/// recomputing each row's L2 accumulator. The length is checked against the
+/// declared geometry before the matrix is built, so a crafted `rows`/`cols`
+/// never drives an allocation.
 pub(crate) fn rebuild_layer<H: SketchHasher>(
     rows: usize,
     cols: usize,
     seed_index: usize,
     counts: &[i64],
-    l2: &[i64],
 ) -> Result<CountSketchWithL2Norm<H>, RmpDecodeError> {
     check_dimensions(rows, cols).map_err(RmpDecodeError::Uncategorized)?;
     let cells = rows.saturating_mul(cols);
@@ -172,20 +221,14 @@ pub(crate) fn rebuild_layer<H: SketchHasher>(
             counts.len()
         )));
     }
-    if l2.len() != rows {
-        return Err(RmpDecodeError::Uncategorized(format!(
-            "CountSketchWithL2Norm l2 length {} != rows {rows}",
-            l2.len()
-        )));
-    }
-    if let Some(negative) = l2.iter().find(|&&value| value < 0) {
-        return Err(RmpDecodeError::Uncategorized(format!(
-            "CountSketchWithL2Norm l2 accumulator {negative} is negative"
-        )));
-    }
     Ok(CountSketchWithL2Norm {
         counts: Vector2D::from_fn(rows, cols, |r, c| counts[r * cols + c]),
-        row_l2_squared: Vector1D::from_vec(l2.to_vec()),
+        row_l2_squared: Vector1D::from_vec(
+            counts
+                .chunks_exact(cols)
+                .map(row_capped_square_sum)
+                .collect(),
+        ),
         rows,
         cols,
         seed_index,
@@ -197,18 +240,18 @@ pub(crate) fn rebuild_layer<H: SketchHasher>(
 // module, so this impl reads the private fields directly.
 impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
-    /// (kind_id `0x19 0x00`). The metadata is derived from the hasher's
+    /// (kind_id `0x19 0x01`). The metadata is derived from the hasher's
     /// [`HashProfile`], so it truthfully describes how the sketch was hashed.
     ///
-    /// Fails when the state disagrees with its own dimensions, when an `l2`
-    /// accumulator is negative, when the geometry needs more hash bits than
+    /// Fails when the state disagrees with its own dimensions, when a cached
+    /// L2 accumulator is not its row's sum of squares, when the geometry needs more hash bits than
     /// the 128-bit key hash carries, when the seed index is past the hasher's
     /// seed list, or when a dimension or the seed index overflows its `u32`
     /// metadata field.
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
         check_dimensions(self.rows, self.cols).map_err(RmpEncodeError::Syntax)?;
         check_seed_index(self.seed_index, H::seed_list().len()).map_err(RmpEncodeError::Syntax)?;
-        let (counts, l2) = layer_state(self)?;
+        let counts = layer_state(self)?;
         let field = |name: &str, value: usize| {
             u32::try_from(value).map_err(|_| {
                 RmpEncodeError::Syntax(format!(
@@ -223,7 +266,6 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
         ))?;
         let payload = rmp_serde::to_vec(&CountSketchWithL2NormPayload {
             counts: counts.to_vec(),
-            l2: l2.to_vec(),
         })?;
         Ok(envelope::encode(
             kind::COUNT_SKETCH_WITH_L2_NORM,
@@ -236,14 +278,22 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
     /// dimensions and the seed index are structural (they are properties of
     /// the stored sketch, not of the target), so they are echoed back into the
     /// expected metadata; the hash spec is pinned against this target.
+    ///
+    /// Reads the current kind `0x19 0x01` and the retired `0x19 0x00`, whose
+    /// `l2` is read and dropped; either way each row's accumulator is
+    /// recomputed from its counters.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != kind::COUNT_SKETCH_WITH_L2_NORM {
-            return Err(RmpDecodeError::Uncategorized(format!(
-                "CountSketchWithL2Norm kind_id mismatch: stored {kind_id:?}, expected {COUNT_SKETCH_WITH_L2_NORM:?}"
-            )));
-        }
+        let carries_l2 = match kind_id {
+            kind::COUNT_SKETCH_WITH_L2_NORM => false,
+            kind::COUNT_SKETCH_WITH_L2_NORM_CARRYING_L2 => true,
+            _ => {
+                return Err(RmpDecodeError::Uncategorized(format!(
+                    "CountSketchWithL2Norm kind_id mismatch: stored {kind_id:?}, expected {COUNT_SKETCH_WITH_L2_NORM:?} or the retired {COUNT_SKETCH_WITH_L2_NORM_CARRYING_L2:?}"
+                )));
+            }
+        };
         let meta: CountSketchWithL2NormMetadata = envelope::decode_block(metadata)?;
         if meta != count_sketch_with_l2_norm_metadata::<H>(meta.seed_index, meta.rows, meta.cols) {
             return Err(RmpDecodeError::Uncategorized(
@@ -252,13 +302,16 @@ impl<H: SketchHasher + HashProfile> CountSketchWithL2Norm<H> {
         }
         check_seed_index(meta.seed_index as usize, meta.seed_list.len())
             .map_err(RmpDecodeError::Uncategorized)?;
-        let p: CountSketchWithL2NormPayload = envelope::decode_block(payload)?;
+        let counts = if carries_l2 {
+            envelope::decode_block::<CountSketchWithL2NormPayloadCarryingL2>(payload)?.counts
+        } else {
+            envelope::decode_block::<CountSketchWithL2NormPayload>(payload)?.counts
+        };
         rebuild_layer::<H>(
             meta.rows as usize,
             meta.cols as usize,
             meta.seed_index as usize,
-            &p.counts,
-            &p.l2,
+            &counts,
         )
     }
 }
@@ -288,11 +341,128 @@ mod tests {
         from_slice(metadata).expect("metadata")
     }
 
-    fn crafted(meta: &CountSketchWithL2NormMetadata, counts: Vec<i64>, l2: Vec<i64>) -> Vec<u8> {
+    fn crafted(meta: &CountSketchWithL2NormMetadata, counts: Vec<i64>) -> Vec<u8> {
         let metadata = rmp_serde::to_vec_named(meta).expect("metadata");
-        let payload =
-            rmp_serde::to_vec(&CountSketchWithL2NormPayload { counts, l2 }).expect("payload");
+        let payload = rmp_serde::to_vec(&CountSketchWithL2NormPayload { counts }).expect("payload");
         envelope::encode(kind::COUNT_SKETCH_WITH_L2_NORM, &metadata, &payload)
+    }
+
+    /// `sketch`'s bytes under the retired kind `0x19 0x00`, carrying `l2`.
+    fn carrying_l2(sketch: &CountSketchWithL2Norm, l2: Vec<i64>) -> Vec<u8> {
+        let bytes = sketch.to_asapv1().expect("serialize");
+        let (_, metadata, _) = envelope::split(&bytes).expect("split");
+        let payload = rmp_serde::to_vec(&CountSketchWithL2NormPayloadCarryingL2 {
+            counts: sketch.as_storage().as_slice().to_vec(),
+            l2: RetiredL2(l2),
+        })
+        .expect("payload");
+        envelope::encode(
+            kind::COUNT_SKETCH_WITH_L2_NORM_CARRYING_L2,
+            metadata,
+            &payload,
+        )
+    }
+
+    /// The payload is `[counts]` alone: no `l2` rides the wire.
+    #[test]
+    fn count_sketch_with_l2_norm_payload_carries_no_l2() {
+        let encoded = populated().to_asapv1().expect("serialize");
+        let (_, _, payload) = envelope::split(&encoded).expect("split");
+        let fields: Vec<serde::de::IgnoredAny> = from_slice(payload).expect("payload array");
+        assert_eq!(fields.len(), 1, "payload must be [counts]");
+    }
+
+    /// The retired `0x19 0x00` still decodes: its `l2` is read and dropped,
+    /// each row's accumulator recomputed from the counters, and the sketch
+    /// re-encodes under `0x19 0x01`. A carried `l2` that disagrees with the
+    /// counters is not trusted.
+    #[test]
+    fn count_sketch_with_l2_norm_retired_kind_decodes_and_recomputes_l2() {
+        let sketch = populated();
+        let true_l2: Vec<i64> = sketch
+            .row_l2_squared
+            .as_slice()
+            .iter()
+            .map(|&v| clamp_to_i64(v))
+            .collect();
+        for l2 in [true_l2, vec![0, 1, 2], vec![-5]] {
+            let decoded = Std::from_asapv1(&carrying_l2(&sketch, l2)).expect("decode retired");
+            assert_eq!(
+                decoded.as_storage().as_slice(),
+                sketch.as_storage().as_slice()
+            );
+            assert_eq!(
+                decoded.row_l2_squared.as_slice(),
+                sketch.row_l2_squared.as_slice()
+            );
+            assert_eq!(
+                decoded.to_asapv1().expect("re-encode"),
+                sketch.to_asapv1().expect("encode")
+            );
+        }
+    }
+
+    /// The encoder rejects a cached accumulator the decoder would not
+    /// recompute.
+    #[test]
+    fn count_sketch_with_l2_norm_rejects_a_stale_l2_cache() {
+        let mut sketch = populated();
+        sketch.row_l2_squared[0] += 1;
+        let problem = sketch
+            .to_asapv1()
+            .expect_err("a stale cache must not serialize")
+            .to_string();
+        assert!(problem.contains("row 0"), "got {problem}");
+    }
+
+    /// A retired `l2` that is not an integer array is still rejected.
+    #[test]
+    fn count_sketch_with_l2_norm_retired_kind_rejects_a_non_integer_l2() {
+        #[derive(Serialize)]
+        struct WithStringL2 {
+            counts: Vec<i64>,
+            l2: Vec<String>,
+        }
+        let sketch = populated();
+        let bytes = sketch.to_asapv1().expect("serialize");
+        let (_, metadata, _) = envelope::split(&bytes).expect("split");
+        let payload = rmp_serde::to_vec(&WithStringL2 {
+            counts: sketch.as_storage().as_slice().to_vec(),
+            l2: vec!["x".to_string(); 3],
+        })
+        .expect("payload");
+        let forged = envelope::encode(
+            kind::COUNT_SKETCH_WITH_L2_NORM_CARRYING_L2,
+            metadata,
+            &payload,
+        );
+        assert!(Std::from_asapv1(&forged).is_err());
+    }
+
+    /// A row whose squares saturate the accumulator keeps it equal to the
+    /// recomputed value once a decrement brings the sum back below `i64::MAX`:
+    /// the capped-square accumulator never loses the exact sum.
+    #[test]
+    fn count_sketch_with_l2_norm_l2_stays_derivable_past_saturation() {
+        let mut sketch: CountSketchWithL2Norm = CountSketchWithL2Norm::with_dimensions(1, 2);
+        let delta =
+            |col: u32, count: i32| crate::octo_delta::CountSketchCellDelta { row: 0, col, count };
+        // Column 0 reaches 2^32, whose square 2^64 saturates the row.
+        sketch.apply_delta(delta(0, 1 << 30));
+        for _ in 0..3 {
+            sketch.apply_delta(delta(0, 1 << 30));
+        }
+        sketch.apply_delta(delta(1, 1));
+        assert_eq!(sketch.l2_squared(), i64::MAX as f64);
+        // Back to 2^31: the row's sum of squares is 2^62 + 1.
+        sketch.apply_delta(delta(0, -(1 << 30)));
+        sketch.apply_delta(delta(0, -(1 << 30)));
+        assert_eq!(sketch.row_l2_squared.as_slice(), [(1_i128 << 62) + 1]);
+        let decoded = Std::from_asapv1(&sketch.to_asapv1().expect("serialize")).expect("decode");
+        assert_eq!(
+            decoded.row_l2_squared.as_slice(),
+            sketch.row_l2_squared.as_slice()
+        );
     }
 
     /// More rows than the seed list has seeds is outside the wire-eligible
@@ -308,7 +478,6 @@ mod tests {
         let bytes = crafted(
             &count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, rows as u32, 32),
             vec![0; rows * 32],
-            vec![0; rows],
         );
         let problem = Std::from_asapv1(&bytes)
             .expect_err("rows past MATRIX_MAX_ROWS must be rejected")
@@ -328,7 +497,7 @@ mod tests {
         let sketch = populated();
         let encoded = sketch.to_asapv1().expect("serialize CountSketchWithL2Norm");
         assert!(encoded.starts_with(b"ASAPv1"));
-        assert_eq!(&encoded[7..10], &[2u8, 0x19, 0x00]); // kind_id_len=2, kind_id=[0x19,0x00]
+        assert_eq!(&encoded[7..10], &[2u8, 0x19, 0x01]); // kind_id_len=2, kind_id=[0x19,0x01]
 
         let meta = metadata_of(&encoded);
         assert_eq!(meta.metadata_version, 1);
@@ -499,22 +668,12 @@ mod tests {
     #[test]
     fn count_sketch_with_l2_norm_rejects_crafted_geometry() {
         let meta = count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, 4, 0);
-        assert!(Std::from_asapv1(&crafted(&meta, Vec::new(), vec![0; 4])).is_err());
+        assert!(Std::from_asapv1(&crafted(&meta, Vec::new())).is_err());
 
         let huge = count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, 1, 1 << 24);
         assert!(
-            Std::from_asapv1(&crafted(&huge, vec![1, 2, 3], vec![0; 1])).is_err(),
+            Std::from_asapv1(&crafted(&huge, vec![1, 2, 3])).is_err(),
             "counts length must match rows*cols"
-        );
-
-        let meta = count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, 2, 4);
-        assert!(
-            Std::from_asapv1(&crafted(&meta, vec![0; 8], vec![0; 5])).is_err(),
-            "l2 length must match rows"
-        );
-        assert!(
-            Std::from_asapv1(&crafted(&meta, vec![0; 8], vec![-1, 0])).is_err(),
-            "a negative l2 accumulator is not a state the algorithm reaches"
         );
     }
 
@@ -624,7 +783,6 @@ mod tests {
             let bytes = crafted(
                 &count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(0, rows as u32, cols as u32),
                 vec![0; rows * cols],
-                vec![0; rows],
             );
             let problem = Std::from_asapv1(&bytes)
                 .expect_err("a geometry past the hash budget must not decode")
@@ -668,7 +826,6 @@ mod tests {
         let bytes = crafted(
             &count_sketch_with_l2_norm_metadata::<DefaultXxHasher>(past as u32, 2, 8),
             vec![0; 16],
-            vec![0; 2],
         );
         let problem = Std::from_asapv1(&bytes)
             .expect_err("a seed index past the seed list must not decode")
@@ -700,8 +857,8 @@ mod tests {
         );
     }
 
-    /// Known counts, L2 accumulators and seed index serialize to the
-    /// `asapv1_golden/` bytes.
+    /// Known counts and seed index serialize to the `asapv1_golden/` bytes.
+    /// Row 0's squares sum to 5368610562; row 1's saturate at `i64::MAX`.
     #[test]
     fn known_state_matches_golden() {
         use crate::asapv1::envelope::hex;
@@ -711,15 +868,39 @@ mod tests {
             [[127, 128, 65535, -32768], [-32, -33, -2147483648, i64::MIN]];
         let sketch: CountSketchWithL2Norm = CountSketchWithL2Norm {
             counts: Vector2D::from_fn(2, 4, |r, c| COUNTS[r][c]),
-            row_l2_squared: Vector1D::from_vec(vec![65536, i64::MAX]),
+            row_l2_squared: Vector1D::from_vec(
+                COUNTS
+                    .iter()
+                    .map(|row| row_capped_square_sum(row))
+                    .collect(),
+            ),
             rows: 2,
             cols: 4,
             seed_index: 7,
             _hasher: PhantomData,
         };
         let golden = hex(include_str!(
-            "../../../asapv1_golden/count_l2hh_2x4_seed7.hex"
+            "../../../asapv1_golden/count_l2hh_2x4_seed7_no_l2.hex"
         ));
         assert_eq!(sketch.to_asapv1().unwrap(), golden);
+
+        // The retired fixture carries `l2 = [65536, i64::MAX]`, which is not
+        // row 0's sum of squares; decoding drops it and recomputes.
+        let retired = hex(include_str!(
+            "../../../asapv1_golden/count_l2hh_2x4_seed7.hex"
+        ));
+        let decoded = Std::from_asapv1(&retired).expect("decode retired");
+        assert_eq!(
+            decoded.row_l2_squared.as_slice(),
+            sketch.row_l2_squared.as_slice()
+        );
+        let l2: Vec<i64> = decoded
+            .row_l2_squared
+            .as_slice()
+            .iter()
+            .map(|&v| clamp_to_i64(v))
+            .collect();
+        assert_eq!(l2, [5_368_610_562, i64::MAX]);
+        assert_eq!(decoded.to_asapv1().unwrap(), golden);
     }
 }

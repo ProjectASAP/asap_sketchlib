@@ -10,9 +10,11 @@
 //! ## One kind_id per counter variant
 //!
 //! `0x07 0x00` KLL, `0x07 0x01` Count-Min, `0x07 0x02` Count Sketch,
-//! `0x07 0x03` HyperLogLog, `0x07 0x04` UnivMon. The kind_id names the counter,
+//! `0x07 0x03` HyperLogLog, `0x07 0x05` UnivMon. The kind_id names the counter,
 //! so the payload carries no per-cell variant tag and a grid mixing variants
-//! has no encoding.
+//! has no encoding. The retired `0x07 0x04` UnivMon counter, whose cells also
+//! carried each layer's `l2` accumulators, still decodes with `l2` dropped
+//! and recomputed, and is never encoded.
 //!
 //! ## Counters are inlined, not nested
 //!
@@ -49,11 +51,14 @@ use crate::asapv1::envelope;
 use crate::asapv1::kind;
 use crate::asapv1::kind::{
     HYDRA_COUNT_MIN, HYDRA_COUNT_SKETCH, HYDRA_HLL, HYDRA_KLL, HYDRA_UNIVMON,
+    HYDRA_UNIVMON_CARRYING_L2,
 };
 use crate::asapv1::wire_key::exact_vec;
 use crate::common::hash::check_matrix_rows;
 use crate::input::HydraCounter;
-use crate::sketch_framework::univmon::wire::{PyramidPayload, UnivMonMetadata, univmon_metadata};
+use crate::sketch_framework::univmon::wire::{
+    PyramidPayload, PyramidPayloadCarryingL2, UnivMonMetadata, univmon_metadata,
+};
 use crate::sketches::countminsketch_heap::heap_wire::{EMPTY_KEY_TYPE, check_empty_key_type};
 use crate::{
     CountMinSketch, CountSketch, DefaultXxHasher, Ertl, FastPath, HashProfile, HllRegistersP14,
@@ -146,7 +151,7 @@ struct HydraKllMetadata {
     cell_item_type: String,
 }
 
-/// Hydra descriptor metadata for the UnivMon counter (`0x07 0x04`). The four
+/// Hydra descriptor metadata for the UnivMon counter (`0x07 0x05`, and the retired `0x07 0x04`). The four
 /// pyramid dimensions and the heaps' `cell_key_type` are shared by every
 /// cell.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -303,6 +308,13 @@ struct HydraKllPayload {
 #[derive(Debug, Serialize, Deserialize)]
 struct HydraUnivMonPayload<K> {
     cells: Vec<PyramidPayload<K>>,
+}
+
+/// The retired `0x07 0x04` payload: each cell in the retired pyramid shape
+/// that also carries `l2`. Decoded only.
+#[derive(Debug, Serialize, Deserialize)]
+struct HydraUnivMonPayloadCarryingL2<K> {
+    cells: Vec<PyramidPayloadCarryingL2<K>>,
 }
 
 /// The HyperLogLog counter's own descriptor, rebuilt to hand a cell's registers
@@ -467,7 +479,7 @@ fn univmon_cell_holds_keys(payload: &[u8]) -> Result<bool, RmpEncodeError> {
 // directly.
 impl Hydra {
     /// Serializes the grid into an ASAPv1 MessagePack envelope, one kind_id per
-    /// counter variant (`0x07 0x00`-`0x07 0x04`). The metadata is derived from
+    /// counter variant (`0x07 0x00`-`0x07 0x03`, and `0x07 0x05` for UnivMon). The metadata is derived from
     /// [`DefaultXxHasher`]'s [`HashProfile`], the profile the subkey hash at
     /// [`crate::HYDRA_SEED_INDEX`] uses.
     ///
@@ -488,7 +500,9 @@ impl Hydra {
     }
 
     /// Deserializes a grid from an ASAPv1 MessagePack envelope, routing on the
-    /// kind_id to the counter variant it names. Any other kind_id is rejected.
+    /// kind_id to the counter variant it names. The retired UnivMon counter
+    /// `0x07 0x04` decodes too, each cell's `l2` dropped and recomputed. Any
+    /// other kind_id is rejected.
     ///
     /// Every declared count is measured against what the payload actually
     /// carries before anything is sized from it, so crafted geometry fails
@@ -501,8 +515,9 @@ impl Hydra {
             id if id == kind::HYDRA_COUNT_SKETCH => Self::decode_cs(bytes),
             id if id == kind::HYDRA_HLL => Self::decode_hll(bytes),
             id if id == kind::HYDRA_UNIVMON => Self::decode_univmon(bytes),
+            id if id == kind::HYDRA_UNIVMON_CARRYING_L2 => Self::decode_univmon_carrying_l2(bytes),
             other => Err(decode_error(format!(
-                "Hydra kind_id mismatch: stored {other:?}, expected one of {HYDRA_KLL:?}, {HYDRA_COUNT_MIN:?}, {HYDRA_COUNT_SKETCH:?}, {HYDRA_HLL:?}, {HYDRA_UNIVMON:?}"
+                "Hydra kind_id mismatch: stored {other:?}, expected one of {HYDRA_KLL:?}, {HYDRA_COUNT_MIN:?}, {HYDRA_COUNT_SKETCH:?}, {HYDRA_HLL:?}, {HYDRA_UNIVMON:?}, or the retired {HYDRA_UNIVMON_CARRYING_L2:?}"
             ))),
         }
     }
@@ -1011,7 +1026,22 @@ impl Hydra {
     }
 
     fn decode_univmon(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
-        let (metadata, payload) = split_for(bytes, kind::HYDRA_UNIVMON)?;
+        Self::decode_univmon_cells(bytes, false)
+    }
+
+    /// The retired `0x07 0x04`: the same metadata, cells in the pyramid shape
+    /// that also carries `l2`, which is dropped.
+    fn decode_univmon_carrying_l2(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        Self::decode_univmon_cells(bytes, true)
+    }
+
+    fn decode_univmon_cells(bytes: &[u8], carries_l2: bool) -> Result<Self, RmpDecodeError> {
+        let expected_kind_id = if carries_l2 {
+            kind::HYDRA_UNIVMON_CARRYING_L2
+        } else {
+            kind::HYDRA_UNIVMON
+        };
+        let (metadata, payload) = split_for(bytes, expected_kind_id)?;
         let meta: HydraUnivMonMetadata = envelope::decode_block(metadata)?;
         let shape = UnivMonShape {
             layers: meta.cell_layers,
@@ -1042,7 +1072,7 @@ impl Hydra {
                 shape.layers, shape.rows, shape.cols, shape.heap_size
             )));
         }
-        let payloads = unpack_univmon_cells(&meta.cell_key_type, payload)?;
+        let payloads = unpack_univmon_cells(&meta.cell_key_type, payload, carries_l2)?;
         if payloads.len() != cells {
             return Err(decode_error(format!(
                 "Hydra carries {} UnivMon cells != rows*cols {cells}",
@@ -1123,14 +1153,29 @@ fn pack_univmon_cells(key_type: &str, payloads: &[&[u8]]) -> Result<Vec<u8>, Rmp
 }
 
 /// Reads the cells with `keys` typed by the metadata `cell_key_type`,
-/// returning each cell's pyramid payload bytes. An unknown key type is
-/// rejected, and keys whose msgpack types disagree fail to decode.
-fn unpack_univmon_cells(key_type: &str, payload: &[u8]) -> Result<Vec<Vec<u8>>, RmpDecodeError> {
+/// returning each cell's pyramid payload bytes in the current §3.15 shape.
+/// When `carries_l2`, the cells are in the retired shape and their `l2` is
+/// dropped. An unknown key type is rejected, and keys whose msgpack types
+/// disagree fail to decode.
+fn unpack_univmon_cells(
+    key_type: &str,
+    payload: &[u8],
+    carries_l2: bool,
+) -> Result<Vec<Vec<u8>>, RmpDecodeError> {
     macro_rules! unpack {
         ($ty:ty) => {{
-            let decoded: HydraUnivMonPayload<$ty> = envelope::decode_block(payload)?;
-            decoded
-                .cells
+            let cells: Vec<PyramidPayload<$ty>> = if carries_l2 {
+                let decoded: HydraUnivMonPayloadCarryingL2<$ty> = envelope::decode_block(payload)?;
+                decoded
+                    .cells
+                    .into_iter()
+                    .map(PyramidPayload::from)
+                    .collect()
+            } else {
+                let decoded: HydraUnivMonPayload<$ty> = envelope::decode_block(payload)?;
+                decoded.cells
+            };
+            cells
                 .iter()
                 .map(|cell| rmp_serde::to_vec(cell).map_err(|e| decode_error(e.to_string())))
                 .collect()
@@ -1363,7 +1408,6 @@ mod tests {
                 .into_iter()
                 .map(|cell| PyramidPayload {
                     counts: cell.counts,
-                    l2: cell.l2,
                     heap_lens: cell.heap_lens,
                     keys: cell
                         .keys
@@ -1384,6 +1428,45 @@ mod tests {
             .to_string();
         assert!(problem.contains("must be msgpack str"), "{problem}");
         assert!(Hydra::from_asapv1(&encoded).is_ok());
+    }
+
+    /// The retired `0x07 0x04` still decodes: each cell's `l2` (here empty) is
+    /// read and dropped, the layers' accumulators recomputed, and the grid
+    /// re-encodes under `0x07 0x05` byte-identically to the original.
+    #[test]
+    fn hydra_univmon_retired_kind_decodes_and_recomputes_l2() {
+        let mut hydra = grid(HydraCounter::UnivMon(UnivMon::new(4, 2, 16, 3)));
+        let keys = ["alpha", "beta", "gamma", "delta"];
+        feed(&mut hydra, (0..40).map(|i| DataInput::Str(keys[i % 4])));
+        let encoded = hydra.to_asapv1().expect("serialize");
+        assert_envelope(&encoded, kind::HYDRA_UNIVMON);
+        let (_, metadata, payload) = envelope::split(&encoded).expect("split");
+        let cells: HydraUnivMonPayload<String> = from_slice(payload).expect("payload");
+        let retired = HydraUnivMonPayloadCarryingL2 {
+            cells: cells
+                .cells
+                .into_iter()
+                .map(|cell| PyramidPayloadCarryingL2 {
+                    counts: cell.counts,
+                    l2: crate::sketches::countsketch_l2_norm::wire::RetiredL2::default(),
+                    heap_lens: cell.heap_lens,
+                    keys: cell.keys,
+                    heap_counts: cell.heap_counts,
+                    candidate_complete: cell.candidate_complete,
+                    bucket_size: cell.bucket_size,
+                    update_mode: cell.update_mode,
+                })
+                .collect(),
+        };
+        let bytes = envelope::encode(
+            kind::HYDRA_UNIVMON_CARRYING_L2,
+            metadata,
+            &rmp_serde::to_vec(&retired).expect("payload"),
+        );
+        let decoded = Hydra::from_asapv1(&bytes).expect("decode retired");
+        assert_eq!(decoded.to_asapv1().expect("re-encode"), encoded);
+        assert!(Hydra::decode_univmon(&bytes).is_err());
+        assert!(Hydra::decode_univmon_carrying_l2(&encoded).is_err());
     }
 
     /// Count Sketch cells are signed: the payload must carry negatives through

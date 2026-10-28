@@ -8,14 +8,16 @@
 //! and `candidate_complete` fields directly without widening any field
 //! visibility. See `docs/asapv1_wire_format.md`.
 //!
-//! UnivMon is one algorithm — a single kind_id `0x10 0x00`. The pyramid shape
+//! UnivMon is one algorithm, kind_id `0x10 0x01`. The pyramid shape
 //! (`layers`, `rows`, `cols`, `heap_size`) and the heaps'
 //! `key_type` are construction config and live in the metadata, so the payload
-//! carries the layers' raw state.
+//! carries the layers' raw state. The layers' L2 accumulators are recomputed
+//! from their counters on decode; the retired kind `0x10 0x00` also carried
+//! them and still decodes, its `l2` read and dropped.
 //!
 //! ## Layers are inlined, not nested
 //!
-//! Each layer is a `CountSketchWithL2Norm` plus an `TopKHeap`. Their state is written
+//! Each layer is a `CountSketchWithL2Norm` plus a `TopKHeap`. Their state is written
 //! straight into UnivMon's own positional array through
 //! [`l2_norm_wire::layer_state`] and [`heap_entries`]; no layer carries an
 //! envelope, a magic or a metadata map of its own.
@@ -32,11 +34,12 @@
 //! the layer's position already gives.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
-use crate::asapv1::kind::UNIVMON;
+use crate::asapv1::kind::{UNIVMON, UNIVMON_CARRYING_L2};
 use crate::asapv1::wire_key::{WireBytes, WireString, exact_vec};
 use crate::sketches::countminsketch_heap::heap_wire::{
     EMPTY_KEY_TYPE, check_distinct_keys, check_empty_key_type, heap_entries, key_type_of,
@@ -97,16 +100,15 @@ pub(crate) fn univmon_metadata<H: HashProfile>(
 
 /// The pyramid payload both UnivMon kinds share, a msgpack **array**
 /// (`to_vec`, positional):
-/// `[counts, l2, heap_lens, keys, heap_counts, candidate_complete,
-/// bucket_size, update_mode]`.
+/// `[counts, heap_lens, keys, heap_counts, candidate_complete, bucket_size,
+/// update_mode]`.
 ///
-/// `counts` and `l2` concatenate the layers' `CountSketchWithL2Norm` state in layer order;
-/// `heap_lens` cuts the parallel `keys` / `heap_counts` arrays into per-layer
-/// runs, with `keys` typed by the metadata `key_type`.
+/// `counts` concatenates the layers' `CountSketchWithL2Norm` counters in layer
+/// order; `heap_lens` cuts the parallel `keys` / `heap_counts` arrays into
+/// per-layer runs, with `keys` typed by the metadata `key_type`.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct PyramidPayload<K> {
     pub(crate) counts: Vec<i64>,
-    pub(crate) l2: Vec<i64>,
     pub(crate) heap_lens: Vec<u32>,
     #[serde(
         deserialize_with = "exact_vec",
@@ -117,6 +119,53 @@ pub(crate) struct PyramidPayload<K> {
     pub(crate) candidate_complete: Vec<bool>,
     pub(crate) bucket_size: u64,
     pub(crate) update_mode: u8,
+}
+
+/// The retired pyramid payload of `0x10 0x00`, `0x11 0x00` and the Hydra
+/// cells of `0x07 0x04`: [`PyramidPayload`] with the layers' `l2`
+/// accumulators at position 1. Decoded only; `l2` is dropped.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct PyramidPayloadCarryingL2<K> {
+    pub(crate) counts: Vec<i64>,
+    pub(crate) l2: l2_norm_wire::RetiredL2,
+    pub(crate) heap_lens: Vec<u32>,
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "K: Deserialize<'de>")
+    )]
+    pub(crate) keys: Vec<K>,
+    pub(crate) heap_counts: Vec<i64>,
+    pub(crate) candidate_complete: Vec<bool>,
+    pub(crate) bucket_size: u64,
+    pub(crate) update_mode: u8,
+}
+
+impl<K> From<PyramidPayloadCarryingL2<K>> for PyramidPayload<K> {
+    /// Drops `l2`; the decoder recomputes it from `counts`.
+    fn from(retired: PyramidPayloadCarryingL2<K>) -> Self {
+        PyramidPayload {
+            counts: retired.counts,
+            heap_lens: retired.heap_lens,
+            keys: retired.keys,
+            heap_counts: retired.heap_counts,
+            candidate_complete: retired.candidate_complete,
+            bucket_size: retired.bucket_size,
+            update_mode: retired.update_mode,
+        }
+    }
+}
+
+/// Reads one pyramid payload: the current layout, or the retired one that
+/// carries `l2` when `carries_l2`, its `l2` dropped.
+pub(crate) fn decode_pyramid_payload<K: DeserializeOwned>(
+    payload: &[u8],
+    carries_l2: bool,
+) -> Result<PyramidPayload<K>, RmpDecodeError> {
+    if carries_l2 {
+        Ok(envelope::decode_block::<PyramidPayloadCarryingL2<K>>(payload)?.into())
+    } else {
+        envelope::decode_block(payload)
+    }
 }
 
 /// Wire tag of the update mode: `0` unset, `1` standard, `2` terminal-only.
@@ -173,7 +222,6 @@ pub(crate) fn check_univmon_dimensions(
 /// The layers' state in emitted order, ready to be packed.
 pub(crate) struct PyramidState<'a> {
     pub(crate) counts: Vec<i64>,
-    pub(crate) l2: Vec<i64>,
     pub(crate) heap_lens: Vec<u32>,
     pub(crate) entries: Vec<(&'a OwnedDataInput, i64)>,
     pub(crate) candidate_complete: Vec<bool>,
@@ -181,7 +229,7 @@ pub(crate) struct PyramidState<'a> {
     pub(crate) update_mode: u8,
 }
 
-/// Reads every layer's counters, accumulators and heap entries in the emitted
+/// Reads every layer's counters and heap entries in the emitted
 /// order: layers ascending, and within a layer the heap's own emitted order
 /// (descending count, ties by the total order over the key).
 ///
@@ -217,7 +265,6 @@ pub(crate) fn pyramid_state<'a>(
     })?;
     let mut state = PyramidState {
         counts: Vec::new(),
-        l2: Vec::new(),
         heap_lens: Vec::with_capacity(layers),
         entries: Vec::new(),
         candidate_complete: candidate_complete.to_vec(),
@@ -239,9 +286,9 @@ pub(crate) fn pyramid_state<'a>(
                 counter.seed_index()
             )));
         }
-        let (counts, l2) = l2_norm_wire::layer_state(counter)?;
-        state.counts.extend_from_slice(counts);
-        state.l2.extend_from_slice(l2);
+        state
+            .counts
+            .extend_from_slice(l2_norm_wire::layer_state(counter)?);
         let entries = heap_entries(&heaps[layer]);
         check_distinct_keys(entries.iter().map(|(key, _)| *key))
             .map_err(|problem| RmpEncodeError::Syntax(format!("{problem} (layer {layer})")))?;
@@ -297,7 +344,6 @@ pub(crate) fn encode_pyramid(
             }
             rmp_serde::to_vec(&PyramidPayload {
                 counts: state.counts,
-                l2: state.l2,
                 heap_lens: state.heap_lens,
                 keys,
                 heap_counts,
@@ -331,7 +377,6 @@ pub(crate) fn encode_pyramid(
             }
             rmp_serde::to_vec(&PyramidPayload {
                 counts: state.counts,
-                l2: state.l2,
                 heap_lens: state.heap_lens,
                 keys,
                 heap_counts,
@@ -350,7 +395,6 @@ pub(crate) fn encode_pyramid(
             }
             rmp_serde::to_vec(&PyramidPayload {
                 counts: state.counts,
-                l2: state.l2,
                 heap_lens: state.heap_lens,
                 keys,
                 heap_counts,
@@ -368,7 +412,6 @@ pub(crate) fn encode_pyramid(
 /// The layer state one pyramid payload decodes into.
 pub(crate) struct DecodedPyramid {
     pub(crate) counts: Vec<i64>,
-    pub(crate) l2: Vec<i64>,
     pub(crate) heap_lens: Vec<u32>,
     pub(crate) entries: Vec<(OwnedDataInput, i64)>,
     pub(crate) candidate_complete: Vec<bool>,
@@ -376,19 +419,21 @@ pub(crate) struct DecodedPyramid {
     pub(crate) update_mode: u8,
 }
 
-/// Reads the payload with `keys` typed by the metadata `key_type`. Rejects an
-/// unknown `key_type` and parallel arrays of unequal length; a `keys` array
-/// whose msgpack types do not match `key_type` fails to decode.
+/// Reads the payload with `keys` typed by the metadata `key_type`, in the
+/// retired layout that carries `l2` when `carries_l2` (its `l2` dropped).
+/// Rejects an unknown `key_type` and parallel arrays of unequal length; a
+/// `keys` array whose msgpack types do not match `key_type` fails to decode.
 pub(crate) fn decode_pyramid(
     key_type: &str,
     payload: &[u8],
+    carries_l2: bool,
 ) -> Result<DecodedPyramid, RmpDecodeError> {
     macro_rules! unpack {
         ($variant:ident, $ty:ty) => {
             unpack!($ty, OwnedDataInput::$variant)
         };
         ($ty:ty, $into:expr) => {{
-            let decoded: PyramidPayload<$ty> = envelope::decode_block(payload)?;
+            let decoded: PyramidPayload<$ty> = decode_pyramid_payload(payload, carries_l2)?;
             (
                 decoded
                     .keys
@@ -397,7 +442,6 @@ pub(crate) fn decode_pyramid(
                     .collect::<Vec<OwnedDataInput>>(),
                 DecodedPyramid {
                     counts: decoded.counts,
-                    l2: decoded.l2,
                     heap_lens: decoded.heap_lens,
                     entries: Vec::new(),
                     candidate_complete: decoded.candidate_complete,
@@ -426,7 +470,7 @@ pub(crate) fn decode_pyramid(
             key.into_string()
         )),
         "bytes" => {
-            let decoded: PyramidPayload<WireBytes> = envelope::decode_block(payload)?;
+            let decoded: PyramidPayload<WireBytes> = decode_pyramid_payload(payload, carries_l2)?;
             (
                 decoded
                     .keys
@@ -435,7 +479,6 @@ pub(crate) fn decode_pyramid(
                     .collect::<Vec<OwnedDataInput>>(),
                 DecodedPyramid {
                     counts: decoded.counts,
-                    l2: decoded.l2,
                     heap_lens: decoded.heap_lens,
                     entries: Vec::new(),
                     candidate_complete: decoded.candidate_complete,
@@ -497,7 +540,6 @@ pub(crate) fn rebuild_layers(
         )));
     }
     let mut cells = 0usize;
-    let mut accumulators = 0usize;
     for &(rows, cols) in geometry {
         l2_norm_wire::check_dimensions(rows, cols).map_err(complain)?;
         cells = cells
@@ -505,20 +547,11 @@ pub(crate) fn rebuild_layers(
                 complain(format!("UnivMon layer geometry {rows}x{cols} overflows"))
             })?)
             .ok_or_else(|| complain("UnivMon total counter count overflows".to_string()))?;
-        accumulators = accumulators
-            .checked_add(rows)
-            .ok_or_else(|| complain("UnivMon total accumulator count overflows".to_string()))?;
     }
     if decoded.counts.len() != cells {
         return Err(complain(format!(
             "UnivMon counts length {} != the declared layers' {cells} cells",
             decoded.counts.len()
-        )));
-    }
-    if decoded.l2.len() != accumulators {
-        return Err(complain(format!(
-            "UnivMon l2 length {} != the declared layers' {accumulators} rows",
-            decoded.l2.len()
         )));
     }
     let mut seated = 0usize;
@@ -537,19 +570,16 @@ pub(crate) fn rebuild_layers(
     let mut sketches = Vec::with_capacity(layers);
     let mut heaps = Vec::with_capacity(layers);
     let mut entries = decoded.entries.into_iter();
-    let (mut cell, mut accumulator) = (0usize, 0usize);
+    let mut cell = 0usize;
     for (layer, &(rows, cols)) in geometry.iter().enumerate() {
         let next_cell = cell + rows * cols;
-        let next_accumulator = accumulator + rows;
         sketches.push(l2_norm_wire::rebuild_layer::<DefaultXxHasher>(
             rows,
             cols,
             layer,
             &decoded.counts[cell..next_cell],
-            &decoded.l2[accumulator..next_accumulator],
         )?);
         cell = next_cell;
-        accumulator = next_accumulator;
         let run: Vec<(OwnedDataInput, i64)> = entries
             .by_ref()
             .take(decoded.heap_lens[layer] as usize)
@@ -571,7 +601,7 @@ pub(crate) fn rebuild_layers(
 // so this impl reads the private fields directly.
 impl UnivMon {
     /// Serializes the pyramid into an ASAPv1 MessagePack envelope
-    /// (kind_id `0x10 0x00`). The metadata is derived from
+    /// (kind_id `0x10 0x01`). The metadata is derived from
     /// [`DefaultXxHasher`]'s [`HashProfile`], the hasher UnivMon is built on.
     ///
     /// Fails when a structural parameter is zero, when a layer's geometry or
@@ -619,14 +649,22 @@ impl UnivMon {
     /// Every state the algorithm could not have produced is rejected with an
     /// error rather than a panic, and no declared count sizes an allocation
     /// before the payload is measured against it.
+    ///
+    /// Reads the current kind `0x10 0x01` and the retired `0x10 0x00`, whose
+    /// `l2` is read and dropped; either way the layers' L2 accumulators are
+    /// recomputed from their counters.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != kind::UNIVMON {
-            return Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMon kind_id mismatch: stored {kind_id:?}, expected {UNIVMON:?}"
-            )));
-        }
+        let carries_l2 = match kind_id {
+            kind::UNIVMON => false,
+            kind::UNIVMON_CARRYING_L2 => true,
+            _ => {
+                return Err(RmpDecodeError::Uncategorized(format!(
+                    "UnivMon kind_id mismatch: stored {kind_id:?}, expected {UNIVMON:?} or the retired {UNIVMON_CARRYING_L2:?}"
+                )));
+            }
+        };
         let meta: UnivMonMetadata = envelope::decode_block(metadata)?;
         if meta
             != univmon_metadata::<DefaultXxHasher>(
@@ -650,17 +688,12 @@ impl UnivMon {
         check_univmon_dimensions(layers, rows, cols, heap_size)
             .map_err(RmpDecodeError::Uncategorized)?;
         check_layers("UnivMon", layers).map_err(RmpDecodeError::Uncategorized)?;
-        let decoded = decode_pyramid(&meta.key_type, payload)?;
+        let decoded = decode_pyramid(&meta.key_type, payload, carries_l2)?;
         check_empty_key_type(&meta.key_type, decoded.entries.is_empty())
             .map_err(RmpDecodeError::Uncategorized)?;
-        // The declared layer count is measured against the accumulators the
-        // payload actually carries before the geometry is built from it.
-        if rows.checked_mul(layers) != Some(decoded.l2.len()) {
-            return Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMon declares {layers} layers of {rows} rows against a payload carrying {} accumulators",
-                decoded.l2.len()
-            )));
-        }
+        // `check_layers` capped `layers` at UNIVMON_MAX_LAYERS, so this
+        // geometry is small; `rebuild_layers` measures its cells against the
+        // payload's `counts` before any matrix is built.
         let geometry = vec![(rows, cols); layers];
         let (layer_sketches, layer_heaps, candidate_complete, bucket_size, mode_tag) =
             rebuild_layers(&geometry, heap_size, decoded)?;
@@ -735,7 +768,6 @@ mod tests {
         assert!(!payload.keys.is_empty());
         let as_bin = PyramidPayload {
             counts: payload.counts,
-            l2: payload.l2,
             heap_lens: payload.heap_lens,
             keys: payload
                 .keys
@@ -775,7 +807,6 @@ mod tests {
         // Sized to the crafted geometry, so the row bound is what bites.
         let mut payload: PyramidPayload<String> = payload_of(&encoded);
         payload.counts = vec![0; rows * cols * layers];
-        payload.l2 = vec![0; rows * layers];
         let problem = UnivMon::from_asapv1(&crafted(&meta, &payload))
             .expect_err("layer rows past MATRIX_MAX_ROWS must be rejected")
             .to_string();
@@ -790,7 +821,7 @@ mod tests {
         let um = populated();
         let encoded = um.to_asapv1().expect("serialize UnivMon");
         assert!(encoded.starts_with(b"ASAPv1"));
-        assert_eq!(&encoded[7..10], &[2u8, 0x10, 0x00]); // kind_id_len=2, kind_id=[0x10,0x00]
+        assert_eq!(&encoded[7..10], &[2u8, 0x10, 0x01]); // kind_id_len=2, kind_id=[0x10,0x01]
 
         let meta = metadata_of(&encoded);
         assert_eq!(meta.metadata_version, 1);
@@ -813,6 +844,50 @@ mod tests {
             encoded,
             "a decoded pyramid re-serialized to different bytes"
         );
+    }
+
+    /// `encoded` rewritten under the retired kind `0x10 0x00`, with `l2`
+    /// at payload position 1.
+    fn carrying_l2(encoded: &[u8], l2: Vec<i64>) -> Vec<u8> {
+        let (_, metadata, _) = envelope::split(encoded).expect("split");
+        let p: PyramidPayload<String> = payload_of(encoded);
+        let retired = PyramidPayloadCarryingL2 {
+            counts: p.counts,
+            l2: l2_norm_wire::RetiredL2(l2),
+            heap_lens: p.heap_lens,
+            keys: p.keys,
+            heap_counts: p.heap_counts,
+            candidate_complete: p.candidate_complete,
+            bucket_size: p.bucket_size,
+            update_mode: p.update_mode,
+        };
+        let payload = rmp_serde::to_vec(&retired).expect("payload");
+        envelope::encode(kind::UNIVMON_CARRYING_L2, metadata, &payload)
+    }
+
+    /// The retired `0x10 0x00` still decodes: its `l2`, here stale or empty, is read and dropped,
+    /// the layers' accumulators recomputed, and the pyramid re-encodes under
+    /// `0x10 0x01` byte-identically to the original.
+    #[test]
+    fn univmon_retired_kind_decodes_and_recomputes_l2() {
+        let um = populated();
+        let encoded = um.to_asapv1().expect("serialize");
+        // A stale `l2` (all ones) and an empty one: both are dropped.
+        let stale = vec![1; um.layers * um.rows];
+        for l2 in [stale, Vec::new()] {
+            let decoded = UnivMon::from_asapv1(&carrying_l2(&encoded, l2)).expect("decode retired");
+            assert_eq!(decoded.estimate_l2(), um.estimate_l2());
+            assert_eq!(decoded.to_asapv1().expect("re-encode"), encoded);
+        }
+    }
+
+    /// The payload holds no `l2`: seven positional fields.
+    #[test]
+    fn univmon_payload_carries_no_l2() {
+        let encoded = populated().to_asapv1().expect("serialize");
+        let (_, _, payload) = envelope::split(&encoded).expect("split");
+        let fields: Vec<serde::de::IgnoredAny> = from_slice(payload).expect("payload array");
+        assert_eq!(fields.len(), 7);
     }
 
     /// Layers hold different numbers of entries: each layer's heap contents
@@ -1042,12 +1117,11 @@ mod tests {
             );
         }
 
-        // A zero dimension against an empty payload: the accumulator check
-        // alone passes (0 rows over any layer count names 0 accumulators), so
-        // the dimensions must be refused before the geometry is sized.
+        // A zero dimension against an empty payload: the cell count alone
+        // passes (0 rows over any layer count names 0 cells), so the
+        // dimensions must be refused before the geometry is sized.
         let mut empty = payload_of::<String>(&encoded);
         empty.counts.clear();
-        empty.l2.clear();
         empty.keys.clear();
         empty.heap_counts.clear();
         for meta in [shaped(u32::MAX, 0, 16, 4), shaped(3, 0, 0, 4)] {
@@ -1182,7 +1256,6 @@ mod tests {
         let (rows, cols) = (meta.rows as usize, meta.cols as usize);
         let mut payload: PyramidPayload<u64> = payload_of(&encoded);
         payload.counts = vec![0; rows * cols * layers];
-        payload.l2 = vec![0; rows * layers];
         payload.heap_lens = vec![0; layers];
         payload.candidate_complete = vec![true; layers];
         let problem = UnivMon::from_asapv1(&crafted(&meta, &payload))

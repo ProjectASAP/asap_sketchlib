@@ -29,7 +29,11 @@ pub(crate) const HYDRA_KLL: &[u8] = &[0x07, 0x00];
 pub(crate) const HYDRA_COUNT_MIN: &[u8] = &[0x07, 0x01];
 pub(crate) const HYDRA_COUNT_SKETCH: &[u8] = &[0x07, 0x02];
 pub(crate) const HYDRA_HLL: &[u8] = &[0x07, 0x03];
-pub(crate) const HYDRA_UNIVMON: &[u8] = &[0x07, 0x04];
+/// Hydra over UnivMon: each cell is the §3.15 pyramid without `l2` (spec §3.9).
+pub(crate) const HYDRA_UNIVMON: &[u8] = &[0x07, 0x05];
+/// Retired Hydra-over-UnivMon kind whose cells also carried each layer's `l2`
+/// accumulators: decoded, with `l2` dropped and recomputed, and never encoded.
+pub(crate) const HYDRA_UNIVMON_CARRYING_L2: &[u8] = &[0x07, 0x04];
 pub(crate) const SET_AGGREGATOR: &[u8] = &[0x08, 0x00];
 pub(crate) const SET_AGGREGATOR_DELTA: &[u8] = &[0x08, 0x80];
 pub(crate) const COUNT_SKETCH_WITH_HEAP: &[u8] = &[0x0a, 0x00];
@@ -38,8 +42,16 @@ pub(crate) const ELASTIC: &[u8] = &[0x0b, 0x00];
 pub(crate) const COCO: &[u8] = &[0x0c, 0x00];
 pub(crate) const UNIFORM_SAMPLING: &[u8] = &[0x0d, 0x00];
 pub(crate) const KMV: &[u8] = &[0x0e, 0x00];
-pub(crate) const UNIVMON: &[u8] = &[0x10, 0x00];
-pub(crate) const UNIVMON_TWO_TIER: &[u8] = &[0x11, 0x00];
+/// UnivMon: the layers' counters and heaps, without `l2` (spec §3.15).
+pub(crate) const UNIVMON: &[u8] = &[0x10, 0x01];
+/// Retired UnivMon kind that also carried the layers' `l2` accumulators:
+/// decoded, with `l2` dropped and recomputed, and never encoded.
+pub(crate) const UNIVMON_CARRYING_L2: &[u8] = &[0x10, 0x00];
+/// Two-tier UnivMon, without `l2` (spec §3.16).
+pub(crate) const UNIVMON_TWO_TIER: &[u8] = &[0x11, 0x01];
+/// Retired two-tier UnivMon kind that also carried the layers' `l2`
+/// accumulators: decoded, with `l2` dropped and recomputed, and never encoded.
+pub(crate) const UNIVMON_TWO_TIER_CARRYING_L2: &[u8] = &[0x11, 0x00];
 pub(crate) const EXPONENTIAL_HISTOGRAM: &[u8] = &[0x13, 0x00];
 pub(crate) const EH_BUCKET_SKETCH: &[u8] = &[0x14, 0x00];
 /// Bloom: the packed bit grid (spec §3.4).
@@ -52,7 +64,11 @@ pub(crate) const SPACE_SAVING: &[u8] = &[0x18, 0x01];
 /// Retired Space-Saving kind that also carried `total`: decoded, with `total`
 /// dropped, and never encoded.
 pub(crate) const SPACE_SAVING_WITH_TOTAL: &[u8] = &[0x18, 0x00];
-pub(crate) const COUNT_SKETCH_WITH_L2_NORM: &[u8] = &[0x19, 0x00];
+/// CountSketchWithL2Norm: the counters alone (spec §3.19).
+pub(crate) const COUNT_SKETCH_WITH_L2_NORM: &[u8] = &[0x19, 0x01];
+/// Retired CountSketchWithL2Norm kind that also carried the per-row `l2`
+/// accumulators: decoded, with `l2` dropped and recomputed, and never encoded.
+pub(crate) const COUNT_SKETCH_WITH_L2_NORM_CARRYING_L2: &[u8] = &[0x19, 0x00];
 pub(crate) const UNIVMON_Q: &[u8] = &[0x1a, 0x00];
 /// Count-Min with a Space-Saving summary, without its `total` (spec §3.24).
 pub(crate) const COUNT_MIN_WITH_SPACE_SAVING: &[u8] = &[0x1e, 0x01];

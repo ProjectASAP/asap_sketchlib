@@ -119,15 +119,27 @@ const GOLDEN_DELTA_EMPTY: &str = include_str!("../asapv1_golden/delta_result_emp
 const GOLDEN_COCO: &str = include_str!("../asapv1_golden/coco_3x7.hex");
 const GOLDEN_ELASTIC: &str = include_str!("../asapv1_golden/elastic_4b_2x4.hex");
 const GOLDEN_ELASTIC_STALE: &str = include_str!("../asapv1_golden/elastic_4b_2x4_stale.hex");
-const GOLDEN_UNIVMON_STR: &str = include_str!("../asapv1_golden/univmon_str_l3_2x4_h5.hex");
-const GOLDEN_UNIVMON_I64: &str = include_str!("../asapv1_golden/univmon_i64_l3_2x4_h5.hex");
-const GOLDEN_UNIVMON_EMPTY: &str = include_str!("../asapv1_golden/univmon_empty_l3_2x4_h5.hex");
-const GOLDEN_L2HH: &str = include_str!("../asapv1_golden/count_l2hh_2x4_seed7.hex");
+// The retired `l2`-carrying kinds `10 00`, `19 00`, `11 00` and `07 04`,
+// decode-only; each has a `*_no_l2` twin under the current kind.
+const GOLDEN_UNIVMON_STR_RETIRED: &str = include_str!("../asapv1_golden/univmon_str_l3_2x4_h5.hex");
+const GOLDEN_UNIVMON_I64_RETIRED: &str = include_str!("../asapv1_golden/univmon_i64_l3_2x4_h5.hex");
+const GOLDEN_UNIVMON_EMPTY_RETIRED: &str =
+    include_str!("../asapv1_golden/univmon_empty_l3_2x4_h5.hex");
+const GOLDEN_L2HH_RETIRED: &str = include_str!("../asapv1_golden/count_l2hh_2x4_seed7.hex");
+const GOLDEN_PYRAMID_RETIRED: &str =
+    include_str!("../asapv1_golden/univmon_optimized_l5_e2_3x8_1x4_h6.hex");
+const GOLDEN_HYDRA_UNIVMON_RETIRED: &str = include_str!("../asapv1_golden/hydra_univmon_1x2.hex");
+// The current kinds `10 01`, `19 01`, `11 01` and `07 05`.
+const GOLDEN_UNIVMON_STR: &str = include_str!("../asapv1_golden/univmon_str_l3_2x4_h5_no_l2.hex");
+const GOLDEN_UNIVMON_I64: &str = include_str!("../asapv1_golden/univmon_i64_l3_2x4_h5_no_l2.hex");
+const GOLDEN_UNIVMON_EMPTY: &str =
+    include_str!("../asapv1_golden/univmon_empty_l3_2x4_h5_no_l2.hex");
+const GOLDEN_L2HH: &str = include_str!("../asapv1_golden/count_l2hh_2x4_seed7_no_l2.hex");
 const GOLDEN_HYDRA_KLL: &str = include_str!("../asapv1_golden/hydra_kll_2x2_k200.hex");
 const GOLDEN_HYDRA_CM: &str = include_str!("../asapv1_golden/hydra_cm_2x2_counter_2x2.hex");
 const GOLDEN_HYDRA_CS: &str = include_str!("../asapv1_golden/hydra_cs_2x2_counter_2x2.hex");
 const GOLDEN_HYDRA_HLL: &str = include_str!("../asapv1_golden/hydra_hll_1x2_p14.hex");
-const GOLDEN_HYDRA_UNIVMON: &str = include_str!("../asapv1_golden/hydra_univmon_1x2.hex");
+const GOLDEN_HYDRA_UNIVMON: &str = include_str!("../asapv1_golden/hydra_univmon_1x2_no_l2.hex");
 const GOLDEN_CLASSIC_ADMISSION: &str =
     include_str!("../asapv1_golden/hll_classic_p12_admission.hex");
 const GOLDEN_CMS_ADMISSION: &str =
@@ -155,7 +167,7 @@ const GOLDEN_SPACE_SAVING_NOTOTAL_BYTES: &str =
 #[cfg(feature = "experimental")]
 const GOLDEN_UNIFORM: &str = include_str!("../asapv1_golden/uniform_sampling_r0p25.hex");
 const GOLDEN_PYRAMID: &str =
-    include_str!("../asapv1_golden/univmon_optimized_l5_e2_3x8_1x4_h6.hex");
+    include_str!("../asapv1_golden/univmon_optimized_l5_e2_3x8_1x4_h6_no_l2.hex");
 const GOLDEN_UNIVMON_Q: &str = include_str!("../asapv1_golden/univmon_q_i32_l3_c8_r3.hex");
 const GOLDEN_EHSL_CM: &str = include_str!("../asapv1_golden/ehsketchlist_cm_i32_fast_2x4.hex");
 const GOLDEN_EHSL_DD: &str = include_str!("../asapv1_golden/ehsketchlist_ddsketch_a001.hex");
@@ -1521,6 +1533,37 @@ fn univmon_i64_l3_2x4_h5_matches_golden() {
 #[test]
 fn univmon_empty_l3_2x4_h5_matches_golden() {
     assert_univmon_golden(GOLDEN_UNIVMON_EMPTY, &univmon_empty());
+}
+
+/// Each retired `l2`-carrying fixture decodes, its `l2` dropped and
+/// recomputed from the counters, and re-encodes as its `*_no_l2` twin.
+#[test]
+fn retired_l2_fixtures_decode_to_their_no_l2_twins() {
+    for (retired, twin) in [
+        (GOLDEN_UNIVMON_STR_RETIRED, GOLDEN_UNIVMON_STR),
+        (GOLDEN_UNIVMON_I64_RETIRED, GOLDEN_UNIVMON_I64),
+        (GOLDEN_UNIVMON_EMPTY_RETIRED, GOLDEN_UNIVMON_EMPTY),
+    ] {
+        let decoded = UnivMon::from_asapv1(&decode_hex(retired)).expect("decode retired");
+        assert_eq!(decoded.to_asapv1().expect("re-encode"), decode_hex(twin));
+    }
+    let l2hh: CountSketchWithL2Norm =
+        CountSketchWithL2Norm::from_asapv1(&decode_hex(GOLDEN_L2HH_RETIRED)).expect("retired");
+    assert_eq!(
+        l2hh.to_asapv1().expect("re-encode"),
+        decode_hex(GOLDEN_L2HH)
+    );
+    let pyramid =
+        UnivMonTwoTier::from_asapv1(&decode_hex(GOLDEN_PYRAMID_RETIRED)).expect("retired");
+    assert_eq!(
+        pyramid.to_asapv1().expect("re-encode"),
+        decode_hex(GOLDEN_PYRAMID)
+    );
+    let hydra = Hydra::from_asapv1(&decode_hex(GOLDEN_HYDRA_UNIVMON_RETIRED)).expect("retired");
+    assert_eq!(
+        hydra.to_asapv1().expect("re-encode"),
+        decode_hex(GOLDEN_HYDRA_UNIVMON)
+    );
 }
 
 // ---------------------------------------------------------------------------

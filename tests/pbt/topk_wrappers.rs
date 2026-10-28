@@ -466,7 +466,9 @@ proptest! {
     // ===== CountSketchWithL2Norm lands where the shared cell map says =====
 
     /// An OctoSketch worker addresses cells with `CountSketchWithL2Norm::cell_for_row` and its
-    /// parent with the sketch's own insert, so the two must name one cell.
+    /// parent with the sketch's own insert, so the two must name one cell. The
+    /// running L2 accumulators end where a recomputation from the counters
+    /// lands: the one `merge` performs, and the one the ASAPv1 decoder performs.
     #[test]
     fn count_sketch_with_l2_norm_writes_the_cells_the_shared_map_names(
         rows in 1usize..6,
@@ -476,8 +478,17 @@ proptest! {
         let mut sketch = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(rows, cols);
         let mask_bits = sketch.mask_bits();
         for (hash, delta) in &updates {
-            sketch.update_weighted_with_hash_without_l2(*hash, *delta);
+            sketch.update_weighted_with_hash(*hash, *delta);
         }
+
+        let mut recomputed = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(rows, cols);
+        recomputed.merge(&sketch);
+        prop_assert_eq!(recomputed.l2_squared(), sketch.l2_squared());
+        let decoded = CountSketchWithL2Norm::<DefaultXxHasher>::from_asapv1(
+            &sketch.to_asapv1().expect("serialize"),
+        )
+        .expect("decode");
+        prop_assert_eq!(decoded.l2_squared(), sketch.l2_squared());
 
         let mapped = mapped_cells(rows, cols, mask_bits, &updates);
         for (r, row) in mapped.iter().enumerate() {
@@ -536,6 +547,58 @@ proptest! {
                 "after update {}", step
             );
         }
+    }
+
+    /// A first weight of 2^33 into the empty sketch saturates every row (its
+    /// square is 2^66), and further weights up to 2^33 move rows around and
+    /// past `i64::MAX`; the same updates negated in reverse bring every
+    /// counter back to zero. After
+    /// every step the running accumulator equals `min(sum(counts[row]^2),
+    /// i64::MAX)` recomputed from the counters, and the recomputation `merge`
+    /// and the ASAPv1 decoder perform.
+    #[test]
+    fn the_l2_accumulator_tracks_rows_into_saturation_and_back(
+        rows in 1usize..6,
+        cols in edge_dimension(),
+        first_hash in any::<u128>(),
+        updates in prop::collection::vec(
+            (any::<u128>(), -(1i64 << 33)..(1i64 << 33)),
+            0..48,
+        ),
+    ) {
+        let updates: Vec<(u128, i64)> =
+            std::iter::once((first_hash, 1i64 << 33)).chain(updates).collect();
+        let mut sketch = CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(rows, cols);
+        let there = updates.iter().copied();
+        let back = updates.iter().rev().map(|&(hash, weight)| (hash, -weight));
+        let mut saturated = false;
+        for (step, (hash, weight)) in there.chain(back).enumerate() {
+            sketch.update_weighted_with_hash(hash, weight);
+            let capped: Vec<f64> = (0..rows)
+                .map(|r| {
+                    let sum: i128 = (0..cols)
+                        .map(|c| {
+                            let v = i128::from(sketch.as_storage().query_one_counter(r, c));
+                            v * v
+                        })
+                        .sum();
+                    sum.min(i128::from(i64::MAX)) as i64 as f64
+                })
+                .collect();
+            saturated |= capped.contains(&(i64::MAX as f64));
+            prop_assert_eq!(sketch.l2_squared(), median(capped), "after step {}", step);
+            let mut recomputed =
+                CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(rows, cols);
+            recomputed.merge(&sketch);
+            prop_assert_eq!(recomputed.l2_squared(), sketch.l2_squared());
+            let decoded = CountSketchWithL2Norm::<DefaultXxHasher>::from_asapv1(
+                &sketch.to_asapv1().expect("serialize"),
+            )
+            .expect("decode");
+            prop_assert_eq!(decoded.l2_squared(), sketch.l2_squared());
+        }
+        prop_assert!(saturated);
+        prop_assert_eq!(sketch.l2_squared(), 0.0);
     }
 
     #[test]

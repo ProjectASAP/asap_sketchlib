@@ -113,7 +113,7 @@ Entries are emitted in descending count (`f64::total_cmp` for `f64` counts),
 ties broken by a total order over the key, so a decoded sketch re-serializes
 byte-identically. The decoder rejects entries in any other order.
 
-`CountSketchWithL2Norm` is a different algorithm with its own ASAPv1 kind (`0x19 0x00`);
+`CountSketchWithL2Norm` is a different algorithm with its own ASAPv1 kind (`0x19 0x01`);
 see [the Count Sketch API doc](./api_count_sketch.md).
 
 ## Deltas

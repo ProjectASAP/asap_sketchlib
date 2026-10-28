@@ -2,8 +2,8 @@
 
 One `proptest` law per line. Each compares the sketch against an answer
 computed without it; what that answer is comes first in every section. One
-file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 356 laws;
-with `--all-features`, 407, adding the three **experimental** modules. Every
+file per sketch under `tests/pbt/`. `cargo test --test pbt` runs 357 laws;
+with `--all-features`, 408, adding the three **experimental** modules. Every
 law was mutation-checked: break the implementation, the law goes red. Shared
 generators, `grid` and `round_trip!` live in `support.rs`.
 
@@ -402,7 +402,7 @@ Compared against: an exact `HashMap` count. Every bound is deterministic.
 - wire
   - ASAPv1 at `edge_dimension` keeps `min_count`, 64 `(estimate, error)`; after merging a 1-counter summary whose ceiling no counter holds
 
-## topk_wrappers.rs — 15
+## topk_wrappers.rs — 16
 
 Path laws compare two real implementations: the wrapper's matrix must equal the bare sketch's.
 
@@ -419,9 +419,10 @@ Path laws compare two real implementations: the wrapper's matrix must equal the 
   - every merged resident: `count == merged estimate(k)`
   - room for the union: merged keys `== a.keys + b.keys`
 - `CountSketchWithL2Norm`, via hash-taking entry points
-  - `update_weighted_with_hash_without_l2` writes the cells `CountSketchWithL2Norm::cell_for_row` names, with the row sign
+  - `update_weighted_with_hash` writes the cells `CountSketchWithL2Norm::cell_for_row` names, with the row sign; its L2 accumulators equal the ones `merge` and the ASAPv1 decoder recompute
   - `estimate_with_hash == median(sign-corrected cells)`
   - `l2_squared() == median over rows of sum of squares`, every update
+  - weights up to `2^33` into saturation and back to zero: `l2_squared() == median over rows of min(sum of squares, i64::MAX)` after every update, equal to the `merge` and ASAPv1-decode recomputations
   - merge adds cells and recomputes L2 from them
 - wire
   - `CountMinSketchWithHeap`, `CountSketchWithHeap` at `edge_rows` x `edge_dimension`: 64 estimates and heap `(key, count)` kept

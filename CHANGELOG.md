@@ -85,6 +85,25 @@ signals a backwards-compatible change.
   drops the summary's `total`. The retired `0x18 0x00` / `0x1e 0x00` /
   `0x1f 0x00` still decode, with `total` dropped, and are never encoded. The
   `sketchlib-golden-bytes` submodule gains the `*_nototal_*` fixtures.
+- **Breaking: `CountSketchWithL2Norm`'s L2 accumulators always equal each
+  row's sum of squared counters** (saturated at `i64::MAX`). Each row keeps
+  an exact `i128` sum of its squares, each square capped at `2^63`, updated
+  in O(1) per write and clamped to `i64::MAX` when read. A row that
+  saturated and then decreased now reports its true `l2` instead of an
+  understatement; `l2`, `l2_squared`, UnivMon's `estimate_l2` and its
+  terminal-mode heavy-hitter threshold change only in that case. Each row's
+  accumulator is 8 bytes wider (`memory_bytes`, `estimated_memory_bytes`).
+  `update_weighted_with_hash_without_l2` and `as_storage_mut`, the two ways
+  to move counters without the accumulator, are removed; use
+  `update_weighted_with_hash`.
+- **ASAPv1: the L2 accumulators leave the wire.** CountSketchWithL2Norm
+  encodes as `0x19 0x01` (`[counts]`), UnivMon as `0x10 0x01`, two-tier
+  UnivMon as `0x11 0x01` and Hydra over UnivMon as `0x07 0x05`, each payload
+  without `l2`; the decoder recomputes it. The retired `0x19 0x00`,
+  `0x10 0x00`, `0x11 0x00` and `0x07 0x04` still decode, `l2` read and
+  dropped, and are never encoded; `EhBucketSketch` and `ExponentialHistogram`
+  buckets nested under the retired ids decode too. The
+  `sketchlib-golden-bytes` submodule gains the `*_no_l2` fixtures.
 - **Count Sketch estimates no longer allocate.** The per-row estimates a
   median is taken over are collected on the stack instead of in a fresh
   `Vec`: up to 20 rows for `Vector2D` (the fast and regular paths),

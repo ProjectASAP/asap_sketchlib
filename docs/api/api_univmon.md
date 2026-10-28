@@ -92,7 +92,7 @@ fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
-These produce/consume the **ASAPv1** wire envelope (kind `0x10 0x00`) — see the
+These produce/consume the **ASAPv1** wire envelope (kind `0x10 0x01`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). UnivMon hashes through the
 crate's default hasher, so its metadata carries that profile and no seed index:
 the bottom-layer finder's seed is fixed by the algorithm, and layer `i`'s
@@ -100,8 +100,10 @@ counter hashes at seed index `i`.
 
 The pyramid shape (`layers`, `rows`, `cols`, `heap_size`) and
 the heaps' `key_type` live in the metadata; the payload is
-`[counts, l2, heap_lens, keys, heap_counts, candidate_complete, bucket_size,
-update_mode]`. Each layer's `CountSketchWithL2Norm` state is inlined rather than nested in
+`[counts, heap_lens, keys, heap_counts, candidate_complete, bucket_size,
+update_mode]`. Each layer's L2 accumulators are recomputed from its counters on
+decode; the retired kind `0x10 0x00` also carried them at position 1 and still
+decodes, `l2` dropped. Each layer's `CountSketchWithL2Norm` state is inlined rather than nested in
 an envelope of its own, and the heap indexes are rebuilt on load, so no index
 reaches the wire. Heap entries are emitted layer by layer, each layer in
 descending count with ties broken by a total order over the key, so a decoded

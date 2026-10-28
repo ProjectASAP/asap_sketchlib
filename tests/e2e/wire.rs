@@ -325,7 +325,7 @@ fn the_univmon_family_envelopes_round_trip_and_name_their_kinds() {
     }
 
     let um_bytes = um.to_asapv1().expect("encode UnivMon");
-    assert_kind(&um_bytes, 0x10, 0x00, "UnivMon");
+    assert_kind(&um_bytes, 0x10, 0x01, "UnivMon");
     let decoded_um = UnivMon::from_asapv1(&um_bytes).expect("decode UnivMon");
     assert_eq!(decoded_um.estimate_l1(), um.estimate_l1(), "UnivMon L1");
     assert_eq!(decoded_um.estimate_l2(), um.estimate_l2(), "UnivMon L2");
@@ -336,7 +336,7 @@ fn the_univmon_family_envelopes_round_trip_and_name_their_kinds() {
     );
 
     let pyramid_bytes = pyramid.to_asapv1().expect("encode UnivMonTwoTier");
-    assert_kind(&pyramid_bytes, 0x11, 0x00, "UnivMonTwoTier");
+    assert_kind(&pyramid_bytes, 0x11, 0x01, "UnivMonTwoTier");
     let decoded_pyramid =
         UnivMonTwoTier::from_asapv1(&pyramid_bytes).expect("decode UnivMonTwoTier");
     assert_eq!(

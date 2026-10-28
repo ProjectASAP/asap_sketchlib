@@ -7,13 +7,14 @@
 //! and `candidate_complete` fields directly without widening any field
 //! visibility. See `docs/asapv1_wire_format.md`.
 //!
-//! Two-tier UnivMon is one algorithm — a single kind_id `0x11 0x00`. It
+//! Two-tier UnivMon is one algorithm, kind_id `0x11 0x01`. It
 //! shares [`UnivMon`](crate::UnivMon)'s payload
-//! (`[counts, l2, heap_lens, keys, heap_counts, candidate_complete,
-//! bucket_size, update_mode]`) and differs only in its metadata: the two-tier
+//! (`[counts, heap_lens, keys, heap_counts, candidate_complete, bucket_size,
+//! update_mode]`) and differs only in its metadata: the two-tier
 //! layout gives layer `i` the elephant dimensions while `i < elephant_layers`
 //! and the mouse dimensions after, so every per-layer geometry is derived and
-//! none is stored.
+//! none is stored. The retired kind `0x11 0x00` also carried the layers' `l2`
+//! accumulators and still decodes, its `l2` read and dropped.
 //!
 //! [`UnivMonPool`](crate::UnivMonPool) is a free-list of scratch
 //! `UnivMon`s rather than a sketch, and has no wire kind.
@@ -23,7 +24,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
-use crate::asapv1::kind::UNIVMON_TWO_TIER;
+use crate::asapv1::kind::{UNIVMON_TWO_TIER, UNIVMON_TWO_TIER_CARRYING_L2};
 use crate::sketch_framework::univmon::wire::{
     check_layers, decode_pyramid, encode_pyramid, pyramid_key_type, pyramid_state, rebuild_layers,
     update_mode_of, update_mode_tag,
@@ -131,20 +132,11 @@ fn check_layout_dimensions(
     Ok(())
 }
 
-/// Total accumulators the declared layout implies, one per row per layer.
-fn accumulator_count(layers: usize, layout: &TwoTierLayout) -> Option<usize> {
-    let elephants = layers.min(layout.elephant_layers as usize);
-    let mice = layers - elephants;
-    elephants
-        .checked_mul(layout.elephant_rows as usize)?
-        .checked_add(mice.checked_mul(layout.mouse_rows as usize)?)
-}
-
 // Wire serialization for UnivMonTwoTier. `wire` is a descendant of the sketch
 // module, so this impl reads the private fields directly.
 impl UnivMonTwoTier {
     /// Serializes the pyramid into an ASAPv1 MessagePack envelope
-    /// (kind_id `0x11 0x00`). The metadata is derived from
+    /// (kind_id `0x11 0x01`). The metadata is derived from
     /// [`DefaultXxHasher`]'s [`HashProfile`], the hasher the pyramid is built
     /// on.
     ///
@@ -213,11 +205,15 @@ impl UnivMonTwoTier {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != kind::UNIVMON_TWO_TIER {
-            return Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMonTwoTier kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_TWO_TIER:?}"
-            )));
-        }
+        let carries_l2 = match kind_id {
+            kind::UNIVMON_TWO_TIER => false,
+            kind::UNIVMON_TWO_TIER_CARRYING_L2 => true,
+            _ => {
+                return Err(RmpDecodeError::Uncategorized(format!(
+                    "UnivMonTwoTier kind_id mismatch: stored {kind_id:?}, expected {UNIVMON_TWO_TIER:?} or the retired {UNIVMON_TWO_TIER_CARRYING_L2:?}"
+                )));
+            }
+        };
         let meta: UnivMonTwoTierMetadata = envelope::decode_block(metadata)?;
         let layout = TwoTierLayout {
             elephant_layers: meta.elephant_layers,
@@ -255,17 +251,12 @@ impl UnivMonTwoTier {
         )
         .map_err(RmpDecodeError::Uncategorized)?;
         check_layers("UnivMonTwoTier", layers).map_err(RmpDecodeError::Uncategorized)?;
-        let decoded = decode_pyramid(&meta.key_type, payload)?;
+        let decoded = decode_pyramid(&meta.key_type, payload, carries_l2)?;
         check_empty_key_type(&meta.key_type, decoded.entries.is_empty())
             .map_err(RmpDecodeError::Uncategorized)?;
-        // The declared layout is measured against the accumulators the payload
-        // actually carries before the geometry is built from it.
-        if accumulator_count(layers, &layout) != Some(decoded.l2.len()) {
-            return Err(RmpDecodeError::Uncategorized(format!(
-                "UnivMonTwoTier declares a layout the payload's {} accumulators do not match",
-                decoded.l2.len()
-            )));
-        }
+        // `check_layers` capped `layers` at UNIVMON_MAX_LAYERS, so this
+        // geometry is small; `rebuild_layers` measures its cells against the
+        // payload's `counts` before any matrix is built.
         let geometry = geometry_of(layers, &layout);
         let (layer_sketches, layer_heaps, candidate_complete, bucket_size, mode_tag) =
             rebuild_layers(&geometry, heap_size, decoded)?;
@@ -330,7 +321,7 @@ mod tests {
         let pyramid = populated();
         let encoded = pyramid.to_asapv1().expect("serialize");
         assert!(encoded.starts_with(b"ASAPv1"));
-        assert_eq!(&encoded[7..10], &[2u8, 0x11, 0x00]); // kind_id_len=2, kind_id=[0x11,0x00]
+        assert_eq!(&encoded[7..10], &[2u8, 0x11, 0x01]); // kind_id_len=2, kind_id=[0x11,0x01]
 
         let meta = metadata_of(&encoded);
         assert_eq!(meta.metadata_version, 1);
@@ -363,6 +354,37 @@ mod tests {
             encoded,
             "a decoded pyramid re-serialized to different bytes"
         );
+    }
+
+    /// The retired `0x11 0x00` still decodes: its `l2` (here all zero, not
+    /// the counters' sums of squares) is read and dropped, the layers'
+    /// accumulators recomputed, and the pyramid re-encodes under `0x11 0x01`
+    /// byte-identically to the original.
+    #[test]
+    fn univmon_two_tier_retired_kind_decodes_and_recomputes_l2() {
+        use crate::sketch_framework::univmon::wire::PyramidPayloadCarryingL2;
+        let pyramid = populated();
+        let encoded = pyramid.to_asapv1().expect("serialize");
+        let (_, metadata, _) = envelope::split(&encoded).expect("split");
+        let p: PyramidPayload<String> = payload_of(&encoded);
+        let retired = PyramidPayloadCarryingL2 {
+            counts: p.counts,
+            l2: crate::sketches::countsketch_l2_norm::wire::RetiredL2(vec![0; 3 * 2 + 2 * 2]),
+            heap_lens: p.heap_lens,
+            keys: p.keys,
+            heap_counts: p.heap_counts,
+            candidate_complete: p.candidate_complete,
+            bucket_size: p.bucket_size,
+            update_mode: p.update_mode,
+        };
+        let bytes = envelope::encode(
+            kind::UNIVMON_TWO_TIER_CARRYING_L2,
+            metadata,
+            &rmp_serde::to_vec(&retired).expect("payload"),
+        );
+        let decoded = UnivMonTwoTier::from_asapv1(&bytes).expect("decode retired");
+        assert_eq!(decoded.estimate_l2(), pyramid.estimate_l2());
+        assert_eq!(decoded.to_asapv1().expect("re-encode"), encoded);
     }
 
     /// The two tiers are derived from the layer's position: the elephant
@@ -668,12 +690,11 @@ mod tests {
             );
         }
 
-        // A zero row count against an empty payload: the accumulator check
-        // alone passes (0 rows over any layer count names 0 accumulators), so
-        // the tiers' dimensions must be refused before the geometry is sized.
+        // A zero row count against an empty payload: the cell count alone
+        // passes (0 rows over any layer count names 0 cells), so the tiers'
+        // dimensions must be refused before the geometry is sized.
         let mut empty = payload_of::<String>(&encoded);
         empty.counts.clear();
-        empty.l2.clear();
         empty.keys.clear();
         empty.heap_counts.clear();
         let zero_rows = TwoTierLayout {
@@ -786,7 +807,6 @@ mod tests {
         meta.layers = layers as u32;
         let mut payload: PyramidPayload<u64> = payload_of(&encoded);
         payload.counts = vec![0; 2 * (2 * 16) + (layers - 2) * (2 * 8)];
-        payload.l2 = vec![0; 2 * layers];
         payload.heap_lens = vec![0; layers];
         payload.candidate_complete = vec![true; layers];
         let problem = UnivMonTwoTier::from_asapv1(&crafted(&meta, &payload))

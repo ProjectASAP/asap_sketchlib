@@ -70,7 +70,7 @@ fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
-These produce/consume the **ASAPv1** wire envelope (kind `0x11 0x00`) — see the
+These produce/consume the **ASAPv1** wire envelope (kind `0x11 0x01`; the retired `0x11 0x00`, which also carried the layers' `l2`, still decodes) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). `UnivMonTwoTier` shares
 [`UnivMon`](./api_univmon.md)'s payload and differs only in its metadata: the
 two-tier layout (`layers`, `elephant_layers`, `elephant_rows`,
