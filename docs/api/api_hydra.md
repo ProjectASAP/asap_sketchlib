@@ -67,6 +67,8 @@ Negative counts void the bound.
 fn merge(&mut self, other: &Hydra) -> Result<(), String>
 ```
 
+`Err` when KLL cells differ in `k` or `m`.
+
 ## Serialization
 
 ```rust

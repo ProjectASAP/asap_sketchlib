@@ -12,6 +12,11 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **Capability table** (`asap_sketchlib::capability`, re-exported at the
+  root): `SketchFamily::capability()` gives, for each public sketch family,
+  the `Statistic`s one state answers, whether states merge and whether the
+  inputs may overlap (`MergeInputs`), and the error of each statistic read
+  from a merged state (`MergedError`). `SketchFamily::ALL` lists the families.
 - **`DdSketch::quantile_interpolated(q)`**: the quantile interpolated linearly
   between the order statistics at rank `q * (n - 1)`, as PromQL
   `quantile_over_time` and SQL `percentile_cont` compute it, over both signed
@@ -35,6 +40,10 @@ signals a backwards-compatible change.
 - **`memory_bytes` and `estimated_memory_bytes`** on `CountSketchWithL2Norm`
   (`rows, cols`) and `UnivMon` (`heap_size, rows, cols, layers, key`): the
   pyramid's estimate is the steady state once every layer's heap has churned.
+- **`CountMinSketch::total()`**: the total admitted update weight, row 0's
+  counters summed in `f64`, exact below 2^53.
+- **`ElasticSketch::top_k(k)`**: the `k` heavy-part flows with the largest
+  estimates, by estimate descending, ties by flow id.
 ### Changed
 
 - **`Kmv` builds without the `experimental` feature**, with its ASAPv1 codec.
@@ -44,6 +53,9 @@ signals a backwards-compatible change.
   `BitMatrix`, `CountSketchWithL2Norm` (estimates and `l2_squared`) and
   `CountSketchFold`, and a `[f64; ROWS]` array for the fixed-size matrices.
   About 8 to 14 ns less per estimate on small shapes. Results are unchanged.
+- **KLL merges require the same `k` and `m`.** `Kll::merge` and
+  `KllDynamic::merge` panic when either differs, where they merged before;
+  `Hydra::merge` and `EhBucketSketch::merge` return `Err` for such KLL states.
 ### Fixed
 
 - **`Kll::update` regains most of its pre-0.4.0 speed.** With the lazily grown

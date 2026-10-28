@@ -48,6 +48,8 @@ fn sketch_type(&self) -> &'static str
 fn merge(&mut self, other: &EhBucketSketch) -> Result<(), String>
 ```
 
+`Err` when KLL buckets differ in `k` or `m`.
+
 ## Serialization
 
 ```rust

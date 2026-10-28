@@ -12,7 +12,7 @@ use std::marker::PhantomData;
 
 use crate::asapv1::admission_rate::admit_all;
 use crate::common::hash::check_matrix_shape;
-use crate::common::structure_utils::AdmittedRows;
+use crate::common::structure_utils::{AdmittedRows, ToF64};
 use crate::octo_delta::{
     CountMinSketchCellDelta, KeyedCountMinSketchCellDelta, OCTO_COUNT_MIN_DEFAULT_THRESHOLD,
     OCTO_MAX_PROMOTION_THRESHOLD,
@@ -593,6 +593,16 @@ where
         }
     }
 
+    /// Total admitted update weight: row 0's counters summed in `f64`, exact below 2^53.
+    pub fn total(&self) -> f64
+    where
+        S::Counter: ToF64,
+    {
+        (0..self.counts.cols())
+            .map(|c| self.counts.query_one_counter(0, c).to_f64())
+            .sum()
+    }
+
     /// Applies a delta update to the sketch counters.
     pub fn apply_delta(&mut self, delta: CountMinSketchCellDelta) {
         self.counts.increment_by_row(
@@ -1022,6 +1032,38 @@ mod tests {
         for (row, idx) in left_indices.into_iter().enumerate() {
             assert_eq!(left.as_storage().query_one_counter(row, idx), 3);
         }
+    }
+
+    /// `total` is the summed update weight on both paths and adds under merge.
+    #[test]
+    fn total_sums_the_update_weight() {
+        let mut regular = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 16);
+        let mut fast = CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(3, 16);
+        assert_eq!(regular.total(), 0.0);
+        for i in 0..100u64 {
+            regular.update(&DataInput::U64(i % 7));
+            fast.update(&DataInput::U64(i % 7));
+        }
+        regular.update_weighted(&DataInput::U64(3), 25);
+        fast.update_weighted(&DataInput::U64(3), 25);
+        assert_eq!(regular.total(), 125.0);
+        assert_eq!(fast.total(), 125.0);
+
+        let mut other = CountMinSketch::<Vector2D<i64>, RegularPath>::with_dimensions(3, 16);
+        other.update_weighted(&DataInput::Str("x"), 10);
+        regular.merge(&other);
+        assert_eq!(regular.total(), 135.0);
+
+        let mut f64_sketch: CountMinF64 = CountMinF64::with_dimensions(2, 8);
+        f64_sketch.update_weighted(&DataInput::U64(1), 0.5);
+        f64_sketch.update_weighted(&DataInput::U64(2), 1.25);
+        assert_eq!(f64_sketch.total(), 1.75);
+
+        let mut narrow = CountMinSketch::<Vector2D<i32>, RegularPath>::with_dimensions(1, 4);
+        for c in 0..4 {
+            narrow.as_storage_mut().increment_by_row(0, c, i32::MAX);
+        }
+        assert_eq!(narrow.total(), 4.0 * i32::MAX as f64);
     }
 
     #[test]

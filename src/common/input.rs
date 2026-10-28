@@ -513,6 +513,7 @@ impl HydraCounter {
                 Ok(())
             }
             (HydraCounter::Kll(self_kll), HydraCounter::Kll(other_kll)) => {
+                self_kll.check_mergeable(other_kll)?;
                 self_kll.merge(other_kll);
                 Ok(())
             }

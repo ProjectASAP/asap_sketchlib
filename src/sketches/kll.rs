@@ -439,6 +439,7 @@ impl<T: NumericalValue> Kll<T> {
     /// internal buffer and fixes up the level boundaries, so the result is
     /// bit-identical to the source sketch (identical quantiles) at a fraction
     /// of the cost. Errors if the supplied state is inconsistent.
+    /// The result has `m` = [`DEFAULT_M`], so it merges only with sketches of that `m`.
     pub fn from_portable_state(
         k: usize,
         items: &[T],
@@ -710,7 +711,14 @@ impl<T: NumericalValue> Kll<T> {
     /// over capacity, unlike a single `push_value`, which can only overshoot
     /// by one element, so unlike `compress_while_updating` this cascade can
     /// revisit the same level more than once.
+    ///
+    /// # Panics
+    ///
+    /// When `k` or `m` differs between the two sketches.
     pub fn merge(&mut self, other: &Kll<T>) {
+        if let Err(problem) = self.check_mergeable(other) {
+            panic!("{problem}");
+        }
         let other_start = other.levels[0];
         let other_end = other.levels[other.num_levels];
         if other_end == other_start {
@@ -799,6 +807,17 @@ impl<T: NumericalValue> Kll<T> {
         for lvl in self.levels[self.num_levels + 1..].iter_mut() {
             *lvl = mc;
         }
+    }
+
+    /// `Err` when `k` or `m` differs, the case [`Self::merge`] refuses.
+    pub(crate) fn check_mergeable(&self, other: &Kll<T>) -> Result<(), String> {
+        if (self.k, self.m) != (other.k, other.m) {
+            return Err(format!(
+                "k/m mismatch while merging KLL sketches: (k={}, m={}) vs (k={}, m={})",
+                self.k, self.m, other.k, other.m
+            ));
+        }
+        Ok(())
     }
 
     /// Returns the estimated value at quantile `q` (in `[0, 1]`).
@@ -1572,6 +1591,36 @@ mod tests {
         let median = cdf.value_at(0.5);
         // Median should be 30
         assert!(median == 30.0, "Median = {median}");
+    }
+
+    #[test]
+    #[should_panic(expected = "k/m mismatch while merging KLL sketches")]
+    fn merge_requires_the_same_k() {
+        let mut a = Kll::<f64>::with_k_and_seed(200, 1);
+        let b = Kll::<f64>::with_k_and_seed(100, 2);
+        a.merge(&b);
+    }
+
+    #[test]
+    #[should_panic(expected = "k/m mismatch while merging KLL sketches")]
+    fn merge_requires_the_same_m() {
+        let mut a = Kll::<f64>::with_seed(200, 8, 1);
+        let mut b = Kll::<f64>::with_seed(200, 4, 2);
+        b.update(&1.0);
+        a.merge(&b);
+    }
+
+    /// The check runs before the empty-operand shortcut.
+    #[test]
+    fn merge_refuses_a_different_k_even_when_empty() {
+        let result = std::panic::catch_unwind(|| {
+            let mut a = Kll::<f64>::with_k(200);
+            a.merge(&Kll::<f64>::with_k(64));
+        });
+        assert!(result.is_err());
+        let mut a = Kll::<f64>::with_k(200);
+        a.merge(&Kll::<f64>::with_k(200));
+        assert_eq!(a.count(), 0);
     }
 
     #[test]

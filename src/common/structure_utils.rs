@@ -39,6 +39,18 @@ impl ToF64 for i32 {
     }
 }
 
+impl ToF64 for i128 {
+    fn to_f64(self) -> f64 {
+        self as f64
+    }
+}
+
+impl ToF64 for f64 {
+    fn to_f64(self) -> f64 {
+        self
+    }
+}
+
 /// Row-level NitroSketch sampling state.
 ///
 /// NitroSketch samples **per row slot**: a `d`-row sketch turns an `n`-update

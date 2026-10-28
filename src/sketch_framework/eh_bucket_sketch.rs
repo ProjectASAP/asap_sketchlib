@@ -157,6 +157,7 @@ impl EhBucketSketch {
                 Ok(())
             }
             (EhBucketSketch::Kll(s), EhBucketSketch::Kll(o)) => {
+                s.check_mergeable(o)?;
                 s.merge(o);
                 Ok(())
             }
@@ -289,6 +290,15 @@ impl EhBucketSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merge_refuses_kll_buckets_of_a_different_k() {
+        let mut a = EhBucketSketch::Kll(Kll::with_k(200));
+        let b = EhBucketSketch::Kll(Kll::with_k(100));
+        let problem = a.merge(&b).expect_err("different k must not merge");
+        assert!(problem.contains("k/m mismatch"), "got {problem}");
+        assert!(a.merge(&EhBucketSketch::Kll(Kll::with_k(200))).is_ok());
+    }
 
     #[test]
     fn update_routes_to_count_sketch_with_l2_norm_and_univmon() {

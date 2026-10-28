@@ -14,6 +14,7 @@
 //! framework-specific APIs.
 
 pub(crate) mod asapv1;
+pub mod capability;
 /// Shared primitives used across sketches, including input wrappers, hashers,
 /// storage backends, and reusable utilities.
 pub mod common;
@@ -26,6 +27,7 @@ pub mod sketches;
 pub mod test_utils;
 
 pub use asapv1::envelope::peek_kind_id;
+pub use capability::{Capability, MergeInputs, MergedError, SketchFamily, Statistic};
 pub use common::*;
 pub use sketch_framework::*;
 pub use sketches::*;

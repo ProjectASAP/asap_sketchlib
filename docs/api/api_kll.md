@@ -63,6 +63,8 @@ fn value_at_interpolated(&self, p: f64) -> f64
 fn merge(&mut self, other: &Kll<T>)
 ```
 
+Panics when `k` or `m` differs.
+
 ## Memory
 
 ```rust
