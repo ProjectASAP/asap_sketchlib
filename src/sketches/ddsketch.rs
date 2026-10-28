@@ -22,9 +22,9 @@ use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
 use crate::octo_delta::{DdSign, DdSketchBucketDelta};
 
-/// The ASAPv1 DDSketch delta (kind_id `0x05 0x80`).
+/// The ASAPv1 DDSketch delta (kind_id `0x05 0x81`).
 mod delta;
-/// ASAPv1 wire serialization (kind_id `0x05 0x00`).
+/// ASAPv1 wire serialization (kind_id `0x05 0x01`).
 mod wire;
 
 pub use delta::DdSketchDelta;
@@ -121,9 +121,13 @@ impl Buckets {
 
 /// Mergeable, relative-error quantile sketch using logarithmically-spaced buckets.
 ///
-/// ASAPv1 serialization lives in the `wire` submodule (kind_id `0x05 0x00`); it
-/// carries `alpha`, both bucket stores, the zero count and `sum` / `min` /
-/// `max`, and recovers `count` by summing them.
+/// ASAPv1 serialization lives in the `wire` submodule (kind_id `0x05 0x01`); it
+/// carries `alpha`, both bucket stores and the zero count, and recovers `count`
+/// by summing them.
+///
+/// The state is the buckets alone. A sum, minimum or maximum of the values is
+/// not a DDSketch readout: keep it with a separate exact aggregate next to the
+/// sketch.
 #[derive(Debug)]
 pub struct DdSketch {
     alpha: f64,
@@ -133,9 +137,6 @@ pub struct DdSketch {
 
     positive_store: Buckets,
     count: u64,
-    sum: f64,
-    min: f64,
-    max: f64,
     negative_store: Buckets,
     zero_count: u64,
     admission_rate: f64,
@@ -146,9 +147,6 @@ pub struct DdSketch {
 struct DdSketchState {
     alpha: f64,
     positive_store: Buckets,
-    sum: f64,
-    min: f64,
-    max: f64,
     negative_store: Buckets,
     zero_count: u64,
     admission_rate: f64,
@@ -169,9 +167,6 @@ impl TryFrom<DdSketchState> for DdSketch {
             inv_log_gamma: 1.0 / log_gamma,
             positive_store: state.positive_store,
             count,
-            sum: state.sum,
-            min: state.min,
-            max: state.max,
             negative_store: state.negative_store,
             zero_count: state.zero_count,
             admission_rate: state.admission_rate,
@@ -216,9 +211,6 @@ impl DdSketch {
             inv_log_gamma,
             positive_store: Buckets::new(),
             count: 0,
-            sum: 0.0,
-            min: f64::INFINITY,
-            max: f64::NEG_INFINITY,
             negative_store: Buckets::new(),
             zero_count: 0,
             admission_rate: admit_all(),
@@ -226,7 +218,7 @@ impl DdSketch {
     }
 
     /// Sets the probability `p` with which each sample was admitted. `count`
-    /// and `sum` cover admitted samples alone; a consumer divides them by `p`.
+    /// covers admitted samples alone; a consumer divides it by `p`.
     pub fn with_admission_rate(mut self, p: f64) -> Self {
         self.admission_rate = p;
         self
@@ -235,21 +227,6 @@ impl DdSketch {
     /// The probability with which each sample was admitted; `1` unless set.
     pub fn admission_rate(&self) -> f64 {
         self.admission_rate
-    }
-
-    /// Advances the running `sum` by `delta`, saturating at `f64::MAX` instead
-    /// of reaching `+inf`. The wire format refuses a non-finite `sum` on a
-    /// populated store, so an unguarded `+=` would leave a legally-ingested
-    /// sketch that can never be serialized. `count` and the bucket store stay
-    /// exact, so only `sum` degrades, and only past `f64::MAX`.
-    #[inline(always)]
-    fn add_to_sum(&mut self, delta: f64) {
-        let next = self.sum + delta;
-        self.sum = if next.is_finite() {
-            next
-        } else {
-            f64::MAX.copysign(next)
-        };
     }
 
     /// Adds a finite signed sample. Tiny magnitudes enter the zero bucket.
@@ -271,9 +248,6 @@ impl DdSketch {
             return Err("DDSketch value exceeds indexable range");
         }
         self.count = self.count.checked_add(1).ok_or("DDSketch count overflow")?;
-        self.add_to_sum(v);
-        self.min = self.min.min(v);
-        self.max = self.max.max(v);
         if v.abs() < min_indexable {
             self.zero_count += 1;
         } else {
@@ -323,10 +297,8 @@ impl DdSketch {
 
     /// Adds a promoted bucket count from an OctoSketch worker.
     ///
-    /// A delta carries only a bucket and a count, so `sum`, `min` and `max` are
-    /// advanced with the bucket's representative value - the same α-bounded
-    /// estimate a deserialize-and-recompute produces. Quantiles and `count`
-    /// stay exact with respect to the bucket store.
+    /// The bucket and `count` change exactly as the same samples' `add`s
+    /// would change them.
     pub fn apply_delta(&mut self, delta: DdSketchBucketDelta) {
         if delta.sign == DdSign::Zero {
             self.apply_zero_delta(delta.count);
@@ -354,80 +326,20 @@ impl DdSketch {
         store.ensure(delta.index);
         let slot = (delta.index - store.offset) as usize;
         store.counts.as_mut_slice()[slot] += delta.count;
-
-        let representative = self.bin_representative(delta.index)
-            * if delta.sign == DdSign::Negative {
-                -1.0
-            } else {
-                1.0
-            };
         self.count += delta.count;
-        self.add_to_sum(representative * delta.count as f64);
-        if representative < self.min {
-            self.min = representative;
-        }
-        if representative > self.max {
-            self.max = representative;
-        }
     }
 
-    /// Returns the estimated value at quantile `q` (in `[0, 1]`), or `None` if the sketch is empty.
+    /// Returns the estimated value at quantile `q`, or `None` if the sketch is
+    /// empty or `q` is NaN: the representative of the bucket holding the
+    /// order statistic at nearest rank `ceil(q * n)` (1-based). `q <= 0` reads
+    /// the lowest occupied bucket and `q >= 1` the highest, so every answer,
+    /// the extremes included, is within `alpha` relative of a sample.
     pub fn get_value_at_quantile(&self, q: f64) -> Option<f64> {
         if self.count == 0 || q.is_nan() {
             return None;
         }
-        if q <= 0.0 {
-            return Some(self.min);
-        }
-        if q >= 1.0 {
-            return Some(self.max);
-        }
-
-        let rank = ((q * self.count as f64).ceil() as u64).max(1);
-        let mut seen = 0u64;
-        for (i, &count) in self
-            .negative_store
-            .counts
-            .as_slice()
-            .iter()
-            .enumerate()
-            .rev()
-        {
-            seen += count;
-            if seen >= rank {
-                return Some(
-                    (-self.bin_representative(self.negative_store.offset + i as i32))
-                        .clamp(self.min, self.max),
-                );
-            }
-        }
-        seen += self.zero_count;
-        if seen >= rank {
-            return Some(0.0);
-        }
-
-        let slice = self.positive_store.counts.as_slice();
-        let offset = self.positive_store.offset;
-
-        for (i, &c) in slice.iter().enumerate() {
-            if c == 0 {
-                continue;
-            }
-            seen += c;
-            if seen >= rank {
-                let bin = offset + i as i32;
-                let mut v = self.bin_representative(bin);
-                if v < self.min {
-                    v = self.min;
-                }
-                if v > self.max {
-                    v = self.max;
-                }
-                return Some(v);
-            }
-        }
-
-        Some(self.max)
+        let rank = ((q * self.count as f64).ceil() as u64).clamp(1, self.count);
+        Some(self.value_at_rank(rank - 1))
     }
 
     /// Returns the quantile at `q` interpolated linearly between the two
@@ -438,10 +350,9 @@ impl DdSketch {
     /// - `Ok(None)` for an empty sketch.
     /// - `Err` for `q` outside `[0, 1]`, NaN included; mapping such a `q` to
     ///   `-inf` / `+inf` (as PromQL does) is the caller's job.
-    /// - Rank 0 and rank `n - 1` are the exactly retained minimum and
-    ///   maximum; every other order statistic is its bucket's representative
-    ///   (negative store, zero bucket or positive store), clamped to
-    ///   `[min, max]`.
+    /// - Every order statistic, rank 0 and rank `n - 1` included, is its
+    ///   bucket's representative (negative store, zero bucket or positive
+    ///   store).
     ///
     /// Error: each neighbour is within `alpha` relative of the true order
     /// statistic when its magnitude is indexable, so when both neighbours are
@@ -472,61 +383,34 @@ impl DdSketch {
     }
 
     /// The estimated order statistic at 0-based `rank` (`rank < count`): the
-    /// exact minimum and maximum at the ends, otherwise the representative
-    /// of the bucket holding it, clamped to `[min, max]`.
+    /// representative of the bucket holding it, `0.0` in the zero bucket.
     fn value_at_rank(&self, rank: u64) -> f64 {
         debug_assert!(rank < self.count);
-        if rank == 0 {
-            return self.min;
-        }
-        if rank == self.count - 1 {
-            return self.max;
-        }
         let mut seen = 0u64;
         let negative = self.negative_store.counts.as_slice();
         for (i, &count) in negative.iter().enumerate().rev() {
             seen += count;
             if seen > rank {
-                let bin = self.negative_store.offset + i as i32;
-                return (-self.bin_representative(bin)).clamp(self.min, self.max);
+                return -self.bin_representative(self.negative_store.offset + i as i32);
             }
         }
         seen += self.zero_count;
         if seen > rank {
-            return 0.0_f64.clamp(self.min, self.max);
+            return 0.0;
         }
         let positive = self.positive_store.counts.as_slice();
         for (i, &count) in positive.iter().enumerate() {
             seen += count;
             if seen > rank {
-                let bin = self.positive_store.offset + i as i32;
-                return self.bin_representative(bin).clamp(self.min, self.max);
+                return self.bin_representative(self.positive_store.offset + i as i32);
             }
         }
-        self.max
+        unreachable!("rank {rank} is below the bucket total {}", self.count)
     }
 
     /// Returns the total number of samples inserted so far.
     pub fn get_count(&self) -> u64 {
         self.count
-    }
-
-    /// Returns the minimum sample seen, or `None` if the sketch is empty.
-    pub fn min(&self) -> Option<f64> {
-        if self.count == 0 {
-            None
-        } else {
-            Some(self.min)
-        }
-    }
-
-    /// Returns the maximum sample seen, or `None` if the sketch is empty.
-    pub fn max(&self) -> Option<f64> {
-        if self.count == 0 {
-            None
-        } else {
-            Some(self.max)
-        }
     }
 
     /// Returns the relative-accuracy parameter `alpha`.
@@ -595,14 +479,6 @@ impl DdSketch {
         size_of::<Self>().saturating_add(slots.saturating_mul(size_of::<u64>()))
     }
 
-    /// Returns the running sum. Exact over the values passed to [`Self::add`];
-    /// a bucket promoted through [`Self::apply_delta`] contributes its bucket
-    /// representative instead, and the total saturates at `f64::MAX` rather
-    /// than overflowing to `+inf`.
-    pub fn sum(&self) -> f64 {
-        self.sum
-    }
-
     /// Returns the raw bucket-count slice. Each entry is the number of
     /// samples in the bucket whose absolute index is `positive_store_offset() + i`.
     pub fn positive_store_counts(&self) -> &[u64] {
@@ -628,10 +504,6 @@ impl DdSketch {
     pub fn apply_zero_delta(&mut self, count: u64) {
         self.count += count;
         self.zero_count += count;
-        if count != 0 {
-            self.min = self.min.min(0.0);
-            self.max = self.max.max(0.0);
-        }
     }
 
     /// Merges another DDSketch into this one. Returns `Err` if the two sketches
@@ -663,13 +535,6 @@ impl DdSketch {
         }
 
         self.count += other.count;
-        self.add_to_sum(other.sum);
-        if other.min < self.min {
-            self.min = other.min;
-        }
-        if other.max > self.max {
-            self.max = other.max;
-        }
 
         // Merge bucket vectors
         Self::merge_store(&mut self.positive_store, &other.positive_store);
@@ -743,9 +608,6 @@ impl Clone for DdSketch {
             inv_log_gamma: self.inv_log_gamma,
             positive_store: self.positive_store.clone(),
             count: self.count,
-            sum: self.sum,
-            min: self.min,
-            max: self.max,
             negative_store: self.negative_store.clone(),
             zero_count: self.zero_count,
             admission_rate: self.admission_rate,
@@ -795,15 +657,19 @@ mod tests {
                 "q={q}: {actual} against {expected}"
             );
         }
-        // The nearest-rank readout keeps its convention.
-        assert_eq!(sketch.get_value_at_quantile(0.9), Some(40.0));
+        // The nearest-rank readout keeps its convention: rank ceil(0.9 * 2) = 2,
+        // the bucket holding 40.
+        let nearest = sketch.get_value_at_quantile(0.9).unwrap();
+        assert!((nearest - 40.0).abs() <= (0.01 + 1e-9) * 40.0, "{nearest}");
     }
 
     #[test]
     fn quantile_interpolated_one_value_and_empty() {
         let one = sketch_of(0.01, &[20.0]);
-        for q in [0.0, 0.3, 1.0] {
-            assert_eq!(one.quantile_interpolated(q).unwrap(), Some(20.0));
+        let bucket = one.quantile_interpolated(0.0).unwrap().unwrap();
+        assert!((bucket - 20.0).abs() <= (0.01 + 1e-9) * 20.0, "{bucket}");
+        for q in [0.3, 1.0] {
+            assert_eq!(one.quantile_interpolated(q).unwrap(), Some(bucket));
         }
         let empty = DdSketch::new(0.01);
         assert_eq!(empty.quantile_interpolated(0.5).unwrap(), None);
@@ -895,8 +761,7 @@ mod tests {
         for &p in &ps {
             let q = s.get_value_at_quantile(p).expect("quantile");
             assert!(q >= prev - 1e-12, "non-monotone at p={p}: {q} < {prev}");
-            assert!(q <= s.max().unwrap() + 1e-12);
-            assert!(q >= s.min().unwrap() - 1e-12);
+            assert!((-5.0 * 1.01..=1000.0 * 1.01).contains(&q), "p={p}: {q}");
             prev = q;
         }
     }
@@ -929,18 +794,17 @@ mod tests {
 
         s1.merge(&s2).unwrap();
 
-        // counts and bounds
         assert_eq!(s1.get_count(), (vals1.len() + vals2.len()) as u64);
-        assert_eq!(s1.min().unwrap(), 1.0);
-        assert_eq!(s1.max().unwrap(), 20.0);
 
-        // extreme quantiles should match bounds
-        assert_eq!(s1.get_value_at_quantile(0.0).unwrap(), 1.0);
-        assert_eq!(s1.get_value_at_quantile(1.0).unwrap(), 20.0);
+        // The extreme quantiles read the lowest and highest buckets, within
+        // alpha of the smallest and largest samples.
+        let lowest = s1.get_value_at_quantile(0.0).unwrap();
+        let highest = s1.get_value_at_quantile(1.0).unwrap();
+        assert!((lowest - 1.0).abs() <= (ALPHA + 1e-9) * 1.0, "{lowest}");
+        assert!((highest - 20.0).abs() <= (ALPHA + 1e-9) * 20.0, "{highest}");
 
-        // sanity: middle quantile is within [min, max]
         let mid = s1.get_value_at_quantile(0.5).unwrap();
-        assert!((1.0..=20.0).contains(&mid));
+        assert!((lowest..=highest).contains(&mid));
     }
 
     #[test]
@@ -957,12 +821,9 @@ mod tests {
         );
         let decoded = DdSketch::from_asapv1(&encoded).expect("DDSketch deserialization fail");
 
-        // `count` is summed back from the buckets; `sum`/`min`/`max` are carried
-        // on the wire, so every scalar and every quantile comes back exact.
+        // `count` is summed back from the buckets, and every quantile reads
+        // the same buckets, so both come back exact.
         assert_eq!(decoded.get_count(), s.get_count());
-        assert_eq!(decoded.sum(), s.sum());
-        assert_eq!(decoded.min(), s.min());
-        assert_eq!(decoded.max(), s.max());
         for q in [0.0, 0.1, 0.5, 0.9, 1.0] {
             assert_eq!(
                 decoded.get_value_at_quantile(q),

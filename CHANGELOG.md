@@ -53,6 +53,19 @@ signals a backwards-compatible change.
 ### Changed
 
 - **`Kmv` builds without the `experimental` feature**, with its ASAPv1 codec.
+- **Breaking: `DdSketch` no longer keeps `sum`, `min` or `max`.** The state is
+  the two bucket stores and the zero count. `sum()`, `min()` and `max()` are
+  removed; a caller that needs them keeps a separate exact aggregate.
+  Quantiles are no longer clamped to `[min, max]`: `q = 0` and `q = 1` read
+  the lowest and highest occupied buckets, within `alpha` of the true
+  extremes. `EhBucketSketch`'s `"min"` / `"max"` commands on a DDSketch read
+  those quantiles. A DDSketch delta (`merge_delta`, Octo's `apply_delta`) now
+  rebuilds the producer's state exactly.
+- **ASAPv1: DDSketch encodes as `0x05 0x01`, its delta as `0x05 0x81`.** The
+  payload drops the three scalars (five fields). The retired `0x05 0x00` /
+  `0x05 0x80` still decode, with the scalars dropped, and are never encoded.
+  The `sketchlib-golden-bytes` submodule gains the `ddsketch_buckets_*`
+  fixtures.
 - **Count Sketch estimates no longer allocate.** The per-row estimates a
   median is taken over are collected on the stack instead of in a fresh
   `Vec`: up to 20 rows for `Vector2D` (the fast and regular paths),

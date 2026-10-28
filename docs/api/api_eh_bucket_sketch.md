@@ -73,7 +73,7 @@ The ten nested kind_ids:
 | `CocoSketch` | `0x0c 0x00` | Coco | default |
 | `CountSketchWithL2Norm` | `0x19 0x00` | CountSketchWithL2Norm | default |
 | `CountSketch` | `0x04 0x00` | Count Sketch | default |
-| `DdSketch` | `0x05 0x00` | DDSketch | default |
+| `DdSketch` | `0x05 0x01` (the retired `0x05 0x00` still decodes) | DDSketch | default |
 | `ElasticSketch` | `0x0b 0x00` | Elastic | default |
 | `Hll` | `0x01 0x02` | HLL Ertl-MLE | default |
 | `Kll` | `0x06 0x00` | KLL compact | default |

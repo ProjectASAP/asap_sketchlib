@@ -25,7 +25,9 @@
 //!
 //! All ten ids dispatch whatever features are on. A decoder built without
 //! `experimental` rejects `0x0d 0x00` by name with the feature named, and its
-//! encoder can never emit it.
+//! encoder can never emit it. A DDSketch bucket encodes as `0x05 0x01`; the
+//! retired `0x05 0x00` still decodes into the same variant, its `sum` / `min` /
+//! `max` dropped.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
@@ -45,7 +47,7 @@ pub(crate) fn variant_name(kind_id: &[u8]) -> Option<&'static str> {
         kind::COCO => Some("Coco"),
         kind::COUNT_SKETCH_WITH_L2_NORM => Some("CountSketchWithL2Norm"),
         kind::COUNT_SKETCH => Some("CountSketch"),
-        kind::DDSKETCH => Some("DDSketch"),
+        kind::DDSKETCH | kind::DDSKETCH_WITH_SCALARS => Some("DDSketch"),
         kind::ELASTIC => Some("Elastic"),
         kind::HLL_ERTL => Some("HLL"),
         kind::KLL => Some("KLL"),
@@ -188,9 +190,9 @@ fn rebuild_variant(triple: &SketchState) -> Result<EhBucketSketch, RmpDecodeErro
         kind::COUNT_SKETCH => Ok(EhBucketSketch::CountSketch(
             crate::CountSketch::from_asapv1(&bytes)?,
         )),
-        kind::DDSKETCH => Ok(EhBucketSketch::DdSketch(crate::DdSketch::from_asapv1(
-            &bytes,
-        )?)),
+        kind::DDSKETCH | kind::DDSKETCH_WITH_SCALARS => Ok(EhBucketSketch::DdSketch(
+            crate::DdSketch::from_asapv1(&bytes)?,
+        )),
         kind::ELASTIC => Ok(EhBucketSketch::ElasticSketch(
             crate::ElasticSketch::from_asapv1(&bytes)?,
         )),
@@ -432,6 +434,7 @@ pub(crate) mod tests {
             assert_eq!(variant_name(kind_id), Some(name), "{kind_id:02x?}");
         }
         assert_eq!(variant_name(&[0xff, 0xff]), None);
+        assert_eq!(variant_name(kind::DDSKETCH_WITH_SCALARS), Some("DDSketch"));
 
         for sketch in populated_variants() {
             let emitted = sketch_state(&sketch).expect("state").kind_id;

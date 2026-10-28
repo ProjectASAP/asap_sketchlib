@@ -389,9 +389,6 @@ mod tests {
 
         let rows = vec![
             row("DDSketch alpha", dd, 0.25, F32, dd_ok),
-            row("DDSketch sum", dd, 3.0, Int, dd_ok),
-            row("DDSketch min", dd, 1.0, Int, dd_ok),
-            row("DDSketch max", dd, 2.0, F32, dd_ok),
             row("HLL hip_kxq0", hip, 1.5, F32, hip_ok),
             row("HLL hip_kxq1", hip, 2.5, F32, hip_ok),
             row("HLL hip_est", hip, 3.0, Int, hip_ok),

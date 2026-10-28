@@ -85,10 +85,22 @@ const GOLDEN_CMSSS_STR: &str =
     include_str!("../asapv1_golden/cmsspacesaving_i64_regular_2x3_strkeys.hex");
 const GOLDEN_CSSS_I64: &str =
     include_str!("../asapv1_golden/csspacesaving_f64_fast_2x4_i64keys.hex");
+// The retired DDSketch kinds `05 00` / `05 80`, decode-only.
 const GOLDEN_DD_POSITIVE: &str = include_str!("../asapv1_golden/ddsketch_positive_a001.hex");
 const GOLDEN_DD_SIGNED: &str = include_str!("../asapv1_golden/ddsketch_signed_a001.hex");
 const GOLDEN_DD_EMPTY: &str = include_str!("../asapv1_golden/ddsketch_empty_a001.hex");
 const GOLDEN_DD_DELTA: &str = include_str!("../asapv1_golden/ddsketch_signed_a001_delta.hex");
+// The current DDSketch kinds `05 01` / `05 81`.
+const GOLDEN_DD_BUCKETS_POSITIVE: &str =
+    include_str!("../asapv1_golden/ddsketch_buckets_positive_a001.hex");
+const GOLDEN_DD_BUCKETS_SIGNED: &str =
+    include_str!("../asapv1_golden/ddsketch_buckets_signed_a001.hex");
+const GOLDEN_DD_BUCKETS_EMPTY: &str =
+    include_str!("../asapv1_golden/ddsketch_buckets_empty_a001.hex");
+const GOLDEN_DD_BUCKETS_DELTA: &str =
+    include_str!("../asapv1_golden/ddsketch_buckets_signed_a001_delta.hex");
+const GOLDEN_DD_BUCKETS_ADMISSION: &str =
+    include_str!("../asapv1_golden/ddsketch_buckets_signed_a001_admission.hex");
 const GOLDEN_KLL_F64: &str = include_str!("../asapv1_golden/kll_f64_k200.hex");
 const GOLDEN_KLL_I64: &str = include_str!("../asapv1_golden/kll_i64_k200.hex");
 const GOLDEN_KLL_DYN_F64: &str = include_str!("../asapv1_golden/kll_dynamic_f64_k200.hex");
@@ -128,6 +140,8 @@ const GOLDEN_PYRAMID: &str =
 const GOLDEN_UNIVMON_Q: &str = include_str!("../asapv1_golden/univmon_q_i32_l3_c8_r3.hex");
 const GOLDEN_EHSL_CM: &str = include_str!("../asapv1_golden/ehsketchlist_cm_i32_fast_2x4.hex");
 const GOLDEN_EHSL_DD: &str = include_str!("../asapv1_golden/ehsketchlist_ddsketch_a001.hex");
+const GOLDEN_EHSL_DD_BUCKETS: &str =
+    include_str!("../asapv1_golden/ehsketchlist_ddsketch_buckets_a001.hex");
 const GOLDEN_EH: &str = include_str!("../asapv1_golden/eh_w100_k2_cm_2x4.hex");
 
 /// The known P12 register pattern shared by all three HLL fixtures.
@@ -1030,22 +1044,23 @@ fn kll_dynamic_i64_k200_matches_golden() {
 }
 
 // ---------------------------------------------------------------------------
-// DDSketch and its delta: golden decodes to the known stores and scalars and
-// round-trips, and the delta merged into the signed state gives the expected
-// stores and scalars. Encoding the known state is checked in
-// `src/sketches/ddsketch/wire.rs`, which can build it.
+// DDSketch and its delta: golden decodes to the known stores and round-trips,
+// and the delta merged into the signed state gives the expected stores.
+// Encoding the known state is checked in `src/sketches/ddsketch/wire.rs`,
+// which can build it. Each retired `05 00` / `05 80` fixture decodes, its
+// `sum` / `min` / `max` dropped, and re-encodes as its `ddsketch_buckets_*`
+// twin.
 // ---------------------------------------------------------------------------
 
 const DD_ALPHA: f64 = 0.01;
 
-/// Decodes `golden`, checks the decoded stores, zero count and scalars, and
+/// Decodes `golden`, checks the decoded stores and zero count, and
 /// re-serializes it.
 fn assert_dd_golden(
     golden: &str,
     positive: (&[u64], i32),
     negative: (&[u64], i32),
     zero_count: u64,
-    (sum, min, max): (f64, f64, f64),
 ) {
     let want = decode_hex(golden);
     let decoded = DdSketch::from_asapv1(&want).expect("decode");
@@ -1064,9 +1079,6 @@ fn assert_dd_golden(
         negative
     );
     assert_eq!(decoded.zero_count(), zero_count);
-    assert_eq!(decoded.sum().to_bits(), sum.to_bits());
-    assert_eq!(decoded.min().map(f64::to_bits), Some(min.to_bits()));
-    assert_eq!(decoded.max().map(f64::to_bits), Some(max.to_bits()));
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
 
@@ -1079,27 +1091,24 @@ fn dd_buckets(counts: &[u64], offset: i32) -> Vec<(i32, u64)> {
 }
 
 #[test]
-fn ddsketch_positive_a001_matches_golden() {
+fn ddsketch_buckets_positive_a001_matches_golden() {
     let counts = [1, 0, 127, 128, 300, 65536, 4294967296];
-    let scalars = (2181071000.0, 0.453125, 0.5078125);
-    assert_dd_golden(GOLDEN_DD_POSITIVE, (&counts, -40), (&[], 0), 0, scalars);
+    assert_dd_golden(GOLDEN_DD_BUCKETS_POSITIVE, (&counts, -40), (&[], 0), 0);
 }
 
 #[test]
-fn ddsketch_signed_a001_matches_golden() {
-    let scalars = (2523.90625, -0.016, 515.0);
+fn ddsketch_buckets_signed_a001_matches_golden() {
     assert_dd_golden(
-        GOLDEN_DD_SIGNED,
+        GOLDEN_DD_BUCKETS_SIGNED,
         (&[3, 0, 2], 310),
         (&[5, 1], -208),
         7,
-        scalars,
     );
 }
 
 #[test]
-fn ddsketch_empty_a001_matches_golden() {
-    let want = decode_hex(GOLDEN_DD_EMPTY);
+fn ddsketch_buckets_empty_a001_matches_golden() {
+    let want = decode_hex(GOLDEN_DD_BUCKETS_EMPTY);
     assert_eq!(
         DdSketch::new(DD_ALPHA).to_asapv1().expect("serialize"),
         want
@@ -1108,19 +1117,36 @@ fn ddsketch_empty_a001_matches_golden() {
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
 
+/// Each retired `05 00` state fixture decodes to its twin's stores and
+/// re-encodes as the twin.
 #[test]
-fn ddsketch_signed_a001_delta_matches_golden() {
-    let want = decode_hex(GOLDEN_DD_DELTA);
-    let indices = vec![-300, -100, -5, 7, 200, 400];
-    let deltas = vec![1, 127, 128, 256, 65536, 4294967296];
-    let negative_indices = vec![-208, -33, -1, 0, 130, 1000];
-    let negative_deltas = vec![2, 3, 3, 1, 3, 1];
+fn ddsketch_retired_fixtures_decode_to_their_bucket_twins() {
+    let pairs = [
+        (GOLDEN_DD_POSITIVE, GOLDEN_DD_BUCKETS_POSITIVE),
+        (GOLDEN_DD_SIGNED, GOLDEN_DD_BUCKETS_SIGNED),
+        (GOLDEN_DD_EMPTY, GOLDEN_DD_BUCKETS_EMPTY),
+        (GOLDEN_DD_ADMISSION, GOLDEN_DD_BUCKETS_ADMISSION),
+    ];
+    for (retired, twin) in pairs {
+        let decoded = DdSketch::from_asapv1(&decode_hex(retired)).expect("decode retired");
+        assert_eq!(decoded.to_asapv1().expect("re-encode"), decode_hex(twin));
+    }
+    let delta = DdSketchDelta::from_asapv1(&decode_hex(GOLDEN_DD_DELTA)).expect("retired delta");
+    assert_eq!(
+        delta.to_asapv1().expect("re-encode"),
+        decode_hex(GOLDEN_DD_BUCKETS_DELTA)
+    );
+}
+
+#[test]
+fn ddsketch_buckets_signed_a001_delta_matches_golden() {
+    let want = decode_hex(GOLDEN_DD_BUCKETS_DELTA);
     let delta = DdSketchDelta::new(
         DD_ALPHA,
-        indices.clone(),
-        deltas.clone(),
-        negative_indices.clone(),
-        negative_deltas.clone(),
+        vec![-300, -100, -5, 7, 200, 400],
+        vec![1, 127, 128, 256, 65536, 4294967296],
+        vec![-208, -33, -1, 0, 130, 1000],
+        vec![2, 3, 3, 1, 3, 1],
         9,
     )
     .expect("valid");
@@ -1129,18 +1155,8 @@ fn ddsketch_signed_a001_delta_matches_golden() {
     let decoded = DdSketchDelta::from_asapv1(&want).expect("decode");
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 
-    let mut state = DdSketch::from_asapv1(&decode_hex(GOLDEN_DD_SIGNED)).expect("state");
+    let mut state = DdSketch::from_asapv1(&decode_hex(GOLDEN_DD_BUCKETS_SIGNED)).expect("state");
     state.merge_delta(&decoded).expect("merge");
-
-    let gamma = (1.0 + DD_ALPHA) / (1.0 - DD_ALPHA);
-    let r = |k: i32| (1.0 + DD_ALPHA) * gamma.powf(f64::from(k));
-    let mut sum = 2523.90625;
-    for (k, c) in indices.iter().zip(&deltas) {
-        sum += r(*k) * *c as f64;
-    }
-    for (k, c) in negative_indices.iter().zip(&negative_deltas) {
-        sum += -r(*k) * *c as f64;
-    }
     assert_eq!(
         dd_buckets(state.positive_store_counts(), state.positive_store_offset()),
         [
@@ -1167,9 +1183,6 @@ fn ddsketch_signed_a001_delta_matches_golden() {
         ]
     );
     assert_eq!((state.zero_count(), state.get_count()), (16, 4295033384));
-    assert_eq!(state.sum(), sum);
-    assert_eq!(state.min(), Some(-r(1000)));
-    assert_eq!(state.max(), Some(r(400)));
 }
 
 // ---------------------------------------------------------------------------
@@ -1724,26 +1737,24 @@ fn cs_i64_regular_2x4_admission_matches_golden() {
 }
 
 #[test]
-fn ddsketch_signed_a001_admission_matches_golden() {
-    let scalars = (2523.90625, -0.016, 515.0);
-    let signed = DdSketch::from_asapv1(&decode_hex(GOLDEN_DD_SIGNED)).expect("decode");
+fn ddsketch_buckets_signed_a001_admission_matches_golden() {
+    let signed = DdSketch::from_asapv1(&decode_hex(GOLDEN_DD_BUCKETS_SIGNED)).expect("decode");
     assert_eq!(
         signed
             .with_admission_rate(0.125)
             .to_asapv1()
             .expect("serialize"),
-        decode_hex(GOLDEN_DD_ADMISSION)
+        decode_hex(GOLDEN_DD_BUCKETS_ADMISSION)
     );
     assert_dd_golden(
-        GOLDEN_DD_ADMISSION,
+        GOLDEN_DD_BUCKETS_ADMISSION,
         (&[3, 0, 2], 310),
         (&[5, 1], -208),
         7,
-        scalars,
     );
-    let decoded = DdSketch::from_asapv1(&decode_hex(GOLDEN_DD_ADMISSION)).expect("decode");
+    let decoded = DdSketch::from_asapv1(&decode_hex(GOLDEN_DD_BUCKETS_ADMISSION)).expect("decode");
     assert_eq!(decoded.admission_rate(), 0.125);
-    assert_eq!((decoded.get_count(), decoded.sum()), (18, 2523.90625));
+    assert_eq!(decoded.get_count(), 18);
 }
 
 // ---------------------------------------------------------------------------
@@ -2028,11 +2039,13 @@ fn ehsketchlist_cm_i32_fast_2x4_matches_golden() {
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
 }
 
-/// The nested blocks are `ddsketch_signed_a001`'s metadata and payload.
+/// The nested blocks are `ddsketch_buckets_signed_a001`'s metadata and payload,
+/// under kind_id `05 01`. The retired `ehsketchlist_ddsketch_a001`, nesting
+/// `05 00`, decodes to the same sketch and re-encodes as this fixture.
 #[test]
-fn ehsketchlist_ddsketch_a001_matches_golden() {
-    let want = decode_hex(GOLDEN_EHSL_DD);
-    let dd = DdSketch::from_asapv1(&decode_hex(GOLDEN_DD_SIGNED)).expect("dd");
+fn ehsketchlist_ddsketch_buckets_a001_matches_golden() {
+    let want = decode_hex(GOLDEN_EHSL_DD_BUCKETS);
+    let dd = DdSketch::from_asapv1(&decode_hex(GOLDEN_DD_BUCKETS_SIGNED)).expect("dd");
     let sketch = EhBucketSketch::DdSketch(dd);
     assert_eq!(sketch.to_asapv1().expect("serialize"), want);
 
@@ -2042,9 +2055,12 @@ fn ehsketchlist_ddsketch_a001_matches_golden() {
     };
     assert_eq!(
         inner.to_asapv1().expect("inner"),
-        decode_hex(GOLDEN_DD_SIGNED)
+        decode_hex(GOLDEN_DD_BUCKETS_SIGNED)
     );
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
+
+    let retired = EhBucketSketch::from_asapv1(&decode_hex(GOLDEN_EHSL_DD)).expect("retired");
+    assert_eq!(retired.to_asapv1().expect("re-encode"), want);
 }
 
 const EH_BUCKETS: [([[i32; 4]; 2], usize, u64, u64); 2] = [

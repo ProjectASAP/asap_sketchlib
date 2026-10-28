@@ -98,17 +98,17 @@ Compared against: the sorted stream. `DdSketch::get_value_at_quantile` targets t
 
 - placement
   - negative store, zero counter, positive store hold exactly the three class counts; `get_count() == arrivals`
-  - `sum() == stream sum`, bit for bit
   - first dense allocation: one 128-bucket chunk, seed value at its center; both signed stores
 - relative error `<= alpha`
   - `|quantile(q) - exact| <= alpha * |exact|`, across the sign boundary
   - `quantile(q)` non-decreasing in `q`, across the sign boundary
-  - single value `v`: `quantile(q) == v` for every `q`; `min`, `max`, `q=0`, `q=1` equal the tracked extremes
+  - single value `v`: `quantile(q)` within `alpha` of `v`, the same for every `q`
+  - `q=0`, `q=1` within `alpha` of the stream's minimum and maximum
 - merge
   - merged `quantile(q)` within `alpha` of the combined stream's exact value
   - different `alpha`: refused, receiver count unchanged; same `alpha`: merges
 - wire
-  - ASAPv1 keeps count, `alpha`, `sum`, quantiles; stream of NaN, ±inf, ±0, f64 extremes
+  - ASAPv1 keeps count, `alpha`, quantiles; stream of NaN, ±inf, ±0, f64 extremes
 
 ## elastic.rs — 12
 

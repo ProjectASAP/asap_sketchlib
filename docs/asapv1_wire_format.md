@@ -194,8 +194,10 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x03 0x80` | Count-Min-with-heap (CountMinSketchWithHeap) | CountMinSketchWithHeap delta | Section 3.23 | implemented |
 | `0x04 0x00` | Count Sketch | Count Sketch | Section 3.6 | implemented |
 | `0x04 0x80` | Count Sketch | Count Sketch delta | Section 3.23 | implemented |
-| `0x05 0x00` | DDSketch | Logarithmic bucket stores | Section 3.8 | implemented |
-| `0x05 0x80` | DDSketch | DDSketch delta | Section 3.23 | implemented |
+| `0x05 0x00` | DDSketch | Logarithmic bucket stores with `sum` / `min` / `max` | Section 3.8 | retired: decoded (scalars dropped), never encoded |
+| `0x05 0x01` | DDSketch | Logarithmic bucket stores | Section 3.8 | implemented |
+| `0x05 0x80` | DDSketch | DDSketch delta of `0x05 0x00` | Section 3.23 | retired: decoded, never encoded |
+| `0x05 0x81` | DDSketch | DDSketch delta | Section 3.23 | implemented |
 | `0x06 0x00` | KLL | Compact | Section 3.3 | implemented |
 | `0x06 0x01` | KLL dynamic | Dynamic | Section 3.3 | implemented |
 | `0x07 0x00` | Hydra | KLL counter | Section 3.9 | implemented |
@@ -350,7 +352,7 @@ Only these kinds carry it. A consumer multiplies these estimates by `1/p` and re
 | HLL | cardinality |
 | Count-Min | a key's frequency; a row's total |
 | Count Sketch | a key's frequency |
-| DDSketch | `count`, `sum` |
+| DDSketch | `count` |
 
 HLL admits by key: all updates of a key are admitted or none are.
 
@@ -729,41 +731,37 @@ Wire counter types are the base Count-Min's: **`"i32"`, `"i64"` and `"f64"`**. `
 
 **A producer-side constraint: a `NaN` key.** `TopKHeap` finds a resident by digest and then compares with `PartialEq`, and `NaN` never equals itself, so offering the same `NaN` key twice seats **two** entries rather than rescoring one. That state is reachable in memory and has **no encoding**: the encode-side duplicate check reads the two keys' bits, sees one key twice, and fails with the same complaint the decoder would make. Nothing repairs it on either door — a producer that inserts float keys must keep `NaN` out of a heap it intends to serialize.
 
-### 3.8: DDSketch payload (`0x05 0x00`)
+### 3.8: DDSketch payload (`0x05 0x01`)
 
-`DdSketch` maps the magnitude of a value `v` to the bucket index `floor(ln(|v|) / ln(gamma))`. Every payload carries all eight fields:
+`DdSketch` maps the magnitude of a value `v` to the bucket index `floor(ln(|v|) / ln(gamma))`. The state is the buckets alone; every payload carries all five fields:
 
 | Pos | Field | Type | Notes |
 | ----- | ------- | ------ | ------- |
 | 0 | `counts` | array | positive store: dense per-bucket sample counts, u64; the bucket index of `counts[i]` is `offset + i`. Carried verbatim, growth padding included |
 | 1 | `offset` | int | absolute bucket index of `counts[0]`; **signed**. `0` when `counts` is empty |
-| 2 | `sum` | f64 | sum of the values **as ingested**; `0.0` when empty |
-| 3 | `min` | f64 | smallest value as ingested; `+inf` when empty |
-| 4 | `max` | f64 | largest value as ingested; `-inf` when empty |
-| 5 | `negative_counts` | array | negative store, by magnitude: u64; the bucket index of `negative_counts[i]` is `negative_offset + i`. Carried verbatim, growth padding included. Empty when the sketch holds no negative value |
-| 6 | `negative_offset` | int | absolute bucket index of `negative_counts[0]`; **signed**. `0` when `negative_counts` is empty |
-| 7 | `zero_count` | u64 | number of values counted as zero |
+| 2 | `negative_counts` | array | negative store, by magnitude: u64; the bucket index of `negative_counts[i]` is `negative_offset + i`. Carried verbatim, growth padding included. Empty when the sketch holds no negative value |
+| 3 | `negative_offset` | int | absolute bucket index of `negative_counts[0]`; **signed**. `0` when `negative_counts` is empty |
+| 4 | `zero_count` | u64 | number of values counted as zero |
 
 **Metadata vs payload.** `alpha` shapes every bucket index and is chosen at construction, so per the config-to-metadata rule it is a structural param, like HLL's `precision`. `gamma`, `log_gamma` and `inv_log_gamma` are derived from it (`gamma = (1 + alpha) / (1 - alpha)`) and appear nowhere: the decoder re-derives them exactly as `DdSketch::new` does. The metadata is `metadata_version` then `alpha`.
 
 **DDSketch carries no hash-spec group.** It never hashes: it maps a raw `f64` through a logarithm and carries no hasher type parameter at all. The hash spec answers "how were keys hashed", and a sketch that does not hash has no truthful answer, so the group is omitted entirely. This is the Q-KLL precedent, and the reason DDSketch's metadata schema is not `HashProfile`-derived the way HLL's and Count-Min's are.
 
-**"As ingested" is not always "exact".** On the `add` path the three scalars see the caller's own `f64`, so they are exact. On the `apply_delta` path they do not: a delta names a bucket index rather than a value, so the sketch folds in that bucket's **representative** — `sum` accumulates `representative * delta.value`, and `min` / `max` compare against the representative. A sketch fed only deltas reports representative-based extrema. For a signed sum, cancellation can amplify relative error; it does not inherit the per-value relative accuracy `alpha`. They are still carried rather than recomputed: a sketch fed by both paths mixes exact and representative contributions, and no walk of the buckets reproduces the mix.
+**No `sum`, `min` or `max`.** Every DDSketch readout comes from the buckets: a quantile, `q = 0` and `q = 1` included, is its bucket's representative and within `alpha` of a sample. A sum, minimum or maximum of the values is not a DDSketch readout but a separate exact aggregate kept beside the sketch. Carrying them in the state would also break deltas: a delta names buckets, not values, so a receiver could only fold in bucket representatives and would end with different scalars than the producer.
 
-**`sum` saturates.** `add`, `apply_delta` and `merge` set `sum` to the new total when it is finite, else to `f64::MAX` with the total's sign.
+**The retired `0x05 0x00`.** It carried `sum` / `min` / `max` as three f64 fields between `offset` and `negative_counts` (eight fields in all). A decoder still accepts it, reads the three scalars as float64 (Section 4) and drops them, and the result re-encodes as `0x05 0x01`. Nothing encodes `0x05 0x00`; per Q-VER the id is never reused.
 
 **Decode rules.** Fail **closed** on each, with an error and never a panic:
 
-1. `kind_id` is `0x05 0x00`; any other id is rejected.
-2. The metadata map is exact: `metadata_version` and `alpha` are both required, `metadata_version` is `1`, and no other key is accepted except `admission_rate` (rule 8). `alpha` is a property of the *stored* sketch rather than of the target type, so it is echoed back into the expected block rather than pinned — the same treatment Count-Min gives `rows` / `cols`.
+1. `kind_id` is `0x05 0x01`, or the retired `0x05 0x00` with its eight-field payload; any other id is rejected.
+2. The metadata map is exact: `metadata_version` and `alpha` are both required, `metadata_version` is `1`, and no other key is accepted except `admission_rate` (rule 7). `alpha` is a property of the *stored* sketch rather than of the target type, so it is echoed back into the expected block rather than pinned — the same treatment Count-Min gives `rows` / `cols`.
 3. `alpha` is finite and strictly inside `(0, 1)` — both endpoints excluded, and `NaN` and the infinities rejected with them. Checked **before** the payload is read, so a crafted accuracy never reaches the store. Outside that range the `gamma` derivation is non-positive or infinite and every bucket index is meaningless.
 4. An empty `counts` sits at `offset == 0` and an empty `negative_counts` at `negative_offset == 0`.
 5. Each populated store has its highest bucket index (`offset + len - 1`, `negative_offset + len - 1`) representable as an `i32`, checked in `i64` so the check itself cannot overflow. Applied from the declared offset and the array length alone, **before** the store is rebuilt.
 6. The total sample count is the **checked** sum `sum(counts) + sum(negative_counts) + zero_count`; an overflowing total is rejected rather than wrapping into a count the quantile walk would disagree with.
-7. The scalars are consistent with that total: a zero total carries `sum == 0.0`, `min == +inf` and `max == -inf`; a non-zero one carries finite `sum` / `min` / `max` with `min <= max`. If `sum(negative_counts) == 0` and `zero_count == 0`, also `0 < min` and `sum >= min`.
-8. An optional `admission_rate` is accepted (Section 2, [admission rate](#admission-rate-admission_rate)).
+7. An optional `admission_rate` is accepted (Section 2, [admission rate](#admission-rate-admission_rate)).
 
-Rules 3, 5, 6 and 7 are enforced on the **encode** side too, so the format never emits bytes it would refuse to read back.
+Rules 3, 4, 5 and 6 are enforced on the **encode** side too, so the format never emits bytes it would refuse to read back.
 
 ### 3.9: Hydra payload (`0x07 0x00`-`0x07 0x04`)
 
@@ -1166,7 +1164,8 @@ The `kind_id` is carried rather than a name, because Section 1's registry is alr
 | `0x01 0x02` | HLL Ertl-MLE | `Hll(HyperLogLog<Ertl>)` | always |
 | `0x02 0x00` | Count-Min | `CountMinSketch(CountMinSketch<Vector2D<i32>, FastPath>)` | always |
 | `0x04 0x00` | Count Sketch | `CountSketch(CountSketch<Vector2D<i32>, FastPath>)` | always |
-| `0x05 0x00` | DDSketch | `DdSketch(DdSketch)` | always |
+| `0x05 0x01` | DDSketch | `DdSketch(DdSketch)` | always |
+| `0x05 0x00` | DDSketch, retired: decoded into the same arm, never encoded | `DdSketch(DdSketch)` | always |
 | `0x06 0x00` | KLL compact | `Kll(Kll)` | always |
 | `0x0b 0x00` | Elastic | `ElasticSketch(ElasticSketch)` | always |
 | `0x0c 0x00` | Coco | `CocoSketch(CocoSketch)` | always |
@@ -1328,7 +1327,7 @@ The encode side refuses a member that is not valid UTF-8.
 
 The encode side refuses a member that is not valid UTF-8 and a delta that breaks rule 5.
 
-### 3.23: Delta payloads (`0x01 0x81`, `0x01 0x82`, `0x02 0x80`, `0x03 0x80`, `0x04 0x80`, `0x05 0x80`, `0x0a 0x80`)
+### 3.23: Delta payloads (`0x01 0x81`, `0x01 0x82`, `0x02 0x80`, `0x03 0x80`, `0x04 0x80`, `0x05 0x81`, `0x0a 0x80`)
 
 A delta is a change to the state of its **state kind**, the kind_id with the variant's top bit cleared (Section 1).
 
@@ -1363,7 +1362,7 @@ Apply: `counts[i] += delta`.
 
 Apply: the matrix as Count-Min's; the state's heap and `key_type` become the delta's.
 
-**DDSketch** (`0x05 0x80`):
+**DDSketch** (`0x05 0x81`; the retired `0x05 0x80` has the same payload and still decodes):
 
 | Pos | Field | Type | Notes |
 | ----- | ------- | ------ | ------- |
@@ -1373,7 +1372,7 @@ Apply: the matrix as Count-Min's; the state's heap and `key_type` become the del
 | 3 | `negative_deltas` | array | one u64 count per index |
 | 4 | `zero_count` | u64 | added to the zero count |
 
-Apply: for each `k` in `indices`, then each `k` in `negative_indices`, in payload order, the count `c` is added to bucket `k`, `sum += r·c` (saturating, §3.8), `min = min(min, r)` and `max = max(max, r)`, where `r = (1 + alpha)·gamma^k`, negated for the negative store. A non-zero `zero_count` is added to the zero count, then `min = min(min, 0.0)` and `max = max(max, 0.0)`.
+Apply: for each `k` in `indices`, then each `k` in `negative_indices`, the count is added to bucket `k` of its store, and `zero_count` is added to the zero count. Nothing else changes, so a receiver fed deltas holds, bucket for bucket, the state the producer built from the same samples.
 
 **Decode rules.** Fail **closed** on each, with an error and never a panic:
 
@@ -1497,7 +1496,7 @@ Golden byte-vectors lock it.
 **Float fields.** Every float field is msgpack **float64** (`0xcb`). A decoder rejects an integer or a float32 in a float field, and a float in an integer field. The float fields are:
 
 - metadata: `alpha` (§3.8), `sample_rate` (§3.13), `admission_rate` (Section 2);
-- HLL HIP's `hip_kxq0` / `hip_kxq1` / `hip_est` (§3.1) and DDSketch's `sum` / `min` / `max` (§3.8);
+- HLL HIP's `hip_kxq0` / `hip_kxq1` / `hip_est` (§3.1) and the retired DDSketch `0x05 0x00`'s `sum` / `min` / `max` (§3.8);
 - `counts`, `heap_counts` and `deltas` elements where `counter_type` reads `"f64"` (§3.2, §3.6, §3.7, §3.10, §3.23, §3.24, §3.25);
 - `items` / `values` elements where `item_type` or `cell_item_type` reads `"f64"` (§3.3, §3.9, §3.13);
 - `keys` elements where `key_type` or `cell_key_type` reads `"f64"` (§3.5, §3.7, §3.9, §3.10, §3.15, §3.16, §3.23, §3.24, §3.25).
@@ -1615,7 +1614,7 @@ Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketc
 - **Q-ORDER**: a payload whose in-memory container order does not survive a rebuild **pins an emitted order**, as a cross-language contract. Heaps, arenas and hash maps all have this property, so the rule reaches Space-Saving's triples (§3.5, §3.24, §3.25), the top-k heap entries (§3.7), KMV's digests (§3.14), UniformSampling's entries (§3.13), UnivMon-Q's candidates and occurrences (§3.20), and every layer- and bucket-indexed array. Two sketches holding the same state then emit the same bytes whatever order they were built in, and a decoded sketch re-serializes byte-identically. The heap key comparator is the same everywhere: descending count, ties by heap key order (§3.5).
 - **Q-CAP**: **a declared capacity never sizes an allocation.** Every structure is built from the run the payload actually carries, and the declared bound is checked against that run first; a payload naming a capacity of `2^32 - 1` with two entries costs two entries. This holds for every `capacity` (§3.5, §3.24, §3.25), every `heap_size`, KMV's `k`, UniformSampling's `total_seen`, UnivMon-Q's `ordered_samples`, and Hydra's grid and counter dimensions.
 - **Q-KEYTYPE**: `key_type` names the **exact `OwnedDataInput` variant** and is never widened, wherever heap keys reach the wire — Space-Saving (§3.5), CountMinSketchWithHeap and CountSketchWithHeap (§3.7, §3.10), CountMinSketchWithSpaceSaving and CountSketchWithSpaceSaving (§3.24, §3.25), the UnivMon family (§3.15, §3.16) and Hydra's UnivMon counter (§3.9). A container whose keys mix variants has no single name and **fails to serialize**; `OwnedDataInput::I128` / `U128` have no msgpack integer form and are not wire types. An empty container emits `"u64"`, and a decoder rejects an empty container under any other name, so its `key_type` has one value rather than one per producer. That canonicalizes the key naming and nothing else: a Two-tier UnivMon pyramid still has more than one encoding per state, since layouts differing only in an `elephant_layers` at or above `layers` build identical layers, and an all-elephant pyramid carries its unused mouse dimensions on the wire regardless (§3.16). What holds everywhere is the round trip: a decoded container re-serializes byte-identically.
-- **Q-DERIVED**: state a decoder can recompute exactly is **not carried**, and state it cannot is. Recomputed: DDSketch's `count` from its stores and `zero_count` (§3.8), `ExponentialHistogram`'s `l2_mass` and `merge_norm` (§3.17), Elastic's `heavy_buckets` from the declared bucket count (§3.11), every heap's digest index and array order, and every summary a sketch answers from its own state. Carried: DDSketch's `sum` / `min` / `max`, Elastic's `stale_copies`, UnivMon's `update_mode`, `candidate_complete` and `bucket_size`, UnivMon-Q's `ever_evicted`, `source_id` and `next_sequence`, UniformSampling's `priorities`, `total_seen` and `rng_state`, and CountSketchWithL2Norm's `l2`. Where a cached derived field exists in memory, the encoder rejects a value that disagrees with what the decoder would recompute.
+- **Q-DERIVED**: state a decoder can recompute exactly is **not carried**, and state it cannot is. Recomputed: DDSketch's `count` from its stores and `zero_count` (§3.8), `ExponentialHistogram`'s `l2_mass` and `merge_norm` (§3.17), Elastic's `heavy_buckets` from the declared bucket count (§3.11), every heap's digest index and array order, and every summary a sketch answers from its own state. Carried: Elastic's `stale_copies`, UnivMon's `update_mode`, `candidate_complete` and `bucket_size`, UnivMon-Q's `ever_evicted`, `source_id` and `next_sequence`, UniformSampling's `priorities`, `total_seen` and `rng_state`, and CountSketchWithL2Norm's `l2`. Where a cached derived field exists in memory, the encoder rejects a value that disagrees with what the decoder would recompute. State the sketch's own readouts do not need is not carried either: DDSketch's `sum` / `min` / `max` were (`0x05 0x00`) and are now a separate exact aggregate, since nothing a DDSketch answers reads them (§3.8).
 - **Q-NIL**: an absent slot is msgpack **nil** (`0xc0`), never a sentinel value. An empty string is a reachable key in Coco (§3.12) and a reachable flow id in Elastic (§3.11), so `""` cannot double as "free"; UnivMon-Q's absent extrema are nil for the same reason (§3.20). Go must model these as nullable, never as a zero value standing in for absent.
 - **Q-RNG**: RNG state is carried **resumable** when the generator is cheap to reproduce in another language, and opaque otherwise. UniformSampling's `rng_state` is one SplitMix64 word with published constants, so a decoded sampler continues the same draw sequence (§3.13); KLL's `coin` carries the compaction RNG's position and its `compaction_seed` is opaque state Go preserves without interpreting (Q-KLL-SEED).
 - **Q-UNIVMON-SCOPE**: every layer of `0x10 0x00` and `0x11 0x00` is a CountSketchWithL2Norm with no tag, and another per-layer counter needs a new structural param or a new id. `UnivMonPool` is a `Vec<UnivMon>` free list of scratch `UnivMon`s — not of pyramids — with nothing an observer could query, so it is not a wire kind and holds no id.

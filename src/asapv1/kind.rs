@@ -12,8 +12,16 @@ pub(crate) const COUNT_MIN_WITH_HEAP: &[u8] = &[0x03, 0x00];
 pub(crate) const COUNT_MIN_WITH_HEAP_DELTA: &[u8] = &[0x03, 0x80];
 pub(crate) const COUNT_SKETCH: &[u8] = &[0x04, 0x00];
 pub(crate) const COUNT_SKETCH_DELTA: &[u8] = &[0x04, 0x80];
-pub(crate) const DDSKETCH: &[u8] = &[0x05, 0x00];
-pub(crate) const DDSKETCH_DELTA: &[u8] = &[0x05, 0x80];
+/// DDSketch: the two bucket stores and the zero count (spec §3.8).
+pub(crate) const DDSKETCH: &[u8] = &[0x05, 0x01];
+/// The DDSketch delta (spec §3.23).
+pub(crate) const DDSKETCH_DELTA: &[u8] = &[0x05, 0x81];
+/// Retired DDSketch kind that also carried `sum` / `min` / `max`: decoded,
+/// with those scalars dropped, and never encoded.
+pub(crate) const DDSKETCH_WITH_SCALARS: &[u8] = &[0x05, 0x00];
+/// Retired delta of [`DDSKETCH_WITH_SCALARS`]: decoded, never encoded. Its
+/// payload is the current delta's.
+pub(crate) const DDSKETCH_WITH_SCALARS_DELTA: &[u8] = &[0x05, 0x80];
 pub(crate) const KLL_FAMILY: u8 = 0x06;
 pub(crate) const KLL: &[u8] = &[KLL_FAMILY, 0x00];
 pub(crate) const KLL_DYNAMIC: &[u8] = &[KLL_FAMILY, 0x01];

@@ -34,7 +34,7 @@ fn a_ddsketch_envelope_round_trips_and_names_its_kind() {
         sketch.add(&(1.0 + v as f64));
     }
     let bytes = sketch.to_asapv1().expect("encode");
-    assert_kind(&bytes, 0x05, 0x00, "DDSketch");
+    assert_kind(&bytes, 0x05, 0x01, "DDSketch");
     let decoded = DdSketch::from_asapv1(&bytes).expect("decode");
     assert_eq!(decoded.get_count(), sketch.get_count(), "count");
     assert_eq!(decoded.alpha(), sketch.alpha(), "alpha");

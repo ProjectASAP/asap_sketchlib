@@ -174,6 +174,11 @@ impl EhBucketSketch {
     }
 
     /// Queries the sketch using a sketch-specific interpretation of `key`.
+    ///
+    /// A DDSketch answers a numeric `key` as a quantile and the commands
+    /// `"count"`, `"min"` and `"max"`; `"min"` and `"max"` are quantiles 0 and
+    /// 1, the lowest and highest occupied buckets' representatives, within
+    /// `alpha` of the smallest and largest samples.
     pub fn query(&self, key: &DataInput) -> Result<f64, &'static str> {
         match (self, key) {
             (EhBucketSketch::CountMinSketch(count_min), _) => Ok(count_min.estimate(key) as f64),
@@ -203,14 +208,22 @@ impl EhBucketSketch {
                 .ok_or("DDSketch has no samples"),
             (EhBucketSketch::DdSketch(dd), DataInput::Str(cmd)) => match *cmd {
                 "count" => Ok(dd.get_count() as f64),
-                "min" => dd.min().ok_or("DDSketch has no samples"),
-                "max" => dd.max().ok_or("DDSketch has no samples"),
+                "min" => dd
+                    .get_value_at_quantile(0.0)
+                    .ok_or("DDSketch has no samples"),
+                "max" => dd
+                    .get_value_at_quantile(1.0)
+                    .ok_or("DDSketch has no samples"),
                 _ => Err("Unsupported command for DDSketch"),
             },
             (EhBucketSketch::DdSketch(dd), DataInput::String(cmd)) => match cmd.as_str() {
                 "count" => Ok(dd.get_count() as f64),
-                "min" => dd.min().ok_or("DDSketch has no samples"),
-                "max" => dd.max().ok_or("DDSketch has no samples"),
+                "min" => dd
+                    .get_value_at_quantile(0.0)
+                    .ok_or("DDSketch has no samples"),
+                "max" => dd
+                    .get_value_at_quantile(1.0)
+                    .ok_or("DDSketch has no samples"),
                 _ => Err("Unsupported command for DDSketch"),
             },
             (EhBucketSketch::ElasticSketch(elastic), DataInput::String(s)) => {
@@ -345,6 +358,22 @@ mod tests {
         assert!((10.0..=30.0).contains(&q50), "unexpected q50 {q50}");
     }
 
+    /// `"min"` and `"max"` on a DDSketch read quantiles 0 and 1: the lowest and
+    /// highest buckets, within `alpha` of the smallest and largest samples.
+    #[test]
+    fn ddsketch_min_and_max_commands_are_within_alpha() {
+        let alpha = 0.01;
+        let mut dd = EhBucketSketch::DdSketch(DdSketch::new(alpha));
+        for v in [-3.5f64, 10.0, 20.0, 1234.5] {
+            dd.update(&DataInput::F64(v));
+        }
+        let min = dd.query(&DataInput::Str("min")).unwrap();
+        let max = dd.query(&DataInput::String("max".to_string())).unwrap();
+        assert!((min - -3.5).abs() <= (alpha + 1e-9) * 3.5, "{min}");
+        assert!((max - 1234.5).abs() <= (alpha + 1e-9) * 1234.5, "{max}");
+        assert_eq!(dd.query(&DataInput::Str("count")).unwrap(), 4.0);
+    }
+
     /// An ASAPv1 round trip of a nested DDSketch carries the sketch's whole
     /// state.
     #[test]
@@ -353,22 +382,15 @@ mod tests {
         for v in [10.0f64, 20.0, 30.0, 40.0] {
             dd.update(&DataInput::F64(v));
         }
-        let before = match &dd {
-            EhBucketSketch::DdSketch(inner) => {
-                (inner.get_count(), inner.sum(), inner.min(), inner.max())
-            }
+        let state = |sketch: &EhBucketSketch| match sketch {
+            EhBucketSketch::DdSketch(inner) => (inner.get_count(), inner.to_asapv1().unwrap()),
             _ => panic!("expected the DDSketch variant"),
         };
+        let before = state(&dd);
 
         let bytes = dd.to_asapv1().expect("encode");
         let restored = EhBucketSketch::from_asapv1(&bytes).expect("decode");
-        let after = match &restored {
-            EhBucketSketch::DdSketch(inner) => {
-                (inner.get_count(), inner.sum(), inner.min(), inner.max())
-            }
-            _ => panic!("expected the DDSketch variant"),
-        };
-        assert_eq!(after, before, "the nested sketch lost its running state");
+        assert_eq!(state(&restored), before, "the nested sketch lost its state");
 
         let q50 = restored
             .query(&DataInput::F64(0.5))
