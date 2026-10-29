@@ -87,7 +87,11 @@ fn tiny_values_are_counted_in_zero_bucket_and_survive_asapv1() {
     core.try_add(&-3.).unwrap();
     let decoded = DdSketch::from_asapv1(&core.to_asapv1().unwrap()).unwrap();
     assert_eq!(decoded.get_count(), 4);
-    assert_eq!(decoded.sum(), core.sum());
-    assert_eq!(decoded.min(), core.min());
-    assert_eq!(decoded.max(), core.max());
+    assert_eq!(decoded.zero_count(), 3);
+    for q in [0.0, 0.5, 1.0] {
+        assert_eq!(
+            decoded.get_value_at_quantile(q),
+            core.get_value_at_quantile(q)
+        );
+    }
 }

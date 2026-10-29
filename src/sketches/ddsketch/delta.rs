@@ -1,6 +1,7 @@
-//! The DDSketch delta, ASAPv1 kind `0x05 0x80` (`docs/asapv1_wire_format.md`
+//! The DDSketch delta, ASAPv1 kind `0x05 0x81` (`docs/asapv1_wire_format.md`
 //! §3.23). Its metadata is the state's (§3.8); its payload is
-//! `[indices, deltas, negative_indices, negative_deltas, zero_count]`.
+//! `[indices, deltas, negative_indices, negative_deltas, zero_count]`. The
+//! retired `0x05 0x80` has the same payload and still decodes.
 
 use std::ops::RangeInclusive;
 
@@ -11,7 +12,7 @@ use crate::asapv1::admission_rate;
 use crate::asapv1::delta::check_cells;
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
-use crate::asapv1::kind::DDSKETCH_DELTA;
+use crate::asapv1::kind::{DDSKETCH_DELTA, DDSKETCH_WITH_SCALARS_DELTA};
 
 use super::wire::{check_alpha, decode_metadata, encode_metadata};
 use super::{Buckets, DdSketch, GROW_CHUNK, ddsketch_indexable_bounds};
@@ -123,13 +124,15 @@ impl DdSketchDelta {
         Ok(envelope::encode(kind::DDSKETCH_DELTA, &metadata, &payload))
     }
 
-    /// Deserializes a delta from an ASAPv1 MessagePack envelope.
+    /// Deserializes a delta from an ASAPv1 MessagePack envelope of kind
+    /// `0x05 0x81`, or of the retired `0x05 0x80`, whose payload is the same.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != kind::DDSKETCH_DELTA {
+        if kind_id != DDSKETCH_DELTA && kind_id != DDSKETCH_WITH_SCALARS_DELTA {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "DDSketch delta kind_id mismatch: stored {kind_id:?}, expected {DDSKETCH_DELTA:?}"
+                "DDSketch delta kind_id mismatch: stored {kind_id:?}, expected {DDSKETCH_DELTA:?} \
+                 (or the retired {DDSKETCH_WITH_SCALARS_DELTA:?})"
             )));
         }
         let (alpha, admission_rate) = decode_metadata(metadata)?;
@@ -148,11 +151,10 @@ impl DdSketchDelta {
 }
 
 impl DdSketch {
-    /// Adds a delta to the sketch. Each positive bucket, then each negative
-    /// one, adds its count `c` and folds the bucket representative `r` into the
-    /// scalars (`sum += r * c`, saturating; `min` / `max`); a non-zero
-    /// `zero_count` adds to the zero count and folds `0.0` into `min` / `max`.
-    /// Fails, changing nothing, when the delta's `alpha` or admission rate
+    /// Adds a delta to the sketch: each count to its positive or negative
+    /// bucket, and `zero_count` to the zero count. The result is the state the
+    /// same samples' `add`s would have built, bucket for bucket. Fails,
+    /// changing nothing, when the delta's `alpha` or admission rate
     /// differs, the total sample count overflows, or a store would span past
     /// `i32`.
     pub fn merge_delta(&mut self, delta: &DdSketchDelta) -> Result<(), String> {
@@ -189,18 +191,9 @@ impl DdSketch {
                 };
                 store.ensure(k);
                 store.counts.as_mut_slice()[(k - store.offset) as usize] += c;
-                let magnitude = self.bin_representative(k);
-                let r = if negative { -magnitude } else { magnitude };
-                self.add_to_sum(r * c as f64);
-                self.min = self.min.min(r);
-                self.max = self.max.max(r);
             }
         }
-        if delta.zero_count != 0 {
-            self.zero_count += delta.zero_count;
-            self.min = self.min.min(0.0);
-            self.max = self.max.max(0.0);
-        }
+        self.zero_count += delta.zero_count;
         self.count = count;
         Ok(())
     }
@@ -254,30 +247,108 @@ mod tests {
     fn decode_rejects_another_kind_and_new_another_alpha() {
         let mut bytes = delta_bytes((&[0], &[1]), (&[], &[]), 0);
         assert!(DdSketchDelta::from_asapv1(&bytes).is_ok());
-        bytes[9] = 0x00;
+        // The retired delta kind has the same payload and still decodes.
+        bytes[9] = 0x80;
+        assert!(DdSketchDelta::from_asapv1(&bytes).is_ok());
+        bytes[9] = 0x01;
         assert!(DdSketchDelta::from_asapv1(&bytes).is_err());
         assert!(DdSketchDelta::new(1.0, vec![], vec![], vec![], vec![], 1).is_err());
     }
 
-    /// A delta onto an empty sketch moves `min` / `max` to the representatives
-    /// it adds, and its zero count folds in `0.0`.
+    /// The changed buckets of a producer, sent as deltas after each batch of
+    /// updates, rebuild the producer's state bit for bit at the receiver.
     #[test]
-    fn merge_delta_folds_the_scalars() {
+    fn deltas_rebuild_the_producer_bit_for_bit() {
+        /// The cells of `after` that differ from `before`, as a delta.
+        fn diff(before: &DdSketch, after: &DdSketch) -> DdSketchDelta {
+            let cells = |store: &Buckets, earlier: &Buckets| {
+                let count_at = |s: &Buckets, k: i32| {
+                    let i = i64::from(k) - i64::from(s.offset);
+                    usize::try_from(i)
+                        .ok()
+                        .and_then(|i| s.counts.as_slice().get(i).copied())
+                        .unwrap_or(0)
+                };
+                let mut indices = Vec::new();
+                let mut deltas = Vec::new();
+                if let Some((l, r)) = store.range() {
+                    for k in l..=r {
+                        let c = count_at(store, k) - count_at(earlier, k);
+                        if c != 0 {
+                            indices.push(k);
+                            deltas.push(c);
+                        }
+                    }
+                }
+                (indices, deltas)
+            };
+            let (indices, deltas) = cells(&after.positive_store, &before.positive_store);
+            let (negative_indices, negative_deltas) =
+                cells(&after.negative_store, &before.negative_store);
+            DdSketchDelta::new(
+                ALPHA,
+                indices,
+                deltas,
+                negative_indices,
+                negative_deltas,
+                after.zero_count - before.zero_count,
+            )
+            .unwrap()
+        }
+
+        let batches: [&[f64]; 3] = [
+            &[3.0, 3.1, 250.0, -7.5],
+            &[0.0, 1e-9, 3.0, 9_000.0, -0.004],
+            &[42.0, -7.5, 0.0, 1.0],
+        ];
+        let mut producer = DdSketch::new(ALPHA);
+        let mut receiver = DdSketch::new(ALPHA);
+        for batch in batches {
+            let before = producer.clone();
+            for v in batch {
+                producer.add(v);
+            }
+            let wire = diff(&before, &producer).to_asapv1().unwrap();
+            receiver
+                .merge_delta(&DdSketchDelta::from_asapv1(&wire).unwrap())
+                .unwrap();
+            assert_eq!(receiver.get_count(), producer.get_count());
+            for q in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                assert_eq!(
+                    receiver.get_value_at_quantile(q),
+                    producer.get_value_at_quantile(q)
+                );
+            }
+        }
+        // Stores grown in a different order still hold the same cells.
+        let cells = |s: &DdSketch| {
+            let nonzero = |counts: &[u64], offset: i32| {
+                counts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| **c != 0)
+                    .map(|(i, c)| (offset + i as i32, *c))
+                    .collect::<Vec<_>>()
+            };
+            (
+                nonzero(s.positive_store_counts(), s.positive_store_offset()),
+                nonzero(s.negative_store_counts(), s.negative_store_offset()),
+                s.zero_count(),
+            )
+        };
+        assert_eq!(cells(&receiver), cells(&producer));
+    }
+
+    /// A zero-count-only delta adds to the zero count and the total.
+    #[test]
+    fn merge_delta_adds_the_zero_count() {
         let mut sketch = DdSketch::new(ALPHA);
         let delta = DdSketchDelta::new(ALPHA, vec![10], vec![2], vec![], vec![], 0).unwrap();
         sketch.merge_delta(&delta).unwrap();
-        let r = (1.0 + ALPHA) * ((1.0 + ALPHA) / (1.0 - ALPHA)).powf(10.0);
-        assert_eq!(
-            (sketch.min(), sketch.max(), sketch.sum()),
-            (Some(r), Some(r), 2.0 * r)
-        );
-
         let zeros = DdSketchDelta::new(ALPHA, vec![], vec![], vec![], vec![], 3).unwrap();
         sketch.merge_delta(&zeros).unwrap();
-        assert_eq!(
-            (sketch.min(), sketch.zero_count(), sketch.get_count()),
-            (Some(0.0), 3, 5)
-        );
+        assert_eq!((sketch.zero_count(), sketch.get_count()), (3, 5));
+        assert_eq!(sketch.get_value_at_quantile(0.0), Some(0.0));
     }
 
     #[test]
@@ -314,9 +385,6 @@ mod tests {
                 counts: Vector1D::from_vec(vec![1]),
                 offset: i32::MAX - 1,
             },
-            sum: 1e300,
-            min: 1e300,
-            max: 1e300,
             negative_store: Buckets::new(),
             zero_count: 0,
             admission_rate: 1.0,

@@ -202,9 +202,8 @@ fn apply_delta(&mut self, delta: DdSketchBucketDelta)
 
 `bucket_index_for` exposes the logarithmic mapping so a worker can hold
 one-byte counters over the same bucket space; it returns `None` for any
-value `add` would itself drop. `apply_delta` advances `count` exactly and
-advances `sum`/`min`/`max` with the bucket's representative value — the
-same α-bounded estimate a deserialize-and-recompute produces.
+value `add` would itself drop. `apply_delta` adds the count to its bucket and
+to `count`, exactly as the samples' `add`s would.
 
 A delta naming an index outside the store's own range is **dropped**, not
 allocated: the worker's index space follows its own α, so a delta from a

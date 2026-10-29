@@ -34,9 +34,14 @@ the type-erased dispatch path.
 fn get_value_at_quantile(&self, q: f64) -> Option<f64>
 fn quantile_interpolated(&self, q: f64) -> Result<Option<f64>, String>
 fn get_count(&self) -> u64
-fn min(&self) -> Option<f64>
-fn max(&self) -> Option<f64>
 ```
+
+Every answer is a bucket's representative: within `alpha` of a sample of
+indexable magnitude, the extremes included (`q <= 0` reads the lowest occupied
+bucket, `q >= 1` the highest). A nonzero magnitude below the indexable range is
+counted as zero and reads `0.0`. The sketch keeps no sum, minimum or maximum: those are not DDSketch
+readouts, and a caller that needs them keeps a separate exact aggregate beside
+the sketch.
 
 ## Merge
 
@@ -51,24 +56,23 @@ fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
-These produce/consume the **ASAPv1** wire envelope (kind `0x05 0x00`) — see the
+These produce the **ASAPv1** wire envelope of kind `0x05 0x01`, and consume it
+or the retired `0x05 0x00` (whose `sum` / `min` / `max` are dropped) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). DDSketch never hashes its
 inputs, so the metadata carries **no hash-spec group**: it is `metadata_version`
 plus `alpha`, the sketch's one construction parameter. `gamma` and its logs are
 derived from `alpha` and never reach the wire.
 
-Every payload is `[counts, offset, sum, min, max, negative_counts,
-negative_offset, zero_count]`: the positive store and the negative-magnitude
-store carried verbatim (the bucket index of `counts[i]` is `offset + i`), the
-three scalars the buckets do not determine, and the zero count. `count` is
-**not** carried — it is the sum of both stores and `zero_count`, recovered
-exactly on decode. `sum`, `min` and `max` come back exactly rather than as
-α-bounded bucket estimates, so a decoded sketch re-serializes byte-identically.
+Every payload is `[counts, offset, negative_counts, negative_offset,
+zero_count]`: the positive store and the negative-magnitude store carried
+verbatim (the bucket index of `counts[i]` is `offset + i`) and the zero count.
+`count` is **not** carried — it is the sum of both stores and `zero_count`,
+recovered exactly on decode, so a decoded sketch re-serializes byte-identically.
 
 Bucket indices are signed, so either offset may be negative. Decode rejects a
 `metadata_version` other than `1`, an `alpha` outside `(0, 1)`, a store span
-past `i32`, a non-zero offset on an empty store, counts that overflow the total,
-and scalars inconsistent with that total; `to_asapv1` enforces the same
+past `i32`, a non-zero offset on an empty store, and counts that overflow the
+total; `to_asapv1` enforces the same
 rules, so the format never emits bytes it would refuse to read back.
 
 ## Deltas
@@ -91,12 +95,14 @@ fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 fn merge_delta(&mut self, delta: &DdSketchDelta) -> Result<(), String>
 ```
 
-A `DdSketchDelta` is the ASAPv1 delta kind `0x05 0x80`: the changed buckets of
+A `DdSketchDelta` is the ASAPv1 delta kind `0x05 0x81` (the retired `0x05 0x80`
+has the same payload and still decodes): the changed buckets of
 each store as strictly ascending bucket indices inside the range `alpha`'s
 mapping produces, the non-zero count added to each, and a count added to the
 zero count. `new` and the decoder refuse anything else. `merge_delta` adds each
-count to its bucket, growing the store as insertion does, and folds the
-bucket's representative into `sum`, `min` and `max`; a delta of another
+count to its bucket, growing the store as insertion does, and the zero count to
+the zero count, so the receiver holds the producer's buckets exactly; a delta of
+another
 `alpha` or admission rate, one that overflows the total count, or one that
 would grow a store past `i32`, fails and leaves the sketch unchanged.
 
@@ -111,8 +117,8 @@ fn with_admission_rate(self, p: f64) -> Self
 ```
 
 `p` is the probability with which each update was admitted, `1` unless set.
-`count` and `sum` cover admitted samples alone; a consumer divides them by `p`.
-Quantiles, `min` and `max` need no rescaling. The ASAPv1 metadata carries `p` as
+`count` covers admitted samples alone; a consumer divides it by `p`. Quantiles
+need no rescaling. The ASAPv1 metadata carries `p` as
 its last key, `admission_rate`, when `p < 1`; a `p` outside `(0, 1]` fails to
 serialize. `merge` and `merge_delta` fail when the two rates differ. A sketch
 nested in another kind (`EhBucketSketch`, `Hydra`, CountMinSketchWithHeap, CountSketchWithHeap, Elastic) must

@@ -105,23 +105,6 @@ proptest! {
         prop_assert_eq!(sketch.get_count(), values.len() as u64, "total count");
     }
 
-    /// `sum` is carried on the wire and read back through `sum()`, so it is
-    /// the running total of the stream, not an estimate off the buckets.
-    #[test]
-    fn ddsketch_sum_tracks_the_stream(
-        alpha in alpha(),
-        values in signed_values(120),
-    ) {
-        let sketch = dd_of(alpha, &values);
-        let want = values.iter().fold(0.0f64, |acc, v| acc + v);
-
-        prop_assert_eq!(
-            sketch.sum().to_bits(), want.to_bits(),
-            "alpha={}: sum {} over {} values, running total {}",
-            alpha, sketch.sum(), values.len(), want
-        );
-    }
-
     /// The first dense allocation is one `GROW_CHUNK` centred on the value's
     /// bucket, in both signed stores. The layout
     /// reaches the wire as `positive_store_counts` / `positive_store_offset`, where the Go
@@ -148,11 +131,10 @@ proptest! {
 
     // ===== The paper's guarantee =====
 
-    /// Sharper than the paper's bound: the sketch tracks the extremes outside
-    /// the buckets and clamps a bucket answer to them, so a lone value comes
-    /// back unrounded at every quantile.
+    /// A lone value comes back as its bucket's representative at every
+    /// quantile, within alpha of the value.
     #[test]
-    fn ddsketch_returns_a_lone_value_exactly(
+    fn ddsketch_returns_a_lone_value_within_alpha(
         alpha in alpha(),
         value in 1e-6f64..1e9,
         q in 0.0f64..=1.0,
@@ -160,24 +142,28 @@ proptest! {
         let sketch = dd_of(alpha, &[value]);
         let answer = sketch.get_value_at_quantile(q).expect("a non-empty sketch answers");
 
-        prop_assert_eq!(answer.to_bits(), value.to_bits());
+        prop_assert!(
+            (answer - value).abs() <= value * (alpha + 1e-9),
+            "alpha={} q={}: got {}, value {}", alpha, q, answer, value
+        );
+        prop_assert_eq!(Some(answer), sketch.get_value_at_quantile(0.0));
     }
 
-    /// Also sharper than the bound: q=0 and q=1 read the tracked extremes
-    /// rather than a bucket, so they are exact and say nothing about alpha.
+    /// q=0 and q=1 read the lowest and highest occupied buckets, within alpha
+    /// of the smallest and largest values of the stream.
     #[test]
-    fn ddsketch_returns_the_signed_extremes_exactly(
+    fn ddsketch_returns_the_signed_extremes_within_alpha(
         alpha in alpha(),
         values in signed_values(120),
     ) {
         let sketch = dd_of(alpha, &values);
         let ordered = sorted(&values);
-        let last = ordered.len() - 1;
+        let (min, max) = (ordered[0], ordered[ordered.len() - 1]);
+        let low = sketch.get_value_at_quantile(0.0).expect("q=0");
+        let high = sketch.get_value_at_quantile(1.0).expect("q=1");
 
-        prop_assert_eq!(sketch.min(), Some(ordered[0]), "min over {} values", ordered.len());
-        prop_assert_eq!(sketch.max(), Some(ordered[last]), "max over {} values", ordered.len());
-        prop_assert_eq!(sketch.get_value_at_quantile(0.0), Some(ordered[0]), "q=0");
-        prop_assert_eq!(sketch.get_value_at_quantile(1.0), Some(ordered[last]), "q=1");
+        prop_assert!((low - min).abs() <= min.abs() * (alpha + 1e-9), "q=0: {} vs {}", low, min);
+        prop_assert!((high - max).abs() <= max.abs() * (alpha + 1e-9), "q=1: {} vs {}", high, max);
     }
 
     /// The paper's guarantee across the sign boundary, against the exact
@@ -292,7 +278,6 @@ proptest! {
             sketch,
             |s: &DdSketch| s.get_count(),
             |s: &DdSketch| s.alpha().to_bits(),
-            |s: &DdSketch| s.sum().to_bits(),
             |s: &DdSketch| QUANTILES.iter()
                 .map(|q| s.get_value_at_quantile(*q).map(f64::to_bits))
                 .collect::<Vec<_>>(),
