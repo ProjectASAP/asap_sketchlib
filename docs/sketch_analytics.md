@@ -817,7 +817,7 @@ A list of Count-Min, Count Sketch and HyperLogLog sketches that share one hash p
 - **Memory.**
   Each memory function is at least `memory_bytes()` after building with the same inputs, and equal where its section gives an exact formula.
 - **Ops.**
-  A build with an op-counting feature counts the ops one call performs, and a test checks the count is at most the formula, at two or more parameter sizes.
+  A build with the `op-count` feature counts the ops one call performs, and a test checks the count is at most the formula, at two or more parameter sizes.
 - **Error.**
   Over independent seeds, the fraction of estimates off by more than `ε` is tested against `δ` as a binomial, never on one fixed seed.
   A deterministic bound is tested on every run, and every test is mutation-checked: breaking the estimator turns it red.

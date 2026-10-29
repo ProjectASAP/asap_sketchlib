@@ -18,6 +18,10 @@ signals a backwards-compatible change.
   query and merge ops, error bound per statistic, and the parameters that
   meet a target `(ε, δ)`, as `docs/sketch_analytics.md` defines them.
 - **`StatisticKind::QuantileInterpolated`**, answered by `DDSketch`.
+- **`op-count` feature**: `analytics::ops::count(f)` returns the ops `f`
+  performed on this thread, one per counter, register, bucket or item read or
+  written, for testing the analytics op formulas. Off by default, and free
+  when off.
 - **Family-capability table** (`asap_sketchlib::capability`, re-exported at
   the root): `SketchAlgorithm::capability()` gives, for each public sketch
   family, the `StatisticKind`s one state answers, whether states merge and

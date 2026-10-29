@@ -34,6 +34,8 @@ proptest = "1.11.0"
 default = []
 experimental = []
 octo-runtime = ["core_affinity", "crossbeam-channel"]
+# Counts the ops each call performs, for the analytics op-count tests.
+op-count = []
 
 [lib]
 crate-type = ["rlib"]

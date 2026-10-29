@@ -203,6 +203,7 @@ impl<T> Vector2D<T> {
         F: Fn(&mut T, V),
         T: Clone,
     {
+        crate::analytics::ops::add(1);
         let idx = row * self.cols + col;
         op(&mut self.data[idx], value);
     }
@@ -263,6 +264,7 @@ impl<T> Vector2D<T> {
         F: Fn(&mut T, &V, usize),
         V: Clone,
     {
+        crate::analytics::ops::add(self.rows);
         for row in 0..self.rows {
             let col = self.col_for_row(hashed_val, row);
             let idx = row * self.cols + col;
@@ -306,6 +308,7 @@ impl<T> Vector2D<T> {
     where
         T: Clone,
     {
+        crate::analytics::ops::add(1);
         self.data[row * self.cols + col].clone()
     }
 
@@ -344,6 +347,7 @@ impl<T> Vector2D<T> {
         F: Fn(&T, usize, &Hash) -> R,
         R: PartialOrd,
     {
+        crate::analytics::ops::add(self.rows);
         let c0 = self.col_for_row(hashed_val, 0);
         let mut min = op(&self.data[c0], 0, hashed_val);
         for row in 1..self.rows {
@@ -395,6 +399,7 @@ impl<T> Vector2D<T> {
         Hash: MatrixFastHash,
         F: Fn(&T, usize, &Hash) -> f64,
     {
+        crate::analytics::ops::add(2 * self.rows);
         let mut estimates = RowEstimates::with_capacity(self.rows);
         for row in 0..self.rows {
             let col = self.col_for_row(hashed_val, row);
@@ -440,6 +445,7 @@ impl<T> Vector2D<T> {
         F: Fn(&T, usize, &MatrixHash) -> R,
         R: PartialOrd,
     {
+        crate::analytics::ops::add(self.rows);
         let c0 = self.col_for_row(hashed_val, 0);
         let mut max = op(&self.data[c0], 0, hashed_val);
         for row in 1..self.rows {
@@ -482,6 +488,7 @@ impl<T> Vector2D<T> {
         F: Fn(&T, &Q, usize, &MatrixHash) -> R,
         R: PartialOrd,
     {
+        crate::analytics::ops::add(self.rows);
         let c0 = self.col_for_row(hashed_val, 0);
         let mut min = op(&self.data[c0], query_key, 0, hashed_val);
         for row in 1..self.rows {
@@ -524,6 +531,7 @@ impl<T> Vector2D<T> {
         F: Fn(&T, &Q, usize, &MatrixHash) -> R,
         R: PartialOrd,
     {
+        crate::analytics::ops::add(self.rows);
         let c0 = self.col_for_row(hashed_val, 0);
         let mut max = op(&self.data[c0], query_key, 0, hashed_val);
         for row in 1..self.rows {
@@ -567,6 +575,7 @@ impl<T> Vector2D<T> {
     where
         F: Fn(&T, &Q, usize, &MatrixHash) -> f64,
     {
+        crate::analytics::ops::add(2 * self.rows);
         let mut estimates = RowEstimates::with_capacity(self.rows);
         for row in 0..self.rows {
             let col = self.col_for_row(hashed_val, row);
@@ -626,6 +635,7 @@ impl<T> Vector2D<T> {
     where
         F: Fn(R, &T, &Q, usize, &MatrixHash) -> R,
     {
+        crate::analytics::ops::add(self.rows);
         let mut acc = init;
         for row in 0..self.rows {
             let col = self.col_for_row(hashed_val, row);
@@ -683,6 +693,7 @@ where
 
     #[inline(always)]
     fn increment_by_row(&mut self, row: usize, col: usize, value: Self::Counter) {
+        crate::analytics::ops::add(1);
         let idx = row * self.cols + col;
         self.data[idx] += value;
     }

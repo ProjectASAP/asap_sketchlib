@@ -5,6 +5,8 @@
 //! calls its functions directly, and a caller with a target `(ε, δ)` first
 //! calls [`SketchAnalytics::params_for`].
 
+pub mod ops;
+
 pub use crate::capability::StatisticKind;
 
 /// The `δ` a contract whose `δ` the caller chooses uses when

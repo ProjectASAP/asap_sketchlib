@@ -212,6 +212,7 @@ cargo test --all-features
 - `--all-features` enables every Cargo feature, so all feature-gated code is compiled and tested. The features include:
   - `experimental` — enables sketches and APIs that are still under development and may change without notice.
   - `octo-runtime` — enables the Octo multi-threaded runtime (pulls in `core_affinity` and `crossbeam-channel`).
+  - `op-count` — counts the ops each call performs, for testing the [sketch analytics](docs/sketch_analytics.md) op formulas.
 
 To build or test with a specific feature:
 
