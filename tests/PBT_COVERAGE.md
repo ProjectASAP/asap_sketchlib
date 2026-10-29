@@ -384,23 +384,23 @@ Compared against: an exact `HashMap` count. Every bound is deterministic.
 - structure
   - `len() == min(distinct, capacity)`; `len() <= capacity`
   - every `error <= min_count`
-  - `sum(counts) == total() == arrivals`
-  - full summary: `min_count >= smallest counter`; `min_count * capacity <= total()`
+  - `sum(counts) == arrivals`
+  - full summary: `min_count >= smallest counter`; `min_count * capacity <= arrivals`
   - `top_k(k)`: `min(k, len)` entries, non-increasing, each matching the table; nothing above the cut left out
   - a guaranteed key's truth `>` every dropped key's truth
   - `min_count` non-decreasing over the stream
 - domain `<= capacity`
   - exact: `count == truth`; `error == 0`; `upper_bound == truth`; order-free
-  - `update_weighted(k, w) == w x update(k)`: counters, total, `min_count`
+  - `update_weighted(k, w) == w x update(k)`: counters, `min_count`
   - `update_batch == one at a time`
   - `clear` then a different stream `== fresh`
 - merge
-  - bounds hold on `xs ++ ys` after merging two capacities; `total()` adds
-  - `merge(s, empty) == s`: counters, len, total, `min_count`
+  - bounds hold on `xs ++ ys` after merging two capacities
+  - `merge(s, empty) == s`: counters, len, `min_count`
   - `merge(a, b) == merge(b, a)`; domain `capacity + 3`
   - after two narrow merges and a tail: `upper_bound(k) >= truth(k)` for every key
 - wire
-  - ASAPv1 at `edge_dimension` keeps `total()`, `min_count`, 64 `(estimate, error)`; after merging a 1-counter summary whose ceiling no counter holds
+  - ASAPv1 at `edge_dimension` keeps `min_count`, 64 `(estimate, error)`; after merging a 1-counter summary whose ceiling no counter holds
 
 ## topk_wrappers.rs — 15
 

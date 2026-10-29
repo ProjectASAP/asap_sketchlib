@@ -280,7 +280,6 @@ mod tests {
         assert_eq!(sk.estimate(&DataInput::U64(2)), 7);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(1)), 1);
         assert_eq!(sk.space_saving().estimate(&DataInput::U64(2)), 7);
-        assert_eq!(sk.space_saving().total(), 8);
         assert_eq!((sk.rows(), sk.cols(), sk.capacity()), (3, 1024, 8));
     }
 
@@ -345,7 +344,6 @@ mod tests {
         assert_eq!(heap_a.estimate(&DataInput::U64(3)), 6);
         assert!(heap_a.heap().find(&DataInput::U64(3)).is_none());
         assert_eq!(ranked(&ss_a.top_k(1)), vec![(3, 6)]);
-        assert_eq!(ss_a.space_saving().total(), 16);
     }
 
     #[test]

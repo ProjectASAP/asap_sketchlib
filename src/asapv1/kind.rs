@@ -47,8 +47,18 @@ pub(crate) const BLOOM: &[u8] = &[0x17, 0x01];
 /// Retired Bloom kind that also carried the `inserted` counter: decoded, with
 /// the counter dropped, and never encoded.
 pub(crate) const BLOOM_WITH_INSERTED: &[u8] = &[0x17, 0x00];
-pub(crate) const SPACE_SAVING: &[u8] = &[0x18, 0x00];
+/// Space-Saving: the answer triples and the ceiling (spec §3.5).
+pub(crate) const SPACE_SAVING: &[u8] = &[0x18, 0x01];
+/// Retired Space-Saving kind that also carried `total`: decoded, with `total`
+/// dropped, and never encoded.
+pub(crate) const SPACE_SAVING_WITH_TOTAL: &[u8] = &[0x18, 0x00];
 pub(crate) const COUNT_SKETCH_WITH_L2_NORM: &[u8] = &[0x19, 0x00];
 pub(crate) const UNIVMON_Q: &[u8] = &[0x1a, 0x00];
-pub(crate) const COUNT_MIN_WITH_SPACE_SAVING: &[u8] = &[0x1e, 0x00];
-pub(crate) const COUNT_SKETCH_WITH_SPACE_SAVING: &[u8] = &[0x1f, 0x00];
+/// Count-Min with a Space-Saving summary, without its `total` (spec §3.24).
+pub(crate) const COUNT_MIN_WITH_SPACE_SAVING: &[u8] = &[0x1e, 0x01];
+/// Retired kind whose summary also carried `total`: decoded, never encoded.
+pub(crate) const COUNT_MIN_WITH_SPACE_SAVING_WITH_TOTAL: &[u8] = &[0x1e, 0x00];
+/// Count Sketch with a Space-Saving summary, without its `total` (spec §3.25).
+pub(crate) const COUNT_SKETCH_WITH_SPACE_SAVING: &[u8] = &[0x1f, 0x01];
+/// Retired kind whose summary also carried `total`: decoded, never encoded.
+pub(crate) const COUNT_SKETCH_WITH_SPACE_SAVING_WITH_TOTAL: &[u8] = &[0x1f, 0x00];

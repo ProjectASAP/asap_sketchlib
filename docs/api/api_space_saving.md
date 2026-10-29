@@ -67,7 +67,6 @@ fn is_guaranteed(&self, value: &DataInput) -> bool
 fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, u64, u64)>
 fn entries(&self) -> Vec<(OwnedDataInput, u64, u64)>
 fn min_count(&self) -> u64
-fn total(&self) -> u64
 fn len(&self) -> usize
 fn capacity(&self) -> usize
 ```
@@ -111,8 +110,11 @@ a key both sides evicted cannot be recovered. `merge_equivalence_battery` does
 not apply for that reason.
 
 The `min_count` a one-sided key picks up is weight the stream never carried, so
-after a merge the counts sum to more than `total` and `estimate / total` is no
-longer a frequency.
+after a merge the counts can sum to more than the weight both streams recorded.
+
+The summary keeps no total weight: no readout above needs it, and after a merge
+it cannot be read off the counts. A caller that needs the stream's total weight
+keeps a separate exact count beside the summary.
 
 ## Serialization
 
@@ -121,17 +123,19 @@ fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
-These produce/consume the **ASAPv1** wire envelope (kind `0x18 0x00`) — see the
+These produce/consume the **ASAPv1** wire envelope (kind `0x18 0x01`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). The impl is bounded on
 `H: HashProfile`, so a summary built with an unprofiled hasher cannot serialize
 at all.
 
-A summary travels as `capacity`, `total`, the unmonitored ceiling, and one
+A summary travels as `capacity`, the unmonitored ceiling, and one
 `(key, count, error)` triple per monitored key. The bucket and counter lists and
 the key index all follow from the triples and are rebuilt on load, so no arena
 index reaches the wire and no crafted state can point one out of bounds or into
 a loop. `capacity` and the key type are ASAPv1 metadata; the payload is
-`[keys, counts, errors, total, discarded_max]`.
+`[keys, counts, errors, discarded_max]`. The retired kind `0x18 0x00`, whose
+payload also carried a `total`, still decodes with that field dropped and is
+never encoded.
 
 Keys are `OwnedDataInput`s, so the key type is a runtime property: the metadata's
 `key_type` names the **exact** variant (`"i32"` stays `"i32"`, never widened to

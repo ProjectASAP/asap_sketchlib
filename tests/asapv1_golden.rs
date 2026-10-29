@@ -81,10 +81,17 @@ const GOLDEN_CMSHEAP_TUPLE: &str =
     include_str!("../asapv1_golden/cmsheap_i64_regular_2x3_tuplekeys.hex");
 const GOLDEN_CSHEAP_TUPLE: &str =
     include_str!("../asapv1_golden/csheap_i64_regular_2x4_tuplekeys.hex");
+// The retired CMSSpaceSaving / CSSpaceSaving kinds `1e 00` / `1f 00`, decode-only.
 const GOLDEN_CMSSS_STR: &str =
     include_str!("../asapv1_golden/cmsspacesaving_i64_regular_2x3_strkeys.hex");
 const GOLDEN_CSSS_I64: &str =
     include_str!("../asapv1_golden/csspacesaving_f64_fast_2x4_i64keys.hex");
+// The current kinds `1e 01` / `1f 01`, whose summary carries no `total`.
+const GOLDEN_CMSSS_NOTOTAL_STR: &str =
+    include_str!("../asapv1_golden/cmsspacesaving_nototal_i64_regular_2x3_strkeys.hex");
+const GOLDEN_CSSS_NOTOTAL_I64: &str =
+    include_str!("../asapv1_golden/csspacesaving_nototal_f64_fast_2x4_i64keys.hex");
+
 // The retired DDSketch kinds `05 00` / `05 80`, decode-only.
 const GOLDEN_DD_POSITIVE: &str = include_str!("../asapv1_golden/ddsketch_positive_a001.hex");
 const GOLDEN_DD_SIGNED: &str = include_str!("../asapv1_golden/ddsketch_signed_a001.hex");
@@ -136,8 +143,15 @@ const GOLDEN_BLOOM_FAST: &str = include_str!("../asapv1_golden/bloom_fast_5x32.h
 const GOLDEN_BLOOM_BITS_REGULAR: &str =
     include_str!("../asapv1_golden/bloom_bits_regular_3x128.hex");
 const GOLDEN_BLOOM_BITS_FAST: &str = include_str!("../asapv1_golden/bloom_bits_fast_5x32.hex");
+
+// The retired Space-Saving kind `18 00`, decode-only.
 const GOLDEN_SPACE_SAVING_I64: &str = include_str!("../asapv1_golden/space_saving_i64_c8.hex");
 const GOLDEN_SPACE_SAVING_BYTES: &str = include_str!("../asapv1_golden/space_saving_bytes_c3.hex");
+// The current Space-Saving kind `18 01`.
+const GOLDEN_SPACE_SAVING_NOTOTAL_I64: &str =
+    include_str!("../asapv1_golden/space_saving_nototal_i64_c8.hex");
+const GOLDEN_SPACE_SAVING_NOTOTAL_BYTES: &str =
+    include_str!("../asapv1_golden/space_saving_nototal_bytes_c3.hex");
 #[cfg(feature = "experimental")]
 const GOLDEN_UNIFORM: &str = include_str!("../asapv1_golden/uniform_sampling_r0p25.hex");
 const GOLDEN_PYRAMID: &str =
@@ -833,20 +847,20 @@ fn csheap_i64_regular_2x4_tuplekeys_matches_golden() {
 
 // ---------------------------------------------------------------------------
 // CountMinSketchWithSpaceSaving / CountSketchWithSpaceSaving: the matrix set directly and the summary built
-// by weighted inserts, whose triples do not depend on the hash.
+// by weighted inserts, whose triples do not depend on the hash. Each retired
+// `1e 00` / `1f 00` fixture decodes, its `total` dropped, and re-encodes as its
+// `*_nototal_*` twin.
 // ---------------------------------------------------------------------------
 
-/// Asserts `summary` has `capacity`, `total` and `ceiling` and holds exactly
-/// `entries` as `(key, count, error)`.
+/// Asserts `summary` has `capacity` and `ceiling` and holds exactly `entries`
+/// as `(key, count, error)`.
 fn assert_summary(
     summary: &SpaceSaving,
     capacity: usize,
-    total: u64,
     ceiling: u64,
     entries: &[(DataInput<'_>, u64, u64)],
 ) {
     assert_eq!(summary.capacity(), capacity);
-    assert_eq!(summary.total(), total);
     assert_eq!(summary.min_count(), ceiling);
     assert_eq!(summary.len(), entries.len());
     for (key, count, error) in entries {
@@ -858,9 +872,9 @@ fn assert_summary(
 /// `aa` displaces `cold` (count 1) and carries it as error; the `7` tie falls
 /// to the keys, so `"aa"` precedes `"b"`.
 #[test]
-fn cmsspacesaving_i64_regular_2x3_strkeys_matches_golden() {
+fn cmsspacesaving_nototal_i64_regular_2x3_strkeys_matches_golden() {
     type Sketch = CountMinSketchWithSpaceSaving<Vector2D<i64>, RegularPath>;
-    let want = decode_hex(GOLDEN_CMSSS_STR);
+    let want = decode_hex(GOLDEN_CMSSS_NOTOTAL_STR);
     let mut summary = SpaceSaving::with_capacity(4);
     for (key, weight) in [
         ("hot", 300),
@@ -887,16 +901,19 @@ fn cmsspacesaving_i64_regular_2x3_strkeys_matches_golden() {
         (DataInput::Str("aa"), 7, 1),
         (DataInput::Str("b"), 7, 0),
     ];
-    assert_summary(decoded.space_saving(), 4, 442, 7, &entries);
+    assert_summary(decoded.space_saving(), 4, 7, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
+
+    let retired = Sketch::from_asapv1(&decode_hex(GOLDEN_CMSSS_STR)).expect("decode retired");
+    assert_eq!(retired.to_asapv1().expect("re-encode"), want);
 }
 
 /// `7` displaces `128` (count 5) and carries it as error; the `6` tie falls to
 /// the keys' two's-complement bits, so `7` precedes `i64::MIN`.
 #[test]
-fn csspacesaving_f64_fast_2x4_i64keys_matches_golden() {
+fn csspacesaving_nototal_f64_fast_2x4_i64keys_matches_golden() {
     type Sketch = CountSketchWithSpaceSaving<Vector2D<f64>, FastPath>;
-    let want = decode_hex(GOLDEN_CSSS_I64);
+    let want = decode_hex(GOLDEN_CSSS_NOTOTAL_I64);
     let mut summary = SpaceSaving::with_capacity(3);
     for (key, weight) in [(-1, 65536), (i64::MIN, 5), (128, 5), (7, 1), (i64::MIN, 1)] {
         summary.update_weighted(&DataInput::I64(key), weight);
@@ -916,8 +933,11 @@ fn csspacesaving_f64_fast_2x4_i64keys_matches_golden() {
         (DataInput::I64(7), 6, 5),
         (DataInput::I64(i64::MIN), 6, 0),
     ];
-    assert_summary(decoded.space_saving(), 3, 65548, 6, &entries);
+    assert_summary(decoded.space_saving(), 3, 6, &entries);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
+
+    let retired = Sketch::from_asapv1(&decode_hex(GOLDEN_CSSS_I64)).expect("decode retired");
+    assert_eq!(retired.to_asapv1().expect("re-encode"), want);
 }
 
 // ---------------------------------------------------------------------------
@@ -1847,19 +1867,20 @@ fn bloom_retired_fixtures_decode_to_their_bits_twins() {
 
 // ---------------------------------------------------------------------------
 // Space-Saving: golden decodes to the known triples and round-trips. Encoding
-// the known triples is checked in `src/sketches/space_saving/wire.rs`.
+// the known triples is checked in `src/sketches/space_saving/wire.rs`. Each
+// retired `18 00` fixture decodes, its `total` dropped, and re-encodes as its
+// `space_saving_nototal_*` twin.
 // ---------------------------------------------------------------------------
 
 fn assert_space_saving_golden(
     golden: &str,
     capacity: usize,
-    total: u64,
     emitted: &[(OwnedDataInput, u64, u64)],
     min_count: u64,
 ) {
     let want = decode_hex(golden);
     let decoded: SpaceSaving = SpaceSaving::from_asapv1(&want).expect("decode");
-    assert_eq!((decoded.capacity(), decoded.total()), (capacity, total));
+    assert_eq!(decoded.capacity(), capacity);
     assert_eq!(decoded.min_count(), min_count);
     let mut held = decoded.entries();
     held.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
@@ -1871,7 +1892,7 @@ fn assert_space_saving_golden(
 
 /// The count-5 tie emits by two's-complement bits: `0, 1, i64::MIN, -129`.
 #[test]
-fn space_saving_i64_c8_matches_golden() {
+fn space_saving_nototal_i64_c8_matches_golden() {
     let emitted = [
         (-1, 70000, 0),
         (300, 9, 2),
@@ -1881,15 +1902,29 @@ fn space_saving_i64_c8_matches_golden() {
         (-129, 5, 0),
     ]
     .map(|(key, count, error)| (OwnedDataInput::I64(key), count, error));
-    assert_space_saving_golden(GOLDEN_SPACE_SAVING_I64, 8, 70030, &emitted, 4);
+    assert_space_saving_golden(GOLDEN_SPACE_SAVING_NOTOTAL_I64, 8, &emitted, 4);
 }
 
 /// A full summary: `min_count` is its smallest count. `b""` precedes `b"ab"`.
 #[test]
-fn space_saving_bytes_c3_matches_golden() {
+fn space_saving_nototal_bytes_c3_matches_golden() {
     let emitted = [(&b"\xff\x00"[..], 9, 0), (b"", 4, 1), (b"ab", 4, 0)]
         .map(|(key, count, error)| (OwnedDataInput::Bytes(key.to_vec()), count, error));
-    assert_space_saving_golden(GOLDEN_SPACE_SAVING_BYTES, 3, 20, &emitted, 4);
+    assert_space_saving_golden(GOLDEN_SPACE_SAVING_NOTOTAL_BYTES, 3, &emitted, 4);
+}
+
+/// Each retired `18 00` fixture decodes to its twin's triples and re-encodes
+/// as the twin.
+#[test]
+fn space_saving_retired_fixtures_decode_to_their_nototal_twins() {
+    for (retired, twin) in [
+        (GOLDEN_SPACE_SAVING_I64, GOLDEN_SPACE_SAVING_NOTOTAL_I64),
+        (GOLDEN_SPACE_SAVING_BYTES, GOLDEN_SPACE_SAVING_NOTOTAL_BYTES),
+    ] {
+        let decoded: SpaceSaving =
+            SpaceSaving::from_asapv1(&decode_hex(retired)).expect("decode retired");
+        assert_eq!(decoded.to_asapv1().expect("re-encode"), decode_hex(twin));
+    }
 }
 
 // ---------------------------------------------------------------------------

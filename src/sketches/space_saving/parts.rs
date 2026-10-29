@@ -36,16 +36,14 @@ impl<H: SketchHasher> SpaceSaving<H> {
     }
 
     /// Rebuilds a summary from its wire state, rejecting a state §3.5's decode
-    /// rules 5 to 10 reject. `capacity` never sizes an allocation.
+    /// rules 5 to 9 reject. `capacity` never sizes an allocation.
     pub(crate) fn from_parts(
         capacity: usize,
-        total: u64,
         discarded_max: u64,
         entries: Vec<(OwnedDataInput, u64, u64)>,
     ) -> Result<Self, String> {
         Self::rebuild(SpaceSavingState {
             capacity,
-            total,
             discarded_max,
             entries,
         })

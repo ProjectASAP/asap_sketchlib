@@ -1,4 +1,4 @@
-//! ASAPv1 wire serialization for CountMinSketchWithSpaceSaving (kind_id `0x1e 0x00`,
+//! ASAPv1 wire serialization for CountMinSketchWithSpaceSaving (kind_id `0x1e 0x01`,
 //! `docs/asapv1_wire_format.md` §3.24). The encoding is shared with
 //! CountSketchWithSpaceSaving and lives in [`super::summary_wire`].
 
@@ -22,11 +22,12 @@ where
     const KIND: SummaryKind = SummaryKind {
         name: "CountMinSketchWithSpaceSaving",
         kind_id: kind::COUNT_MIN_WITH_SPACE_SAVING,
+        retired_kind_id_with_total: kind::COUNT_MIN_WITH_SPACE_SAVING_WITH_TOTAL,
         counter_type: T::COUNTER_TYPE,
         mode: Mode::MODE,
     };
 
-    /// Serializes the sketch into an ASAPv1 envelope (kind_id `0x1e 0x00`). Fails
+    /// Serializes the sketch into an ASAPv1 envelope (kind_id `0x1e 0x01`). Fails
     /// when the matrix samples its updates or the state breaks a §3.24 decode
     /// rule, and on mixed-variant or 128-bit keys.
     pub fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError> {
@@ -44,7 +45,8 @@ where
         )
     }
 
-    /// Deserializes a sketch from an ASAPv1 envelope. The hash spec, counter
+    /// Deserializes a sketch from an ASAPv1 envelope: kind_id `0x1e 0x01`, or
+    /// the retired `0x1e 0x00` with the summary's `total` dropped. The hash spec, counter
     /// type and mode are pinned against this target; `rows`, `cols`,
     /// `capacity` and `key_type` are echoed back.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {

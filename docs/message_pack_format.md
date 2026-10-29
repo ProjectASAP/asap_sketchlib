@@ -110,8 +110,8 @@ Converted:
   bit grid packed into `u64`s; the wire covers the geometries
   `Bloom::with_capacity` produces. The retired `0x17 0x00` also carried an
   insert count; it still decodes, with the count dropped, and is never encoded.
-- **Space-Saving** (`src/sketches/space_saving/wire.rs`, kind `0x18 0x00`) — the
-  payload is the `(key, count, error)` triples plus `total` and `discarded_max`; the
+- **Space-Saving** (`src/sketches/space_saving/wire.rs`, kind `0x18 0x01`) — the
+  payload is the `(key, count, error)` triples plus `discarded_max`; the
   Stream-Summary's links and arenas are rebuilt on decode.
 - **CountMinSketchWithHeap** (`src/sketches/countminsketch_heap/wire.rs`, `0x03 0x00`) and
   **CountSketchWithHeap** (`src/sketches/countsketch_heap/wire.rs`, `0x0a 0x00`) — a base

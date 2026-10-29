@@ -71,12 +71,14 @@ fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
-The **ASAPv1** envelope, kind `0x1e 0x00` (spec §3.24), for
+The **ASAPv1** envelope, kind `0x1e 0x01` (spec §3.24), for
 `CountMinSketchWithSpaceSaving<Vector2D<T>, Mode, H>` with `T` `i32`, `i64` or `f64`, `Mode`
 `FastPath` or `RegularPath`, and `H: HashProfile`. The metadata is Count-Min's
 plus `capacity` and `key_type`; the payload is the matrix followed by the
-summary's triples and running scalars. A matrix holding `p != 1` does not
-serialize. There is no delta kind.
+summary's triples and its ceiling `discarded_max`. The retired kind `0x1e 0x00`,
+whose summary also carried a `total`, still decodes with that field dropped and
+is never encoded. A matrix holding `p != 1` does not serialize. There is no
+delta kind.
 
 ## Examples
 

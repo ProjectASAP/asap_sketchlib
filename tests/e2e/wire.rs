@@ -134,7 +134,7 @@ fn a_space_saving_envelope_round_trips_and_names_its_kind() {
         summary.update(&DataInput::U64(k));
     }
     let bytes = summary.to_asapv1().expect("encode");
-    assert_kind(&bytes, 0x18, 0x00, "SpaceSaving");
+    assert_kind(&bytes, 0x18, 0x01, "SpaceSaving");
     let decoded = SpaceSaving::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
     for k in 0..1_024u64 {
         assert_eq!(

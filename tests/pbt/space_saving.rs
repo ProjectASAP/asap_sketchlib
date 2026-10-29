@@ -216,8 +216,7 @@ proptest! {
         let s = summary_of(capacity, &stream);
         let held: u64 = s.entries().iter().map(|(_, count, _)| count).sum();
 
-        prop_assert_eq!(s.total(), stream.len() as u64);
-        prop_assert_eq!(held, s.total());
+        prop_assert_eq!(held, stream.len() as u64);
     }
 
     /// The ceiling is pinned from both sides: it covers every counter the
@@ -238,9 +237,9 @@ proptest! {
             s.min_count(), capacity, lowest
         );
         prop_assert!(
-            u128::from(s.min_count()) * capacity as u128 <= u128::from(s.total()),
+            u128::from(s.min_count()) * capacity as u128 <= stream.len() as u128,
             "ceiling {} over {} counters exceeds the total {}",
-            s.min_count(), capacity, s.total()
+            s.min_count(), capacity, stream.len()
         );
     }
 
@@ -321,7 +320,6 @@ proptest! {
 
         let reordered = summary_of(capacity, &shuffled);
         prop_assert_eq!(monitored(&reordered), monitored(&s), "capacity {}", capacity);
-        prop_assert_eq!(reordered.total(), s.total());
         prop_assert_eq!(reordered.min_count(), s.min_count());
     }
 
@@ -344,7 +342,6 @@ proptest! {
             "capacity {} over {} arrivals", capacity, stream.len()
         );
         prop_assert_eq!(monitored(&expanded), exact, "capacity {}", capacity);
-        prop_assert_eq!(weighted.total(), expanded.total());
         prop_assert_eq!(weighted.min_count(), expanded.min_count());
     }
 
@@ -362,7 +359,6 @@ proptest! {
             monitored(&bulk), monitored(&one_at_a_time),
             "capacity {} over {} arrivals", capacity, stream.len()
         );
-        prop_assert_eq!(bulk.total(), one_at_a_time.total());
         prop_assert_eq!(bulk.min_count(), one_at_a_time.min_count());
     }
 
@@ -379,7 +375,6 @@ proptest! {
 
         prop_assert!(reused.is_empty());
         prop_assert_eq!(reused.len(), 0);
-        prop_assert_eq!(reused.total(), 0);
         prop_assert_eq!(reused.min_count(), 0);
 
         for key in &stream {
@@ -391,7 +386,6 @@ proptest! {
             monitored(&reused), monitored(&fresh),
             "capacity {} after {} discarded arrivals", capacity, used.len()
         );
-        prop_assert_eq!(reused.total(), fresh.total());
         prop_assert_eq!(reused.min_count(), fresh.min_count());
     }
 
@@ -431,7 +425,6 @@ proptest! {
         let held = monitored(&merged);
 
         prop_assert!(merged.len() <= merged.capacity());
-        prop_assert_eq!(merged.total(), concatenated.len() as u64);
 
         for (key, t) in &truth {
             let bound = merged.upper_bound(&DataInput::I64(*key));
@@ -466,7 +459,6 @@ proptest! {
             "capacity {} over {} arrivals", capacity, stream.len()
         );
         prop_assert_eq!(merged.len(), base.len());
-        prop_assert_eq!(merged.total(), base.total());
         prop_assert_eq!(merged.min_count(), base.min_count());
     }
 
@@ -486,7 +478,6 @@ proptest! {
             monitored(&ab), monitored(&ba),
             "capacity {} over {} and {} arrivals", capacity, left.len(), right.len()
         );
-        prop_assert_eq!(ab.total(), ba.total());
         prop_assert_eq!(ab.min_count(), ba.min_count());
     }
 
@@ -519,7 +510,6 @@ proptest! {
         let held = monitored(&s);
 
         prop_assert!(s.len() <= s.capacity());
-        prop_assert_eq!(s.total(), whole.len() as u64);
 
         for (key, t) in truth_of(&whole) {
             let bound = s.upper_bound(&DataInput::I64(key));
@@ -561,7 +551,6 @@ proptest! {
         round_trip!(
             Ss,
             sketch,
-            |s: &Ss| s.total(),
             |s: &Ss| s.min_count(),
             |s: &Ss| (0..PROBE_KEYS as u64)
                 .map(|k| (s.estimate(&DataInput::U64(k)), s.error(&DataInput::U64(k))))
