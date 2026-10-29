@@ -39,7 +39,7 @@ Merges follow these rules unless a section says otherwise.
 
 ## API
 
-Each sketch type implements one trait, and frameworks call their inner sketch's functions through it.
+Each sketch type implements one trait in `src/analytics`, and frameworks call their inner sketch's functions through it.
 
 ```rust
 pub trait SketchAnalytics {
@@ -47,10 +47,10 @@ pub trait SketchAnalytics {
     type Data: Default;
     fn theoretical_memory_bytes(params: &Self::Params, data: &Self::Data) -> usize;
     fn theoretical_update_ops(params: &Self::Params, data: &Self::Data) -> f64;
-    fn theoretical_query_ops(statistic: Statistic, params: &Self::Params, data: &Self::Data) -> Option<f64>;
+    fn theoretical_query_ops(statistic: StatisticKind, params: &Self::Params, data: &Self::Data) -> Option<f64>;
     fn theoretical_merge_ops(params: &Self::Params, data: &Self::Data) -> Option<f64>;
-    fn theoretical_error(statistic: Statistic, params: &Self::Params, data: &Self::Data, delta: Option<f64>) -> Option<ErrorBound>;
-    fn params_for(statistic: Statistic, epsilon: f64, delta: f64, data: &Self::Data) -> Option<Self::Params>;
+    fn theoretical_error(statistic: StatisticKind, params: &Self::Params, data: &Self::Data, delta: Option<f64>) -> Option<ErrorBound>;
+    fn params_for(statistic: StatisticKind, epsilon: f64, delta: f64, data: &Self::Data) -> Option<Self::Params>;
 }
 
 pub struct ErrorBound {
@@ -64,7 +64,7 @@ pub struct ErrorBound {
 - `Params` holds the constructor's parameters, such as `CountMinParams { rows, cols }`.
 - `Data` holds the data inputs listed in the sketch's section, each as an `Option`.
   When an input is unknown, memory and ops use its upper bound from the section, and `theoretical_error` and `params_for` return `None` if they need it.
-- `Statistic` is the enum in `src/capability.rs`, plus `QuantileInterpolated` for DdSketch.
+- `StatisticKind` is the enum in `src/capability.rs`.
 - `theoretical_update_ops` is the cost of the plain `update` call, or of `update_weighted` for a sketch that has only that.
 - `theoretical_query_ops`, `theoretical_merge_ops` and `theoretical_error` return `None` for what the sketch does not do or has no formula for.
 - `theoretical_memory_bytes` calls the sketch's inherent `theoretical_memory_bytes`, or uses the section's formula where the sketch has none.
@@ -76,8 +76,8 @@ An `ErrorBound` says: with probability at least `1 − δ`, one estimate from on
 Several estimates hold together with probability at least `1 − Σδ`.
 
 - Each contract says whether its `δ` is fixed by the parameters, as Count-Min's depth fixes it at `e^−d`, or chosen by the caller.
-  `theoretical_error` with `delta = None` returns the contract's own `δ`.
-  With a `delta` below a fixed `δ` it returns `None`, and with a chosen `δ` it returns the smallest `ε` at that `delta`.
+  With a fixed `δ`, `theoretical_error` returns that `δ` for `delta = None` or a `delta` at or above it, and `None` for a `delta` below it.
+  With a chosen `δ`, it returns the smallest `ε` at `delta`, or at `DEFAULT_DELTA = 0.01` when `delta` is `None`.
 - `ErrorBound.delta` is `None` when the analysis gives only a standard error.
 - `ErrorMetric` has the variants of ASAPPlanner's `AccuracyMetric`: `Absolute` (off by at most `ε`), `Absolute(L1)` (at most `ε·N`), `Absolute(L2)` (at most `ε·‖f‖₂`), `Relative` (at most `ε` times the true value) and `Rank` (the returned value's rank is within `ε·n` of the requested one).
   `Absolute(L1)` stands for `Absolute { scale: Some(NormScale::StreamL1) }`, and likewise for L2.
@@ -828,7 +828,7 @@ A change to an implementation updates its formulas in the same pull request and 
 
 ## Migration
 
-1. asap_sketchlib renames `theoretical_memory_bytes` to `theoretical_memory_bytes`, and adds `SketchAnalytics`, `ErrorBound`, `ErrorMetric`, `Statistic::QuantileInterpolated`, the op-counting feature, the trait implementations with their tests, and `memory_bytes()` and `theoretical_memory_bytes` for the sketches and frameworks that lack them.
+1. asap_sketchlib renames `estimated_memory_bytes` to `theoretical_memory_bytes`, and adds `SketchAnalytics`, `ErrorBound`, `ErrorMetric`, `StatisticKind::QuantileInterpolated`, the op-counting feature, the trait implementations with their tests, and `memory_bytes()` and `theoretical_memory_bytes` for the sketches and frameworks that lack them.
 2. ASAPPlanner's `sketch_shape` and `accuracy/estimators` call these functions, and ASAPPlanner keeps combining errors across a plan and splitting its error budget.
 3. ASAPPlanner's `analytical-resource-cost.md` links to this page in place of its summary table.
 

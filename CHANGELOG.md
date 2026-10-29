@@ -12,6 +12,12 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **Sketch analytics** (`asap_sketchlib::analytics`): the
+  `SketchAnalytics` trait, with `ErrorBound`, `ErrorMetric` and `NormScale`
+  re-exported at the root, gives a sketch type's theoretical memory, update,
+  query and merge ops, error bound per statistic, and the parameters that
+  meet a target `(ε, δ)`, as `docs/sketch_analytics.md` defines them.
+- **`StatisticKind::QuantileInterpolated`**, answered by `DDSketch`.
 - **Family-capability table** (`asap_sketchlib::capability`, re-exported at
   the root): `SketchAlgorithm::capability()` gives, for each public sketch
   family, the `StatisticKind`s one state answers, whether states merge and

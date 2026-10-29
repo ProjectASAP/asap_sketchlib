@@ -13,6 +13,8 @@
 //! submodules directly when you need lower-level storage, hashing, or
 //! framework-specific APIs.
 
+/// Theoretical error, memory and op counts per sketch.
+pub mod analytics;
 pub(crate) mod asapv1;
 pub mod capability;
 /// Shared primitives used across sketches, including input wrappers, hashers,
@@ -26,6 +28,7 @@ pub mod sketches;
 #[cfg(test)]
 pub mod test_utils;
 
+pub use analytics::{ErrorBound, ErrorMetric, NormScale, SketchAnalytics};
 pub use asapv1::envelope::peek_kind_id;
 pub use capability::{
     FamilyCapability, MergeInputRule, MergedError, SketchAlgorithm, StatisticKind,

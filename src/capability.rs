@@ -78,6 +78,9 @@ pub enum StatisticKind {
     Total,
     ItemFrequency,
     Quantile,
+    /// The quantile interpolated between the order statistics at rank
+    /// `q·(n − 1)`.
+    QuantileInterpolated,
     /// Absolute on the KLLs and UnivMonQ, normalized to `[0, 1]` on Hydra.
     Rank,
     Distinct,
@@ -215,7 +218,7 @@ impl SketchAlgorithm {
             Self::HLLHip => (None, &[(Distinct, A)]),
             Self::KMV => (Some(MayOverlap), &[(Distinct, U)]),
             Self::KLL | Self::KLLDynamic => (Some(Disjoint), &[(Quantile, U), (Rank, U)]),
-            Self::DDSketch => (Some(Disjoint), &[(Quantile, U)]),
+            Self::DDSketch => (Some(Disjoint), &[(Quantile, U), (QuantileInterpolated, U)]),
             Self::SpaceSaving => (Some(Disjoint), &[(ItemFrequency, A), (TopK, A)]),
             Self::ElasticSketch => (Some(Disjoint), &[(ItemFrequency, A), (TopK, A)]),
             Self::CocoSketch => (Some(Disjoint), &[(ItemFrequency, A), (PartialKeySum, A)]),

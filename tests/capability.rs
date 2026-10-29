@@ -37,7 +37,7 @@ const DECIDED: &[(SketchAlgorithm, Option<MergeInputRule>, Readouts)] = &[
     (F::KMV, Some(O), &[(Distinct, U)]),
     (F::KLL, Some(D), QUANTILE_RANK),
     (F::KLLDynamic, Some(D), QUANTILE_RANK),
-    (F::DDSketch, Some(D), &[(Quantile, U)]),
+    (F::DDSketch, Some(D), &[(Quantile, U), (QuantileInterpolated, U)]),
     (F::SpaceSaving, Some(D), &[(ItemFrequency, A), (TopK, A)]),
     (F::ElasticSketch, Some(D), &[(ItemFrequency, A), (TopK, A)]),
     (F::CocoSketch, Some(D), &[(ItemFrequency, A), (PartialKeySum, A)]),
