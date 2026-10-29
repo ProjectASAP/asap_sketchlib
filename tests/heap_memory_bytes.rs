@@ -60,26 +60,26 @@ fn check(measured: usize, estimated: usize, churned: bool, context: &str) {
 }
 
 #[test]
-fn estimated_memory_bytes_match_size_of_and_the_allocation() {
+fn theoretical_memory_bytes_match_size_of_and_the_allocation() {
     // A heap of capacity 0 allocates nothing; a resident is at least one entry
     // and one digest.
     assert_eq!(
-        TopKHeap::<i64>::estimated_memory_bytes(0, &DataInput::U64(0)),
+        TopKHeap::<i64>::theoretical_memory_bytes(0, &DataInput::U64(0)),
         std::mem::size_of::<TopKHeap<i64>>()
     );
     assert!(
-        TopKHeap::<i64>::estimated_memory_bytes(1024, &DataInput::U64(0))
+        TopKHeap::<i64>::theoretical_memory_bytes(1024, &DataInput::U64(0))
             > std::mem::size_of::<TopKHeap<i64>>()
                 + 1024 * (std::mem::size_of::<HeapEntry<i64>>() + 8)
     );
 
     // A shape past the address space prices at `usize::MAX`.
     assert_eq!(
-        TopKHeap::<i64>::estimated_memory_bytes(usize::MAX, &DataInput::Str("key")),
+        TopKHeap::<i64>::theoretical_memory_bytes(usize::MAX, &DataInput::Str("key")),
         usize::MAX
     );
     assert_eq!(
-        CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::estimated_memory_bytes(
+        CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::theoretical_memory_bytes(
             5,
             512,
             1 << 61,
@@ -103,7 +103,8 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
                 }
                 heap
             });
-            let estimated = TopKHeap::<i64>::estimated_memory_bytes(heap_size, &DataInput::U64(0));
+            let estimated =
+                TopKHeap::<i64>::theoretical_memory_bytes(heap_size, &DataInput::U64(0));
             check(bytes, estimated, churned, &format!("u64 keys, {context}"));
             assert_eq!(heap.memory_bytes(), bytes, "u64 keys, {context}");
 
@@ -116,7 +117,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
                 heap
             });
             let estimated =
-                TopKHeap::<f64>::estimated_memory_bytes(heap_size, &DataInput::Bytes(&[0; 9]));
+                TopKHeap::<f64>::theoretical_memory_bytes(heap_size, &DataInput::Bytes(&[0; 9]));
             check(
                 bytes,
                 estimated,
@@ -148,7 +149,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
                 sketch
             });
             let estimated =
-                CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::estimated_memory_bytes(
+                CountMinSketchWithHeap::<Vector2D<i64>, RegularPath>::theoretical_memory_bytes(
                     rows,
                     cols,
                     heap_size,
@@ -175,12 +176,13 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
                 }
                 sketch
             });
-            let estimated = CountSketchWithHeap::<Vector2D<f64>, FastPath>::estimated_memory_bytes(
-                rows,
-                cols,
-                heap_size,
-                &DataInput::Str("key-00000000"),
-            );
+            let estimated =
+                CountSketchWithHeap::<Vector2D<f64>, FastPath>::theoretical_memory_bytes(
+                    rows,
+                    cols,
+                    heap_size,
+                    &DataInput::Str("key-00000000"),
+                );
             check(
                 bytes,
                 estimated,
@@ -200,7 +202,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
     type CountMinI64Heap = CountMinSketchWithHeap<Vector2D<i64>, RegularPath>;
     for (rows, cols, heap_size) in [(3usize, 64usize, 7usize), (5, 2048, 100), (5, 100, 2000)] {
         let estimated =
-            CountMinI64Heap::estimated_memory_bytes(rows, cols, heap_size, &DataInput::U64(0));
+            CountMinI64Heap::theoretical_memory_bytes(rows, cols, heap_size, &DataInput::U64(0));
         for (encoded_keys, distinct) in [
             (3usize, heap_size),
             (3, 50 * heap_size),
@@ -232,7 +234,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
     // estimate once churned.
     for heap_size in [7usize, 1024, 2000] {
         let size = heap_size as u64;
-        let estimated = TopKHeap::<i64>::estimated_memory_bytes(heap_size, &DataInput::U64(0));
+        let estimated = TopKHeap::<i64>::theoretical_memory_bytes(heap_size, &DataInput::U64(0));
         let mut source = TopKHeap::<i64>::new(heap_size);
         for i in 0..size - 1 {
             source.update(&DataInput::U64(i), i as i64 + 1);
@@ -284,7 +286,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         )
         .unwrap();
         let estimated =
-            CountMinI64Heap::estimated_memory_bytes(rows, cols, heap_size, &DataInput::U64(0));
+            CountMinI64Heap::theoretical_memory_bytes(rows, cols, heap_size, &DataInput::U64(0));
         for delta in [false, true] {
             let context =
                 format!("CountMinSketchWithHeap {rows}x{cols}, heap {heap_size}, delta = {delta}");
@@ -305,7 +307,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
             assert_eq!(sketch.memory_bytes(), bytes, "{context}");
         }
         let estimated =
-            CountSketchF64Heap::estimated_memory_bytes(rows, cols, heap_size, &DataInput::U64(0));
+            CountSketchF64Heap::theoretical_memory_bytes(rows, cols, heap_size, &DataInput::U64(0));
         for delta in [false, true] {
             let context =
                 format!("CountSketchWithHeap {rows}x{cols}, heap {heap_size}, delta = {delta}");
@@ -339,7 +341,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         });
         assert_eq!(sketch.memory_bytes(), bytes, "CountMinF64 {rows}x{cols}");
         assert_eq!(
-            CountMinF64::estimated_memory_bytes(rows, cols),
+            CountMinF64::theoretical_memory_bytes(rows, cols),
             bytes,
             "CountMinF64 {rows}x{cols}"
         );
@@ -352,7 +354,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         });
         assert_eq!(sketch.memory_bytes(), bytes, "CountSketch {rows}x{cols}");
         assert_eq!(
-            CountSketch::<Vector2D<i32>, FastPath>::estimated_memory_bytes(rows, cols),
+            CountSketch::<Vector2D<i32>, FastPath>::theoretical_memory_bytes(rows, cols),
             bytes,
             "CountSketch {rows}x{cols}"
         );
@@ -368,7 +370,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
     };
     for (k, m) in [(200usize, 8usize), (64, 4)] {
         for n in [0usize, 1, 150, 1_000, 100_000] {
-            let estimated = Kll::<f64>::estimated_memory_bytes(k, m, n);
+            let estimated = Kll::<f64>::theoretical_memory_bytes(k, m, n);
             let mut half = Kll::<f64>::with_seed(k, m, 9);
             kll_fill(&mut half, 0..n / 2);
             let encoded = half.to_asapv1().unwrap();
@@ -426,7 +428,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
             for negatives in [false, true] {
                 for n in [0usize, 1, 2, 3, 10_000] {
                     let estimated =
-                        DdSketch::estimated_memory_bytes(alpha, n, low, high, negatives);
+                        DdSketch::theoretical_memory_bytes(alpha, n, low, high, negatives);
                     let mut largest = 0;
                     for order in 0..3 {
                         for source in ["direct", "merged", "decoded"] {
@@ -534,7 +536,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         ),
     ] {
         assert_eq!(
-            HyperLogLog::<Classic>::estimated_memory_bytes(precision),
+            HyperLogLog::<Classic>::theoretical_memory_bytes(precision),
             bytes,
             "HyperLogLog p = {precision}"
         );
@@ -564,13 +566,13 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         ),
     ] {
         assert_eq!(
-            HyperLogLogHip::estimated_memory_bytes(precision),
+            HyperLogLogHip::theoretical_memory_bytes(precision),
             bytes,
             "HyperLogLogHip p = {precision}"
         );
     }
     assert_eq!(
-        HyperLogLog::<Classic>::estimated_memory_bytes(200),
+        HyperLogLog::<Classic>::theoretical_memory_bytes(200),
         usize::MAX
     );
 
@@ -595,7 +597,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
                 sketch.merge(&other);
                 sketch
             });
-            let estimated = Kmv::estimated_memory_bytes(4_323, distinct);
+            let estimated = Kmv::theoretical_memory_bytes(4_323, distinct);
             check(bytes, estimated, repeats == 1, &context);
             assert_eq!(sketch.memory_bytes(), bytes, "{context}");
         }
@@ -617,7 +619,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         let context = format!("cloned Kmv k = {k}, {cloned} cloned, distinct = {distinct}");
         check(
             bytes,
-            Kmv::estimated_memory_bytes(k, distinct),
+            Kmv::theoretical_memory_bytes(k, distinct),
             true,
             &context,
         );
@@ -646,14 +648,14 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         });
         check(
             bytes,
-            Kmv::estimated_memory_bytes(k, distinct),
+            Kmv::theoretical_memory_bytes(k, distinct),
             true,
             &context,
         );
         assert_eq!(sketch.memory_bytes(), bytes, "{context}");
     }
     assert_eq!(
-        Kmv::estimated_memory_bytes(usize::MAX, usize::MAX),
+        Kmv::theoretical_memory_bytes(usize::MAX, usize::MAX),
         usize::MAX
     );
 
@@ -664,7 +666,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         (20, 5, 512, 6),
         (100, 5, 2048, 3),
     ] {
-        let estimated = UnivMon::estimated_memory_bytes(
+        let estimated = UnivMon::theoretical_memory_bytes(
             heap_size,
             rows,
             cols,
@@ -707,7 +709,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
             "CountSketchWithL2Norm {rows}x{cols}"
         );
         assert_eq!(
-            CountSketchWithL2Norm::estimated_memory_bytes(rows, cols),
+            CountSketchWithL2Norm::theoretical_memory_bytes(rows, cols),
             bytes,
             "CountSketchWithL2Norm {rows}x{cols}"
         );
@@ -730,7 +732,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
             }
             sketch
         });
-        let estimated = UnivMon::estimated_memory_bytes(
+        let estimated = UnivMon::theoretical_memory_bytes(
             heap_size,
             rows,
             cols,
@@ -761,7 +763,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
             }
             sketch
         });
-        let estimated = UnivMon::estimated_memory_bytes(
+        let estimated = UnivMon::theoretical_memory_bytes(
             heap_size,
             rows,
             cols,
@@ -772,7 +774,7 @@ fn estimated_memory_bytes_match_size_of_and_the_allocation() {
         assert_eq!(sketch.memory_bytes(), bytes, "{context}");
     }
     assert_eq!(
-        UnivMon::estimated_memory_bytes(1 << 61, 5, 512, 6, &DataInput::Str("flow")),
+        UnivMon::theoretical_memory_bytes(1 << 61, 5, 512, 6, &DataInput::Str("flow")),
         usize::MAX
     );
 

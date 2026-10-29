@@ -31,20 +31,20 @@ signals a backwards-compatible change.
   outside `[0, 1]`. Within `alpha` relative when both neighbours are
   indexable and share a sign; an absolute bound across zero. The legacy
   portable `DdSketch` had it before 0.4.0.
-- **`estimated_memory_bytes(rows, cols)`** on `CountMinSketch` and
+- **`theoretical_memory_bytes(rows, cols)`** on `CountMinSketch` and
   `CountSketch`: the `memory_bytes` of a sketch with those dimensions, the
   counter width taken from the type.
-- **`Kll::estimated_memory_bytes(k, m, n)`**: an upper bound on the bytes a
+- **`Kll::theoretical_memory_bytes(k, m, n)`**: an upper bound on the bytes a
   sketch of `k` and `m` holds after `n` items, merges and a cached quantile.
-- **`DdSketch::memory_bytes`**, and **`DdSketch::estimated_memory_bytes(alpha,
+- **`DdSketch::memory_bytes`**, and **`DdSketch::theoretical_memory_bytes(alpha,
   n, min_magnitude, max_magnitude, negatives)`**: an upper bound on the bytes
   after `n` values in that magnitude range, in any order and through merges.
-- **`memory_bytes` and `estimated_memory_bytes(precision)`** on
+- **`memory_bytes` and `theoretical_memory_bytes(precision)`** on
   `HyperLogLogImpl` and `HyperLogLogHipImpl`: the struct plus `2^precision`
   register bytes, the precision taken at run time.
-- **`Kmv::estimated_memory_bytes(k, distinct)`**: the bytes a sketch of `k`
+- **`Kmv::theoretical_memory_bytes(k, distinct)`**: the bytes a sketch of `k`
   holds after `distinct` distinct inputs, an upper bound for fewer.
-- **`memory_bytes` and `estimated_memory_bytes`** on `CountSketchWithL2Norm`
+- **`memory_bytes` and `theoretical_memory_bytes`** on `CountSketchWithL2Norm`
   (`rows, cols`) and `UnivMon` (`heap_size, rows, cols, layers, key`): the
   pyramid's estimate is the steady state once every layer's heap has churned.
 - **`CountMinSketch::total()`**: the total admitted update weight, row 0's
@@ -53,6 +53,10 @@ signals a backwards-compatible change.
   estimates, by estimate descending, ties by flow id.
 ### Changed
 
+- **`estimated_memory_bytes` is renamed `theoretical_memory_bytes`** on
+  every sketch that has it (`CountMinSketch`, `CountSketch`,
+  `CountSketchWithL2Norm`, the WithHeap sketches, `TopKHeap`, `HyperLogLog`,
+  `HyperLogLogHip`, `Kmv`, `Kll`, `DdSketch`, `UnivMon`). Breaking.
 - **`Kmv` builds without the `experimental` feature**, with its ASAPv1 codec.
 - **Breaking: `DdSketch` no longer keeps `sum`, `min` or `max`.** The state is
   the two bucket stores and the zero count. `sum()`, `min()` and `max()` are
@@ -92,7 +96,7 @@ signals a backwards-compatible change.
   saturated and then decreased now reports its true `l2` instead of an
   understatement; `l2`, `l2_squared`, UnivMon's `estimate_l2` and its
   terminal-mode heavy-hitter threshold change only in that case. Each row's
-  accumulator is 8 bytes wider (`memory_bytes`, `estimated_memory_bytes`).
+  accumulator is 8 bytes wider (`memory_bytes`, `theoretical_memory_bytes`).
   `update_weighted_with_hash_without_l2` and `as_storage_mut`, the two ways
   to move counters without the accumulator, are removed; use
   `update_weighted_with_hash`.
@@ -150,18 +154,18 @@ signals a backwards-compatible change.
   then no longer inlined into callers; a stream of updates ran about 10%
   slower. Compaction is kept out of line again: within 4% of 0.3.x on a
   loaded host, at parity on a quiet one.
-- **`TopKHeap::estimated_memory_bytes` and the WithHeap estimates saturate**
+- **`TopKHeap::theoretical_memory_bytes` and the WithHeap estimates saturate**
   at `usize::MAX` for shapes past the address space instead of overflowing.
 - **Decoded top-k heaps reserve as built ones do.** The ASAPv1 state
   decoders of `CountMinSketchWithHeap`, `CountSketchWithHeap`, `UnivMon`,
   `UnivMonTwoTier` and `Kmv` give the heap the slots a built heap with the
   same entries holds, so a decoded sketch grows within
-  `estimated_memory_bytes`. Delta decoders still reserve for their entries
+  `theoretical_memory_bytes`. Delta decoders still reserve for their entries
   alone.
 - **Clones and applied deltas keep the heap's capacity.** `CommonHeap` and
   `TopKHeap` clones keep their source's slots and index buckets, and
   `merge_delta` on the WithHeap sketches refills the sketch's own heap, so
-  both grow within `estimated_memory_bytes`.
+  both grow within `theoretical_memory_bytes`.
 ### Added
 
 - **Checked f64 updates and heap rescoring for the Count-Min and Count Sketch

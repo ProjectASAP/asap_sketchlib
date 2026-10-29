@@ -454,7 +454,7 @@ impl DdSketch {
     /// the indexable one holds no buckets.
     ///
     /// Panics when `alpha` is outside `(0, 1)`, as [`Self::new`] does.
-    pub fn estimated_memory_bytes(
+    pub fn theoretical_memory_bytes(
         alpha: f64,
         n: usize,
         min_magnitude: f64,

@@ -227,8 +227,8 @@ impl CountMinSketch {
 impl<S: MatrixStorage, Mode> CountMinSketch<S, Mode> {
     /// Bytes a sketch of `rows * cols` counters holds: [`Self::memory_bytes`]
     /// of one built with those dimensions. Defined on the default hasher, so
-    /// [`CountMinF64::estimated_memory_bytes`] needs no type parameters.
-    pub fn estimated_memory_bytes(rows: usize, cols: usize) -> usize {
+    /// [`CountMinF64::theoretical_memory_bytes`] needs no type parameters.
+    pub fn theoretical_memory_bytes(rows: usize, cols: usize) -> usize {
         size_of::<Self>().saturating_add(
             rows.saturating_mul(cols)
                 .saturating_mul(size_of::<S::Counter>()),

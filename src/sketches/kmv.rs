@@ -104,7 +104,7 @@ impl Kmv {
     /// distinct inputs, merges included: [`Self::memory_bytes`] exactly, and an
     /// upper bound when fewer arrive. The heap reserves `min(k, 1024)` slots
     /// and doubles toward `k`. Saturates at `usize::MAX`.
-    pub fn estimated_memory_bytes(k: usize, distinct: usize) -> usize {
+    pub fn theoretical_memory_bytes(k: usize, distinct: usize) -> usize {
         let slots = vec_slots_after_pushes(
             k.min(PREALLOCATED_SLOTS),
             k.min(distinct),

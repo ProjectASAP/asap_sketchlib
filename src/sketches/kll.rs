@@ -389,7 +389,7 @@ impl<T: NumericalValue> Kll<T> {
     ///
     /// The struct and level array are exact; the buffer, compaction scratch
     /// space and CDF are bounded by the items `n` can leave retained.
-    pub fn estimated_memory_bytes(k: usize, m: usize, n: usize) -> usize {
+    pub fn theoretical_memory_bytes(k: usize, m: usize, n: usize) -> usize {
         let (k, m) = normalized_k_m(k, m);
         let capacities = capacity_table(k, m);
         // A level is added once the top holds `k + 1` items of weight 2^top.

@@ -264,7 +264,7 @@ impl<C: HeapCount> TopKHeap<C> {
     /// The arrays and the index reserve `min(heap_size, 1024)` and grow by
     /// doubling; the index follows std's `HashMap` layout, growing once more
     /// under churn when it is over half full. Saturates at `usize::MAX`.
-    pub fn estimated_memory_bytes(heap_size: usize, key: &DataInput) -> usize {
+    pub fn theoretical_memory_bytes(heap_size: usize, key: &DataInput) -> usize {
         let reserved = heap_size.min(PREALLOCATED_SLOTS);
         let entry_bytes = size_of::<HeapEntry<C>>();
         let entry_slots = vec_slots_after_pushes(reserved, heap_size, entry_bytes);

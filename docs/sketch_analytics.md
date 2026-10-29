@@ -67,7 +67,7 @@ pub struct ErrorBound {
 - `Statistic` is the enum in `src/capability.rs`, plus `QuantileInterpolated` for DdSketch.
 - `theoretical_update_ops` is the cost of the plain `update` call, or of `update_weighted` for a sketch that has only that.
 - `theoretical_query_ops`, `theoretical_merge_ops` and `theoretical_error` return `None` for what the sketch does not do or has no formula for.
-- `theoretical_memory_bytes` calls the sketch's inherent `theoretical_memory_bytes`, which is the existing `estimated_memory_bytes` renamed, or uses the section's formula where the sketch has none.
+- `theoretical_memory_bytes` calls the sketch's inherent `theoretical_memory_bytes`, or uses the section's formula where the sketch has none.
 - A caller with parameters calls these functions directly, and a caller with a target `(ε, δ)` first calls `params_for`.
 - `params_for` returns parameters from the section's sizing rule that meet `(ε, δ)`, or `None` when no parameters the constructor accepts can.
   Parameters the bound does not depend on come from `Params::default()`.
@@ -828,7 +828,7 @@ A change to an implementation updates its formulas in the same pull request and 
 
 ## Migration
 
-1. asap_sketchlib renames `estimated_memory_bytes` to `theoretical_memory_bytes`, and adds `SketchAnalytics`, `ErrorBound`, `ErrorMetric`, `Statistic::QuantileInterpolated`, the op-counting feature, the trait implementations with their tests, and `memory_bytes()` and `theoretical_memory_bytes` for the sketches and frameworks that lack them.
+1. asap_sketchlib renames `theoretical_memory_bytes` to `theoretical_memory_bytes`, and adds `SketchAnalytics`, `ErrorBound`, `ErrorMetric`, `Statistic::QuantileInterpolated`, the op-counting feature, the trait implementations with their tests, and `memory_bytes()` and `theoretical_memory_bytes` for the sketches and frameworks that lack them.
 2. ASAPPlanner's `sketch_shape` and `accuracy/estimators` call these functions, and ASAPPlanner keeps combining errors across a plan and splitting its error budget.
 3. ASAPPlanner's `analytical-resource-cost.md` links to this page in place of its summary table.
 

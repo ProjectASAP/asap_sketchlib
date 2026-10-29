@@ -263,7 +263,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
     /// called through; the crate builds 12, 14 and 16, and
     /// [`impl_hll_registers!`](crate::impl_hll_registers) others. Saturates at
     /// `usize::MAX`.
-    pub fn estimated_memory_bytes(precision: usize) -> usize {
+    pub fn theoretical_memory_bytes(precision: usize) -> usize {
         size_of::<Self>().saturating_add(register_bytes(precision))
     }
 }
@@ -483,7 +483,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
     /// called through; the crate builds 12, 14 and 16, and
     /// [`impl_hll_registers!`](crate::impl_hll_registers) others. Saturates at
     /// `usize::MAX`.
-    pub fn estimated_memory_bytes(precision: usize) -> usize {
+    pub fn theoretical_memory_bytes(precision: usize) -> usize {
         size_of::<Self>().saturating_add(register_bytes(precision))
     }
 }

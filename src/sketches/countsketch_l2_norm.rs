@@ -67,7 +67,7 @@ fn clamp_to_i64(accumulator: i128) -> i64 {
 impl CountSketchWithL2Norm {
     /// Bytes a sketch of `rows * cols` counters holds: [`Self::memory_bytes`]
     /// of one built with those dimensions, for every hasher.
-    pub fn estimated_memory_bytes(rows: usize, cols: usize) -> usize {
+    pub fn theoretical_memory_bytes(rows: usize, cols: usize) -> usize {
         size_of::<Self>().saturating_add(
             rows.saturating_mul(cols)
                 .saturating_mul(size_of::<i64>())

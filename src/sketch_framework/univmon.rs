@@ -585,19 +585,19 @@ impl UnivMon {
     /// Bytes a pyramid of that shape, built by [`Self::new`], decoded or cloned,
     /// holds in steady state once keys shaped like `key` churn through every
     /// layer: the struct and, per layer,
-    /// [`CountSketchWithL2Norm::estimated_memory_bytes`],
-    /// [`TopKHeap::estimated_memory_bytes`] and a candidate flag. A pyramid
+    /// [`CountSketchWithL2Norm::theoretical_memory_bytes`],
+    /// [`TopKHeap::theoretical_memory_bytes`] and a candidate flag. A pyramid
     /// holds at most this, and exactly this once every layer's heap has
     /// churned. Saturates at `usize::MAX`.
-    pub fn estimated_memory_bytes(
+    pub fn theoretical_memory_bytes(
         heap_size: usize,
         rows: usize,
         cols: usize,
         layers: usize,
         key: &DataInput,
     ) -> usize {
-        let layer = CountSketchWithL2Norm::estimated_memory_bytes(rows, cols)
-            .saturating_add(TopKHeap::<i64>::estimated_memory_bytes(heap_size, key))
+        let layer = CountSketchWithL2Norm::theoretical_memory_bytes(rows, cols)
+            .saturating_add(TopKHeap::<i64>::theoretical_memory_bytes(heap_size, key))
             .saturating_add(size_of::<bool>());
         size_of::<Self>().saturating_add(layers.saturating_mul(layer))
     }

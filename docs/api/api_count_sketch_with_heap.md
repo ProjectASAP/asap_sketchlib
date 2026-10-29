@@ -61,11 +61,11 @@ fn heap(&self) -> &TopKHeap<C>
 
 ```rust
 fn memory_bytes(&self) -> usize
-fn estimated_memory_bytes(rows: usize, cols: usize, heap_size: usize, key: &DataInput) -> usize // Vector2D storage
+fn theoretical_memory_bytes(rows: usize, cols: usize, heap_size: usize, key: &DataInput) -> usize // Vector2D storage
 ```
 
 `memory_bytes` is what the instance holds now: the struct, `rows * cols`
-counters and `TopKHeap::memory_bytes`. `estimated_memory_bytes` prices a
+counters and `TopKHeap::memory_bytes`. `theoretical_memory_bytes` prices a
 `new(rows, cols, heap_size)` whose heap is full of keys shaped like `key`.
 
 ## Merge

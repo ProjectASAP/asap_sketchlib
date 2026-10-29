@@ -117,8 +117,8 @@ where
     /// Bytes a sketch of `rows` x `cols` and `heap_size` holds once its heap is
     /// full of keys shaped like `key`, whether built by [`Self::new`], decoded,
     /// cloned or given a [`CountSketchWithHeapDelta`] through `merge_delta`: the struct,
-    /// the counters and [`TopKHeap::estimated_memory_bytes`].
-    pub fn estimated_memory_bytes(
+    /// the counters and [`TopKHeap::theoretical_memory_bytes`].
+    pub fn theoretical_memory_bytes(
         rows: usize,
         cols: usize,
         heap_size: usize,
@@ -126,7 +126,7 @@ where
     ) -> usize {
         (size_of::<Self>() - size_of::<TopKHeap<T::HeapCount>>())
             .saturating_add(rows.saturating_mul(cols).saturating_mul(size_of::<T>()))
-            .saturating_add(TopKHeap::<T::HeapCount>::estimated_memory_bytes(
+            .saturating_add(TopKHeap::<T::HeapCount>::theoretical_memory_bytes(
                 heap_size, key,
             ))
     }
