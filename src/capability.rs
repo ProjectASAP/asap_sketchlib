@@ -17,31 +17,31 @@
 )]
 pub enum SketchAlgorithm {
     /// `CountMinSketch` over every storage and path, and `CountMinF64`.
-    Cms,
+    CountMinSketch,
     CountSketch,
     CountSketchWithL2Norm,
     /// `CountMinSketchWithHeap`.
-    CmsWithHeap,
+    CountMinSketchWithHeap,
     CountSketchWithHeap,
     /// `CountMinSketchWithSpaceSaving`.
-    CmsWithSpaceSaving,
+    CountMinSketchWithSpaceSaving,
     CountSketchWithSpaceSaving,
     /// `CountMinSketchFold`.
-    CmsFold,
+    CountMinSketchFold,
     CountSketchFold,
     /// `HyperLogLog` (Classic or Ertl) at any precision.
-    Hll,
+    HLL,
     /// `HyperLogLogHip` at any precision.
-    HllHip,
-    Kmv,
-    Kll,
-    KllDynamic,
+    HLLHip,
+    KMV,
+    KLL,
+    KLLDynamic,
     DDSketch,
     SpaceSaving,
     /// `ElasticSketch`.
-    Elastic,
+    ElasticSketch,
     /// `CocoSketch`.
-    Coco,
+    CocoSketch,
     Bloom,
     SetAggregator,
     UnivMon,
@@ -49,19 +49,19 @@ pub enum SketchAlgorithm {
     /// Quantile and rank are `None` when `ordered_samples` is 0.
     UnivMonQ,
     /// `Hydra` over Count-Min cells, per subpopulation.
-    HydraCms,
+    HydraCountMinSketch,
     /// `Hydra` over Count Sketch cells, per subpopulation.
     HydraCountSketch,
     /// `Hydra` over KLL cells, per subpopulation.
-    HydraKll,
+    HydraKLL,
     /// `Hydra` over HyperLogLog cells, per subpopulation.
-    HydraHll,
+    HydraHLL,
     /// `Hydra` over UnivMon cells, per subpopulation.
     HydraUnivMon,
     #[cfg(feature = "experimental")]
-    CmsHll,
+    CountMinSketchHLL,
     #[cfg(feature = "experimental")]
-    MicroCm,
+    MicroCountMinSketch,
     #[cfg(feature = "experimental")]
     UniformSampling,
 }
@@ -112,7 +112,7 @@ pub enum MergedError {
     Exact,
     /// As one state built over the union, given equal parameters: the merge
     /// adds no error of its own. Whatever guarantee one state has, the merged
-    /// state keeps; a family with none (HydraKll) gains none.
+    /// state keeps; a family with none (HydraKLL) gains none.
     AsIfBuiltOverUnion,
     /// The merge is allowed, but the merged readout has no guarantee.
     Approximate,
@@ -149,38 +149,38 @@ impl FamilyCapability {
 impl SketchAlgorithm {
     /// Every family, each once.
     pub const ALL: &'static [SketchAlgorithm] = &[
-        SketchAlgorithm::Cms,
+        SketchAlgorithm::CountMinSketch,
         SketchAlgorithm::CountSketch,
         SketchAlgorithm::CountSketchWithL2Norm,
-        SketchAlgorithm::CmsWithHeap,
+        SketchAlgorithm::CountMinSketchWithHeap,
         SketchAlgorithm::CountSketchWithHeap,
-        SketchAlgorithm::CmsWithSpaceSaving,
+        SketchAlgorithm::CountMinSketchWithSpaceSaving,
         SketchAlgorithm::CountSketchWithSpaceSaving,
-        SketchAlgorithm::CmsFold,
+        SketchAlgorithm::CountMinSketchFold,
         SketchAlgorithm::CountSketchFold,
-        SketchAlgorithm::Hll,
-        SketchAlgorithm::HllHip,
-        SketchAlgorithm::Kmv,
-        SketchAlgorithm::Kll,
-        SketchAlgorithm::KllDynamic,
+        SketchAlgorithm::HLL,
+        SketchAlgorithm::HLLHip,
+        SketchAlgorithm::KMV,
+        SketchAlgorithm::KLL,
+        SketchAlgorithm::KLLDynamic,
         SketchAlgorithm::DDSketch,
         SketchAlgorithm::SpaceSaving,
-        SketchAlgorithm::Elastic,
-        SketchAlgorithm::Coco,
+        SketchAlgorithm::ElasticSketch,
+        SketchAlgorithm::CocoSketch,
         SketchAlgorithm::Bloom,
         SketchAlgorithm::SetAggregator,
         SketchAlgorithm::UnivMon,
         SketchAlgorithm::UnivMonTwoTier,
         SketchAlgorithm::UnivMonQ,
-        SketchAlgorithm::HydraCms,
+        SketchAlgorithm::HydraCountMinSketch,
         SketchAlgorithm::HydraCountSketch,
-        SketchAlgorithm::HydraKll,
-        SketchAlgorithm::HydraHll,
+        SketchAlgorithm::HydraKLL,
+        SketchAlgorithm::HydraHLL,
         SketchAlgorithm::HydraUnivMon,
         #[cfg(feature = "experimental")]
-        SketchAlgorithm::CmsHll,
+        SketchAlgorithm::CountMinSketchHLL,
         #[cfg(feature = "experimental")]
-        SketchAlgorithm::MicroCm,
+        SketchAlgorithm::MicroCountMinSketch,
         #[cfg(feature = "experimental")]
         SketchAlgorithm::UniformSampling,
     ];
@@ -199,25 +199,25 @@ impl SketchAlgorithm {
         ];
         const FREQUENCY_TOP_K: &[(StatisticKind, MergedError)] = &[(ItemFrequency, U), (TopK, A)];
         let (merge_inputs, readouts): (_, &'static [(StatisticKind, MergedError)]) = match self {
-            Self::Cms => (Some(Disjoint), &[(ItemFrequency, U), (Total, E)]),
+            Self::CountMinSketch => (Some(Disjoint), &[(ItemFrequency, U), (Total, E)]),
             Self::CountSketch => (Some(Disjoint), &[(ItemFrequency, U)]),
             Self::CountSketchWithL2Norm => {
                 (Some(Disjoint), &[(ItemFrequency, U), (FrequencyL2, U)])
             }
-            Self::CmsWithHeap
+            Self::CountMinSketchWithHeap
             | Self::CountSketchWithHeap
-            | Self::CmsWithSpaceSaving
+            | Self::CountMinSketchWithSpaceSaving
             | Self::CountSketchWithSpaceSaving
-            | Self::CmsFold
+            | Self::CountMinSketchFold
             | Self::CountSketchFold => (Some(Disjoint), FREQUENCY_TOP_K),
-            Self::Hll => (Some(MayOverlap), &[(Distinct, U)]),
-            Self::HllHip => (None, &[(Distinct, A)]),
-            Self::Kmv => (Some(MayOverlap), &[(Distinct, U)]),
-            Self::Kll | Self::KllDynamic => (Some(Disjoint), &[(Quantile, U), (Rank, U)]),
+            Self::HLL => (Some(MayOverlap), &[(Distinct, U)]),
+            Self::HLLHip => (None, &[(Distinct, A)]),
+            Self::KMV => (Some(MayOverlap), &[(Distinct, U)]),
+            Self::KLL | Self::KLLDynamic => (Some(Disjoint), &[(Quantile, U), (Rank, U)]),
             Self::DDSketch => (Some(Disjoint), &[(Quantile, U)]),
             Self::SpaceSaving => (Some(Disjoint), &[(ItemFrequency, A), (TopK, A)]),
-            Self::Elastic => (Some(Disjoint), &[(ItemFrequency, A), (TopK, A)]),
-            Self::Coco => (Some(Disjoint), &[(ItemFrequency, A), (PartialKeySum, A)]),
+            Self::ElasticSketch => (Some(Disjoint), &[(ItemFrequency, A), (TopK, A)]),
+            Self::CocoSketch => (Some(Disjoint), &[(ItemFrequency, A), (PartialKeySum, A)]),
             Self::Bloom => (Some(MayOverlap), &[(Membership, U)]),
             Self::SetAggregator => (Some(MayOverlap), &[(Distinct, E), (Membership, E)]),
             Self::UnivMon | Self::UnivMonTwoTier => (Some(Disjoint), UNIVMON),
@@ -238,10 +238,10 @@ impl SketchAlgorithm {
                     (TopK, A),
                 ],
             ),
-            Self::HydraCms => (Some(Disjoint), &[(ItemFrequency, U), (Total, U)]),
+            Self::HydraCountMinSketch => (Some(Disjoint), &[(ItemFrequency, U), (Total, U)]),
             Self::HydraCountSketch => (Some(Disjoint), &[(ItemFrequency, U)]),
-            Self::HydraKll => (Some(Disjoint), &[(Quantile, U), (Rank, U)]),
-            Self::HydraHll => (Some(MayOverlap), &[(Distinct, U)]),
+            Self::HydraKLL => (Some(Disjoint), &[(Quantile, U), (Rank, U)]),
+            Self::HydraHLL => (Some(MayOverlap), &[(Distinct, U)]),
             Self::HydraUnivMon => (
                 Some(Disjoint),
                 &[
@@ -252,9 +252,9 @@ impl SketchAlgorithm {
                 ],
             ),
             #[cfg(feature = "experimental")]
-            Self::CmsHll => (Some(MayOverlap), &[(KeyDistinct, U)]),
+            Self::CountMinSketchHLL => (Some(MayOverlap), &[(KeyDistinct, U)]),
             #[cfg(feature = "experimental")]
-            Self::MicroCm => (Some(Disjoint), &[(ItemFrequency, A)]),
+            Self::MicroCountMinSketch => (Some(Disjoint), &[(ItemFrequency, A)]),
             #[cfg(feature = "experimental")]
             Self::UniformSampling => (Some(Disjoint), &[(Sample, A)]),
         };
@@ -272,38 +272,38 @@ mod tests {
     /// No wildcard: a new variant fails to compile until listed here.
     fn expected_index(family: SketchAlgorithm) -> usize {
         match family {
-            SketchAlgorithm::Cms => 0,
+            SketchAlgorithm::CountMinSketch => 0,
             SketchAlgorithm::CountSketch => 1,
             SketchAlgorithm::CountSketchWithL2Norm => 2,
-            SketchAlgorithm::CmsWithHeap => 3,
+            SketchAlgorithm::CountMinSketchWithHeap => 3,
             SketchAlgorithm::CountSketchWithHeap => 4,
-            SketchAlgorithm::CmsWithSpaceSaving => 5,
+            SketchAlgorithm::CountMinSketchWithSpaceSaving => 5,
             SketchAlgorithm::CountSketchWithSpaceSaving => 6,
-            SketchAlgorithm::CmsFold => 7,
+            SketchAlgorithm::CountMinSketchFold => 7,
             SketchAlgorithm::CountSketchFold => 8,
-            SketchAlgorithm::Hll => 9,
-            SketchAlgorithm::HllHip => 10,
-            SketchAlgorithm::Kmv => 11,
-            SketchAlgorithm::Kll => 12,
-            SketchAlgorithm::KllDynamic => 13,
+            SketchAlgorithm::HLL => 9,
+            SketchAlgorithm::HLLHip => 10,
+            SketchAlgorithm::KMV => 11,
+            SketchAlgorithm::KLL => 12,
+            SketchAlgorithm::KLLDynamic => 13,
             SketchAlgorithm::DDSketch => 14,
             SketchAlgorithm::SpaceSaving => 15,
-            SketchAlgorithm::Elastic => 16,
-            SketchAlgorithm::Coco => 17,
+            SketchAlgorithm::ElasticSketch => 16,
+            SketchAlgorithm::CocoSketch => 17,
             SketchAlgorithm::Bloom => 18,
             SketchAlgorithm::SetAggregator => 19,
             SketchAlgorithm::UnivMon => 20,
             SketchAlgorithm::UnivMonTwoTier => 21,
             SketchAlgorithm::UnivMonQ => 22,
-            SketchAlgorithm::HydraCms => 23,
+            SketchAlgorithm::HydraCountMinSketch => 23,
             SketchAlgorithm::HydraCountSketch => 24,
-            SketchAlgorithm::HydraKll => 25,
-            SketchAlgorithm::HydraHll => 26,
+            SketchAlgorithm::HydraKLL => 25,
+            SketchAlgorithm::HydraHLL => 26,
             SketchAlgorithm::HydraUnivMon => 27,
             #[cfg(feature = "experimental")]
-            SketchAlgorithm::CmsHll => 28,
+            SketchAlgorithm::CountMinSketchHLL => 28,
             #[cfg(feature = "experimental")]
-            SketchAlgorithm::MicroCm => 29,
+            SketchAlgorithm::MicroCountMinSketch => 29,
             #[cfg(feature = "experimental")]
             SketchAlgorithm::UniformSampling => 30,
         }

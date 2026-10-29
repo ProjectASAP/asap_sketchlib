@@ -23,24 +23,24 @@ const QUANTILE_RANK: Readouts = &[(Quantile, U), (Rank, U)];
 
 #[rustfmt::skip]
 const DECIDED: &[(SketchAlgorithm, Option<MergeInputRule>, Readouts)] = &[
-    (F::Cms, Some(D), &[(ItemFrequency, U), (Total, E)]),
+    (F::CountMinSketch, Some(D), &[(ItemFrequency, U), (Total, E)]),
     (F::CountSketch, Some(D), &[(ItemFrequency, U)]),
     (F::CountSketchWithL2Norm, Some(D), &[(ItemFrequency, U), (FrequencyL2, U)]),
-    (F::CmsWithHeap, Some(D), FREQ_TOP_K),
+    (F::CountMinSketchWithHeap, Some(D), FREQ_TOP_K),
     (F::CountSketchWithHeap, Some(D), FREQ_TOP_K),
-    (F::CmsWithSpaceSaving, Some(D), FREQ_TOP_K),
+    (F::CountMinSketchWithSpaceSaving, Some(D), FREQ_TOP_K),
     (F::CountSketchWithSpaceSaving, Some(D), FREQ_TOP_K),
-    (F::CmsFold, Some(D), FREQ_TOP_K),
+    (F::CountMinSketchFold, Some(D), FREQ_TOP_K),
     (F::CountSketchFold, Some(D), FREQ_TOP_K),
-    (F::Hll, Some(O), &[(Distinct, U)]),
-    (F::HllHip, None, &[(Distinct, A)]),
-    (F::Kmv, Some(O), &[(Distinct, U)]),
-    (F::Kll, Some(D), QUANTILE_RANK),
-    (F::KllDynamic, Some(D), QUANTILE_RANK),
+    (F::HLL, Some(O), &[(Distinct, U)]),
+    (F::HLLHip, None, &[(Distinct, A)]),
+    (F::KMV, Some(O), &[(Distinct, U)]),
+    (F::KLL, Some(D), QUANTILE_RANK),
+    (F::KLLDynamic, Some(D), QUANTILE_RANK),
     (F::DDSketch, Some(D), &[(Quantile, U)]),
     (F::SpaceSaving, Some(D), &[(ItemFrequency, A), (TopK, A)]),
-    (F::Elastic, Some(D), &[(ItemFrequency, A), (TopK, A)]),
-    (F::Coco, Some(D), &[(ItemFrequency, A), (PartialKeySum, A)]),
+    (F::ElasticSketch, Some(D), &[(ItemFrequency, A), (TopK, A)]),
+    (F::CocoSketch, Some(D), &[(ItemFrequency, A), (PartialKeySum, A)]),
     (F::Bloom, Some(O), &[(Membership, U)]),
     (F::SetAggregator, Some(O), &[(Distinct, E), (Membership, E)]),
     (F::UnivMon, Some(D), UNIVMON),
@@ -49,15 +49,15 @@ const DECIDED: &[(SketchAlgorithm, Option<MergeInputRule>, Readouts)] = &[
         (ItemFrequency, U), (FrequencyL2, U), (Distinct, A), (Quantile, A), (Rank, A),
         (GSum, A), (FrequencyEntropy, A), (TopK, A),
     ]),
-    (F::HydraCms, Some(D), &[(ItemFrequency, U), (Total, U)]),
+    (F::HydraCountMinSketch, Some(D), &[(ItemFrequency, U), (Total, U)]),
     (F::HydraCountSketch, Some(D), &[(ItemFrequency, U)]),
-    (F::HydraKll, Some(D), QUANTILE_RANK),
-    (F::HydraHll, Some(O), &[(Distinct, U)]),
+    (F::HydraKLL, Some(D), QUANTILE_RANK),
+    (F::HydraHLL, Some(O), &[(Distinct, U)]),
     (F::HydraUnivMon, Some(D), &[(Total, U), (Distinct, U), (FrequencyL2, U), (FrequencyEntropy, A)]),
     #[cfg(feature = "experimental")]
-    (F::CmsHll, Some(O), &[(KeyDistinct, U)]),
+    (F::CountMinSketchHLL, Some(O), &[(KeyDistinct, U)]),
     #[cfg(feature = "experimental")]
-    (F::MicroCm, Some(D), &[(ItemFrequency, A)]),
+    (F::MicroCountMinSketch, Some(D), &[(ItemFrequency, A)]),
     #[cfg(feature = "experimental")]
     (F::UniformSampling, Some(D), &[(Sample, A)]),
 ];
@@ -77,8 +77,8 @@ fn every_row_is_well_formed() {
             assert_eq!(row.merged_error(statistic), row.merge_inputs.map(|_| error));
         }
     }
-    assert_eq!(F::HllHip.capability().merged_error(Distinct), None);
-    assert_eq!(F::Cms.capability().merged_error(Quantile), None);
+    assert_eq!(F::HLLHip.capability().merged_error(Distinct), None);
+    assert_eq!(F::CountMinSketch.capability().merged_error(Quantile), None);
 }
 
 #[test]
@@ -130,33 +130,33 @@ fn probe(family: SketchAlgorithm) -> Vec<(StatisticKind, f64, f64)> {
     let query = |h: &Hydra, q: HydraQuery| h.query_key(&G, &q).unwrap();
     let keys = |n: u64| (0..n).map(DataInput::U64);
     match family {
-        F::Cms => self_merge(CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(3, 64), |s| s.update_weighted(&K, 3),
+        F::CountMinSketch => self_merge(CountMinSketch::<Vector2D<i64>, FastPath>::with_dimensions(3, 64), |s| s.update_weighted(&K, 3),
             |a, b| a.merge(b), |s| vec![(Total, s.total()), (ItemFrequency, s.estimate(&K) as f64)]),
         F::CountSketch => self_merge(CountSketch::<Vector2D<i64>, FastPath>::with_dimensions(3, 64), |s| s.update_weighted(&K, 3),
             |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate(&K))]),
         F::CountSketchWithL2Norm => self_merge(CountSketchWithL2Norm::<DefaultXxHasher>::with_dimensions(3, 64),
             |s| s.update_weighted(&K, 3), |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate(&K))]),
-        F::CmsWithHeap => self_merge(CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(3, 64, 4),
+        F::CountMinSketchWithHeap => self_merge(CountMinSketchWithHeap::<Vector2D<i64>, FastPath>::new(3, 64, 4),
             |s| s.update_weighted(&K, 3), |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate(&K) as f64)]),
         F::CountSketchWithHeap => self_merge(CountSketchWithHeap::<Vector2D<i64>, FastPath>::new(3, 64, 4),
             |s| s.update_weighted(&K, 3), |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate(&K))]),
-        F::CmsWithSpaceSaving => self_merge(CountMinSketchWithSpaceSaving::<Vector2D<i64>>::new(3, 64, 4),
+        F::CountMinSketchWithSpaceSaving => self_merge(CountMinSketchWithSpaceSaving::<Vector2D<i64>>::new(3, 64, 4),
             |s| s.update_weighted(&K, 3), |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate(&K) as f64)]),
         F::CountSketchWithSpaceSaving => self_merge(CountSketchWithSpaceSaving::<Vector2D<i64>>::new(3, 64, 4),
             |s| s.update_weighted(&K, 3), |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate(&K))]),
-        F::CmsFold => self_merge(CountMinSketchFold::<DefaultXxHasher>::new(3, 64, 2, 4), |s| s.update_weighted(&K, 3),
+        F::CountMinSketchFold => self_merge(CountMinSketchFold::<DefaultXxHasher>::new(3, 64, 2, 4), |s| s.update_weighted(&K, 3),
             |a, b| a.merge_same_level(b), |s| vec![(ItemFrequency, s.estimate(&K) as f64)]),
         F::CountSketchFold => self_merge(CountSketchFold::<DefaultXxHasher>::new(3, 64, 2, 4), |s| s.update_weighted(&K, 3),
             |a, b| a.merge_same_level(b), |s| vec![(ItemFrequency, s.estimate(&K) as f64)]),
-        F::Hll => self_merge(HyperLogLog::<Ertl>::new(), |s| keys(50).for_each(|k| s.update(&k)),
+        F::HLL => self_merge(HyperLogLog::<Ertl>::new(), |s| keys(50).for_each(|k| s.update(&k)),
             |a, b| a.merge(b), |s| vec![(Distinct, s.estimate() as f64)]),
-        F::Kmv => self_merge(Kmv::<DefaultXxHasher>::new(16), |s| keys(50).for_each(|k| s.update(&k)),
+        F::KMV => self_merge(Kmv::<DefaultXxHasher>::new(16), |s| keys(50).for_each(|k| s.update(&k)),
             |a, b| a.merge(b), |s| vec![(Distinct, s.estimate())]),
         F::SpaceSaving => self_merge(SpaceSaving::<DefaultXxHasher>::with_capacity(4), |s| s.update_weighted(&K, 3),
             |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate(&K) as f64)]),
-        F::Elastic => self_merge(ElasticSketch::<DefaultXxHasher>::with_heavy_buckets(8), |s| s.update_weighted("a".into(), 3),
+        F::ElasticSketch => self_merge(ElasticSketch::<DefaultXxHasher>::with_heavy_buckets(8), |s| s.update_weighted("a".into(), 3),
             |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate("a".into()) as f64)]),
-        F::Coco => self_merge(CocoSketch::<DefaultXxHasher>::with_dimensions(3, 64), |s| s.update_weighted("a", 3),
+        F::CocoSketch => self_merge(CocoSketch::<DefaultXxHasher>::with_dimensions(3, 64), |s| s.update_weighted("a", 3),
             |a, b| a.merge(b), |s| vec![(ItemFrequency, s.estimate("a") as f64)]),
         F::Bloom => self_merge(Bloom::<RegularPath>::with_capacity(100, 0.01), |s| s.update(&K),
             |a, b| a.merge(b), |s| vec![(Membership, s.contains(&K) as u8 as f64)]),
@@ -168,19 +168,19 @@ fn probe(family: SketchAlgorithm) -> Vec<(StatisticKind, f64, f64)> {
             |a, b| a.merge(b), |s| vec![(Total, s.estimate_l1())]),
         F::UnivMonQ => self_merge(UnivMonQ::<DefaultXxHasher>::default(), |s| (0..3).for_each(|_| s.update(&3.0f64)),
             |a, b| a.merge(b).unwrap(), |s| vec![(ItemFrequency, s.estimate_frequency(3.0) as f64)]),
-        F::HydraCms => self_merge(hydra(HydraCounter::CountMinSketch(CountMinSketch::with_dimensions(3, 64))), add3, merge,
+        F::HydraCountMinSketch => self_merge(hydra(HydraCounter::CountMinSketch(CountMinSketch::with_dimensions(3, 64))), add3, merge,
             |s| vec![(Total, s.query_group_total(&G).unwrap()), (ItemFrequency, s.query_frequency(&G, &K).unwrap())]),
         F::HydraCountSketch => self_merge(hydra(HydraCounter::CountSketch(CountSketch::with_dimensions(3, 64))), add3, merge,
             |s| vec![(ItemFrequency, s.query_frequency(&G, &K).unwrap())]),
-        F::HydraHll => self_merge(hydra(HydraCounter::Hll(HyperLogLog::<Ertl>::new())), add3, merge,
+        F::HydraHLL => self_merge(hydra(HydraCounter::Hll(HyperLogLog::<Ertl>::new())), add3, merge,
             |s| vec![(Distinct, query(s, HydraQuery::Cardinality))]),
         F::HydraUnivMon => self_merge(hydra(HydraCounter::UnivMon(UnivMon::new(4, 3, 64, 4))), add3, merge,
             |s| vec![(Total, query(s, HydraQuery::L1Norm))]),
         #[cfg(feature = "experimental")]
-        F::CmsHll => self_merge(CountMinHll::<DefaultXxHasher>::with_dimensions(3, 64, 10),
+        F::CountMinSketchHLL => self_merge(CountMinHll::<DefaultXxHasher>::with_dimensions(3, 64, 10),
             |s| keys(20).for_each(|v| s.update(&K, &v)), |a, b| a.merge(b).unwrap(), |s| vec![(KeyDistinct, s.estimate(&K))]),
         #[cfg(feature = "experimental")]
-        F::MicroCm => self_merge(MicroCm::default(), |s| (0..3).for_each(|_| s.update(&K)),
+        F::MicroCountMinSketch => self_merge(MicroCm::default(), |s| (0..3).for_each(|_| s.update(&K)),
             |a, b| a.merge(b).unwrap(), |s| vec![(ItemFrequency, s.estimate(&K))]),
         _ => vec![],
     }
