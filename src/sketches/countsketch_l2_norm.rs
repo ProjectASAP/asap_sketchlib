@@ -4,7 +4,7 @@
 //! `UnivMonTwoTier`; its L2 norm sets their terminal-mode heavy-hitter threshold.
 //!
 //! Each row's L2 accumulator is a cache of its counters: read through
-//! [`clamp_to_i64`] it always equals the row's sum of squared counters,
+//! `clamp_to_i64` it always equals the row's sum of squared counters,
 //! saturated at `i64::MAX`, so the ASAPv1 payload does not carry it and the
 //! decoder recomputes it.
 
