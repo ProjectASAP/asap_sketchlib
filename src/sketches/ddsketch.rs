@@ -107,12 +107,14 @@ impl Buckets {
             let idx = idx_i32 as usize;
             let slice = self.counts.as_mut_slice();
             if idx < slice.len() {
+                crate::analytics::ops::add(2);
                 slice[idx] += 1;
                 return;
             }
         }
 
         // This is the method that gets called only on rare expansions
+        crate::analytics::ops::add(3);
         self.ensure(k);
         let idx = (k - self.offset) as usize;
         self.counts.as_mut_slice()[idx] += 1;
@@ -248,7 +250,9 @@ impl DdSketch {
             return Err("DDSketch value exceeds indexable range");
         }
         self.count = self.count.checked_add(1).ok_or("DDSketch count overflow")?;
+        crate::analytics::ops::add(1);
         if v.abs() < min_indexable {
+            crate::analytics::ops::add(1);
             self.zero_count += 1;
         } else {
             let key = self.key_for(v.abs());
@@ -337,6 +341,7 @@ impl DdSketch {
     /// sample's magnitude is indexable. A nonzero magnitude below the
     /// indexable range is counted as zero and reads `0.0`.
     pub fn get_value_at_quantile(&self, q: f64) -> Option<f64> {
+        crate::analytics::ops::add(1);
         if self.count == 0 || q.is_nan() {
             return None;
         }
@@ -369,6 +374,7 @@ impl DdSketch {
         if !(0.0..=1.0).contains(&q) {
             return Err(format!("DDSketch quantile {q} is outside [0, 1]"));
         }
+        crate::analytics::ops::add(1);
         if self.count == 0 {
             return Ok(None);
         }
@@ -393,12 +399,16 @@ impl DdSketch {
         let mut last = 0.0;
         let mut seen = 0u64;
         let negative = self.negative_store.counts.as_slice();
+        let offset = self.negative_store.offset;
+        // Each store's offset and the zero count.
+        crate::analytics::ops::add(3);
         for (i, &count) in negative.iter().enumerate().rev() {
+            crate::analytics::ops::add(1);
             if count == 0 {
                 continue;
             }
             seen += count;
-            last = -self.bin_representative(self.negative_store.offset + i as i32);
+            last = -self.bin_representative(offset + i as i32);
             if seen > rank {
                 return last;
             }
@@ -411,12 +421,14 @@ impl DdSketch {
             }
         }
         let positive = self.positive_store.counts.as_slice();
+        let offset = self.positive_store.offset;
         for (i, &count) in positive.iter().enumerate() {
+            crate::analytics::ops::add(1);
             if count == 0 {
                 continue;
             }
             seen += count;
-            last = self.bin_representative(self.positive_store.offset + i as i32);
+            last = self.bin_representative(offset + i as i32);
             if seen > rank {
                 return last;
             }
@@ -542,14 +554,21 @@ impl DdSketch {
         admission_rate::check_equal(self.admission_rate, other.admission_rate)
             .map_err(|e| format!("cannot merge DDSketches: {e}"))?;
 
+        crate::analytics::ops::add(2);
         if other.count == 0 {
             return Ok(());
         }
         if self.count == 0 {
+            // Every slot, both offsets, the count and the zero count copied.
+            crate::analytics::ops::add(
+                2 * (other.positive_store.counts.len() + other.negative_store.counts.len()) + 8,
+            );
             *self = other.clone();
             return Ok(());
         }
 
+        // The count and the zero count added to.
+        crate::analytics::ops::add(3);
         self.count += other.count;
 
         // Merge bucket vectors
@@ -585,10 +604,13 @@ impl DdSketch {
             return;
         }
         if store.is_empty() {
+            crate::analytics::ops::add(2 * other.counts.len() + 2);
             *store = other.clone();
             return;
         }
 
+        // Both offsets read, every slot read and added in, the offset written.
+        crate::analytics::ops::add(3 + 2 * (store.counts.len() + other.counts.len()));
         let (self_l, self_r) = store.range().unwrap();
         let (other_l, other_r) = other.range().unwrap();
 

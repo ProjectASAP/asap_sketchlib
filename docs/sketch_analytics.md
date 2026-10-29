@@ -516,75 +516,88 @@ Data inputs: `n`.
 Kll keeps items in levels, and when a level fills it sorts it, keeps every other item at double weight, and passes them up.
 The code clamps `m` into [2, 26602] and then `k` into [`m`, 26602], and below `k` and `m` mean the clamped values.
 Level `i` from the top holds at most `cap(i) = max(⌈k·(2/3)^i⌉, m)` items.
-After `n` updates there are `L(n)` levels, the paper's `H`: 1 when `n ≤ k` and `2 + ⌊log2(n/(k + 1))⌋` otherwise.
-The sketch keeps `R(n) = min(n, cap(0) + … + cap(L(n) − 1))` items, at most `3k + (m + 1)·L(n)`, and the bottom level holds at most `c_b = cap(L(n) − 1)`.
+`L(n)` is 1 when `n ≤ k` and `2 + ⌊log2(n/(k + 1))⌋` otherwise, the paper's `H`.
+After `n` updates a state holds `L(n) − 1` to `L(n) + 1` levels, the most when halving odd-sized levels, which gains or loses one item's weight each time, has gained weight.
+`L̂(n)` is `L(n) + 1` for `n > k` and 1 otherwise.
+A state holds at most `R̂(n) = min(n, cap(0) + … + cap(L̂(n) − 1))` items, and its bottom level at most `ĉ_b = min(n, cap(max(L(n) − 2, 0)))`.
+`c_b = cap(L(n) − 1)`.
+In the formulas, `R` and `L` are a state's items and levels, and the trait puts `R̂(n)` and `L̂(n)` in their place.
 
 | Item | Big O | Formula |
 |---|---|---|
 | Quantile error | | `Rank`, `ε = 2.296·s(δ)/k^0.9723`, `δ` chosen; contract `kll_quantile_empirical_99_v1`, or `kll_quantile_empirical_99_delta_scaled_v1` for `δ < 0.01` |
 | Quantile sizing | | `k = ⌈(2.296·s(δ)/ε)^(1/0.9723)⌉`, `m = 8`, `None` when `k > 26602` |
-| Rank error | | none, see open questions |
+| Rank error | | `Absolute(L1)`, `ε = 2.07·s(δ)/k^0.9646`, `δ` chosen; contract `kll_rank_measured_99_v1`, or `kll_rank_measured_99_delta_scaled_v1` for `δ < 0.01` |
+| Rank sizing | | `k = ⌈(2.07·s(δ)/ε)^(1/0.9646)⌉`, `m = 8`, `None` when `k > 26602` |
 | Memory | `O(k + m·log(n/k))` | `theoretical_memory_bytes(k, m, n)` |
-| Update | `O(log k)` average | `26 + lg(c_b + 1)` |
-| Query Quantile | `O(R log R)` | `3R + R·lg R + lg R` |
-| Query Rank | `O(R)` | `R` |
-| Merge | `O(R + B log B)` | `B·lg B + 25R − 11B + 10L + 2(L_a + L_b) + 74`, with `R = R_a + R_b` and `B` the two bottom levels' sizes summed |
+| Update | `O(log k)` average | `15 + lg(c_b + 1)` |
+| Query Quantile | `O(R log R)` | `3R + R·lg R + 2L + lg R + 2` |
+| Query Rank | `O(R)` | `R + 2L` |
+| Merge | `O(R + B log B)` | `B·lg B + 16R + 8L + 40`, with `R = R_a + R_b`, `B` the two bottom levels' sizes summed and `L` the merged state's levels |
 
 - `2.296/k^0.9723` is an empirical fit: with 99% probability, the returned value's rank is within `ε·n` of the requested rank.
   On asap_sketchlib it measures at 0.81 to 0.95 times the fit with `m = 8` and at 1.07 times with `m = 2`, so `theoretical_error` returns `None` for `m < 8`.
+- `rank(x)` returns a count, off by at most `ε·n` with 99% probability, and `None` for `m < 8` as well.
+  The 99th percentile of `|rank(x) − true rank|/n` over 1000 seeded trials and 9 query points, at `n = 10^6`, `m = 8` and `k` from 32 to 4096, regresses to `1.8647/k^0.9646`.
+  The constant 2.07 makes the fit an upper envelope of every measured `k`, since a `k` that is not a power of two measures higher.
 - `s(δ)` is 1 for `δ ≥ 0.01`.
-  Below that it is `z(1 − δ/2)/z(1 − 0.005)`, with `z` the standard normal quantile, which assumes the error is Gaussian and is not measured, and the second contract name marks this.
-- An update appends to the bottom level at 6 ops, and when that level is full it sorts it, halves it into the level above, and repeats while levels overflow.
-  Averaged over updates, the sort costs `lg(c_b + 1)` and the halving and merging at most 20.
+  Below that it is `z(1 − δ/2)/z(1 − 0.005)`, with `z` the standard normal quantile, which assumes the error is Gaussian and is not measured, and the `delta_scaled` contract names mark this.
+- An update appends to the bottom level at 3 ops, and when that level is full it sorts it, halves it into the level above, and repeats while levels overflow.
+  Averaged over the first `n` updates, the sort costs `lg(c_b + 1)` and the rest at most 15, and with `n` unknown `c_b` is `k`.
 - The worst single update compacts every level, at most `(c_b + 1)·lg(c_b + 1) + 12R − 4c_b + 15L + 18 + (L − 1)(L + 2)/2`.
-- A quantile query copies the `R` items, sorts them by value, accumulates their weights, and binary-searches, and `quantile_cached` reuses that until the next update at `lg R` per query.
-- A merge copies both states into one buffer, merges each level, sorts the bottom level, halves each overflowing level once, and writes back all 62 level boundaries.
+- A quantile query copies the `R` items, sorts them by value, accumulates their weights, and binary-searches, and `quantile_cached` reuses that until the next update at `lg R + 2` per query.
+- A rank query reads every item and each level's two bounds.
+- A merge copies both states into one buffer per level, merges each level, sorts the bottom level, halves each overflowing level until it fits, and writes back all 62 level bounds.
+- `theoretical_merge_ops` takes two states of `n` updates each, with `B ≤ 2ĉ_b` and `L ≤ L̂(2n)`.
+- The update constants bound the counted ops for `k` from 2 to 26602 and `m` from 2 to 20 over up to `4·10^6` updates, and the merge constants bound them over about 7000 merges with `k` from 2 to 4096, states at and around each level boundary included.
 - Quantiles 0 and 1 are exact only before the first compaction, because the extremes are not stored.
 - Merge also requires independently seeded inputs, since states built with the same constant seed make the same coin flips.
 
 ### KllDynamic
 
 `src/sketches/kll_dynamic.rs`.
-Parameters, data inputs and clamping as Kll.
+Parameters, data inputs, clamping and shapes as Kll.
 
 | Item | Big O | Formula |
 |---|---|---|
-| Quantile error | | as Kll |
-| Memory | `O(k + m·log(n/k))` | `size_of::<Self>() + 8·max(3k, 2(R(n) + 1)) + 16·(L(n) + 1)` |
-| Update | `O(log k)` average | `5 + lg(c_b + 1) + lg(1.5k)` |
-| Query Quantile | `O(R log R)` | `3R + R·lg R + lg R` |
-| Query Rank | `O(R)` | `R` |
-| Merge | `O(R log k)` | each level's size times its `lg`, summed over both states, plus `25R − 6B + 11L + 2(L_a + L_b) + 11` |
+| Quantile and Rank error and sizing | | as Kll |
+| Memory | `O(k + m·log(n/k))` | `size_of::<Self>() + size_of::<T>()·max(3k, 2(R̂(n) + 1)) + 16·(L̂(n) + 1)` |
+| Update | `O(log k)` average | `11 + 2·lg(c_b + 1)` |
+| Query Quantile | `O(R log R)` | `3R + R·lg R + 2L + lg R + 2` |
+| Query Rank | `O(R)` | `R + 2L` |
+| Merge | `O(R log k)` | `S + 16R + 8L`, with `S` each level's size times its `lg`, summed over both states |
 
-- Every compaction sorts its level again, including the top level of about `1.5k` items, and a merge sorts every level of both states first.
+- Every compaction sorts its level again, and averaged over the first `n` updates the levels above the bottom add at most another `lg(c_b + 1)`.
+- A merge sorts every level of both states first, and `theoretical_merge_ops` bounds `S` by `2·Σ s_i·lg s_i` over `i < L̂(n)`, with `s_i = min(cap(i), n)`.
 - Merge requirements are Kll's.
 
 ### DdSketch
 
 `src/sketches/ddsketch.rs`.
 Parameter: `α` in (0, 1), the code's `alpha`, with `γ = (1 + α)/(1 − α)`.
-Data inputs: `n`, the smallest and largest magnitude, whether negative values occur, and the largest absolute value `A`.
+Data inputs: `n`, the smallest magnitude, the largest magnitude `A`, and whether negative values occur.
 
 | Item | Big O | Formula |
 |---|---|---|
 | Quantile error | | `Relative`, `ε = α`, `δ = 0`; contract `ddsketch_relative_error_alpha_v1` |
 | Quantile sizing | | `α = ε` |
-| QuantileInterpolated error | | `Relative`, `ε = α` when all values share a sign, contract `ddsketch_interpolated_relative_alpha_v1`; otherwise `Absolute`, `ε = α·A`, contract `ddsketch_interpolated_absolute_alpha_v1` |
-| Total, Min, Max error | | exact; contract `exact_v1` |
-| Sum error | | `Absolute`, `ε = (n − 1)·2^−53` times the sum of absolute values, `δ = 0`; contract `ddsketch_f64_sum_rounding_v1` |
+| QuantileInterpolated error | | `δ = 0`; `Relative`, `ε = α` when no value is negative, contract `ddsketch_interpolated_relative_alpha_v1`; otherwise `Absolute`, `ε = α·A`, contract `ddsketch_interpolated_absolute_alpha_v1` |
+| QuantileInterpolated sizing | | `α = ε`, or `α = ε/A` for the `Absolute` bound |
 | Memory | `O(log(max/min)/α)` per sign | `theoretical_memory_bytes(alpha, n, min_magnitude, max_magnitude, negatives)` |
-| Update | `O(1)` | 6 |
-| Query Quantile | `O(B)` | `B` |
-| Query Total, Sum, Min, Max | `O(1)` | 1 |
-| Merge | `O(B)` | `B_a + B_b` plus the slots between their lowest and highest buckets |
+| Update | `O(1)` | 4 |
+| Query Quantile | `O(B)` | `B + 4` |
+| Query QuantileInterpolated | `O(B)` | `2B + 7` |
+| Merge | `O(B)` | `2(B_a + B_b) + 11` |
 
 - For every quantile level `φ`, the returned value is within `α` times the true `⌈φ·n⌉`-th value, because the store never collapses (Masson, Rim and Lee 2019).
+- An interpolated quantile is within `α·((1 − f)·|lower| + f·|upper|)` of the true one, with `f` the fractional rank, which is `α` relative when both neighbours share a sign.
 - A value `x` goes to bucket `⌊log_γ x⌋`, whose representative is `γ^i·(1 + α)`.
-  A store spans `s` buckets from the smallest to the largest magnitude and holds at most `2(s + 126)` slots, the 126 being growth headroom, and `B` is the slots of both signs' stores.
+  A store spans `s` buckets from the smallest to the largest magnitude and holds at most `2(s + 126)` slots, the 126 being growth headroom, and `B` is the slots of both signs' stores, which the trait takes from the memory formula.
 - Magnitudes below about `2e−308` read as 0, and magnitudes above the largest indexable value are dropped, so both are outside the bound.
-- After `apply_delta`, which adds another state's bucket counts, Sum is within `α` times the sum of absolute values, and Min and Max are within `α` relative.
-- An update adds to the count, sum, min and max, reads the store's offset, and adds to one bucket.
-- A quantile query walks the slots until the cumulative count passes `φ·n`.
+- Sum, Min and Max are not sketch readouts: the state is the two stores and the zero count.
+- An update adds to the count, reads the store's offset, and adds to one bucket, or to the zero count, and reads the offset once more after growing the store.
+- A quantile query reads the count, both offsets and the zero count, and walks the slots until the cumulative count passes the rank, and an interpolated one walks twice.
+- A merge reads every slot of both states and adds it into a store spanning both, whose allocation is container growth, and `theoretical_merge_ops` takes two states with the same data inputs.
 - Merge requires `α` equal within `1e−12`.
 
 ### UniformSampling
@@ -596,16 +609,17 @@ Data inputs: `n`, and the sample holds `s = ⌈ρ·n⌉` items.
 | Item | Big O | Formula |
 |---|---|---|
 | Sample error | | none |
-| Total error | | exact; contract `exact_v1` |
 | Memory | `O(ρn)` | `48 + 16·max(4, 2s)` |
-| Update | `O(ρn)` | `2 + lg(s + 1) + s` |
-| Query Sample | `O(s)` | `s` |
-| Merge | `O(s log s)` | `(s_a + s_b)·lg(s_a + s_b)` |
+| Update | `O(ρn)` | `3 + lg s + 2s` |
+| Query Sample | `O(s)` | `2s` |
+| Merge | `O(s log s)` | `3 + 2(s_a + s_b) + (s_a + s_b)·lg(s_a + s_b)` |
 
 - The sample is not uniform.
   When `⌈ρ·t⌉` grows at arrival `t`, that arrival is always kept, and an item dropped earlier never comes back.
   At `n = 1000` and `ρ = 0.1`, an item's chance of being kept rises from 0.077 in the first tenth of the stream to 0.125 in the last.
+- Sample is its only readout, and `total_seen()` is a count kept beside the sample.
 - An update binary-searches the sorted sample, shifts later items to insert, and may drop the last one.
+- A query copies the sample out, and a merge copies both samples into one buffer, sorts it and truncates it, and `theoretical_merge_ops` takes two states of `n` updates each.
 - Merge requires `ρ` equal within `f64::EPSILON`.
 - `new()` uses a fixed seed, so two samplers built with `new()` make the same choices at the same positions, and their merge is correlated.
 
@@ -852,8 +866,3 @@ A change to an implementation updates its formulas in the same pull request and 
 1. asap_sketchlib renames `estimated_memory_bytes` to `theoretical_memory_bytes`, and adds `SketchAnalytics`, `ErrorBound`, `ErrorMetric`, `StatisticKind::QuantileInterpolated`, the op-counting feature, the trait implementations with their tests, and `memory_bytes()` and `theoretical_memory_bytes` for the sketches and frameworks that lack them.
 2. ASAPPlanner's `sketch_shape` and `accuracy/estimators` call these functions, and ASAPPlanner keeps combining errors across a plan and splitting its error budget.
 3. ASAPPlanner's `analytical-resource-cost.md` links to this page in place of its summary table.
-
-## Open questions
-
-- Kll `rank()` returns a count, and at `k = 200`, `n = 10^6` it measures at 1.02 times the Quantile fit.
-  Should the Rank contract use a fit measured on asap_sketchlib, or the Quantile fit times 1.1?

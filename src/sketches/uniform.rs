@@ -62,7 +62,13 @@ impl UniformSampling {
         self.total_seen
     }
 
+    /// Bytes this sampler holds: the struct and its entry slots.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() + self.entries.capacity() * size_of::<SampleEntry>()
+    }
+
     pub fn samples(&self) -> Vec<f64> {
+        crate::analytics::ops::add(2 * self.entries.len());
         self.entries.iter().map(|entry| entry.value).collect()
     }
 
@@ -102,6 +108,7 @@ impl UniformSampling {
 
     pub fn update(&mut self, value: f64) {
         self.total_seen = self.total_seen.saturating_add(1);
+        crate::analytics::ops::add(1);
         let target_size = Self::target_size(self.total_seen, self.sample_rate);
         let priority = self.next_random();
         self.insert_entry(SampleEntry::new(priority, value));
@@ -113,6 +120,10 @@ impl UniformSampling {
             return Err("Cannot merge uniform samplers with different sampling rates");
         }
         let combined_seen = self.total_seen.saturating_add(other.total_seen);
+        let both = self.entries.len() + other.entries.len();
+        // Both counts read, every entry copied and sorted, the count written.
+        crate::analytics::ops::add(3 + 2 * both);
+        crate::analytics::ops::add_sort(both);
         let mut merged = Vec::with_capacity(self.entries.len() + other.entries.len());
         merged.extend(self.entries.iter().cloned());
         merged.extend(other.entries.iter().cloned());
@@ -134,12 +145,14 @@ impl UniformSampling {
     }
 
     fn insert_entry(&mut self, entry: SampleEntry) {
-        let idx = match self
-            .entries
-            .binary_search_by(|probe| probe.priority.cmp(&entry.priority))
-        {
+        let idx = match self.entries.binary_search_by(|probe| {
+            crate::analytics::ops::add(1);
+            probe.priority.cmp(&entry.priority)
+        }) {
             Ok(position) | Err(position) => position,
         };
+        // Each later entry shifts one slot, and the new one is written.
+        crate::analytics::ops::add(2 * (self.entries.len() - idx) + 1);
         self.entries.insert(idx, entry);
     }
 

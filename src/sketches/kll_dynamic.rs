@@ -127,6 +127,8 @@ impl<T: NumericalValue> KllDynamic<T> {
         let levels_slice = self.level_bounds_top_down.as_slice();
         let l0_start = levels_slice[self.num_levels - 1];
         let l0_count = self.items.len() - l0_start;
+        // The item and the last bound written, the bottom level's start read.
+        crate::analytics::ops::add(3);
 
         if l0_count > self.level0_capacity {
             self.compress_while_needed();
@@ -152,6 +154,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         loop {
             let level_idx = self.num_levels - 1 - h;
             let cap = self.capacity_for_level(h);
+            crate::analytics::ops::add(2);
 
             let size = self.level_size(h);
 
@@ -198,6 +201,8 @@ impl<T: NumericalValue> KllDynamic<T> {
     }
 
     fn add_new_top_level(&mut self) {
+        // Every bound shifts one slot, then the new first and the last are written.
+        crate::analytics::ops::add(2 * self.level_bounds_top_down.len() + 2);
         self.level_bounds_top_down.insert(0, 0);
         if let Some(last) = self.level_bounds_top_down.last_mut() {
             *last = self.items.len();
@@ -218,6 +223,8 @@ impl<T: NumericalValue> KllDynamic<T> {
 
         let items = self.items.as_mut_slice();
 
+        crate::analytics::ops::add(2);
+        crate::analytics::ops::add_sort(count);
         items[start..end].sort_unstable_by(T::total_cmp);
 
         let offset = usize::from(self.coin.toss());
@@ -225,6 +232,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         let mut i = offset;
 
         while i < count {
+            crate::analytics::ops::add(2);
             items[start + survivors] = items[start + i];
             survivors += 1;
             i += 2;
@@ -234,6 +242,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         let start_garbage = start + survivors;
         let end_garbage = end;
         let tail_len = items.len() - end_garbage;
+        crate::analytics::ops::add(2 * tail_len);
 
         if tail_len > 0 {
             // Safety: source and destination ranges may overlap, but `ptr::copy` handles overlap.
@@ -248,6 +257,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         self.items.truncate(new_len);
 
         // Update level pointers after shift
+        crate::analytics::ops::add(2 + self.num_levels - cur_lvl_idx);
         let levels_slice = self.level_bounds_top_down.as_mut_slice();
         levels_slice[cur_lvl_idx] = start + survivors;
 
@@ -324,6 +334,7 @@ impl<T: NumericalValue> KllDynamic<T> {
             let start = levels[idx];
             let end = levels[idx + 1];
             let weight = 1 << h;
+            crate::analytics::ops::add(2 + 2 * (end - start));
             for &value in &items[start..end] {
                 cdf.entries.push(DynamicCdfEntry {
                     value: value.to_f64(),
@@ -337,6 +348,8 @@ impl<T: NumericalValue> KllDynamic<T> {
             return cdf;
         }
 
+        crate::analytics::ops::add_sort(cdf.entries.len());
+        crate::analytics::ops::add(cdf.entries.len());
         cdf.entries
             .as_mut_slice()
             .sort_unstable_by(|a, b| a.value.total_cmp(&b.value));
@@ -399,6 +412,8 @@ impl<T: NumericalValue> KllDynamic<T> {
             let idx = self.num_levels - 1 - h;
             let levels = self.level_bounds_top_down.as_slice();
             let (s, e) = (levels[idx], levels[idx + 1]);
+            crate::analytics::ops::add(2 + 2 * (e - s));
+            crate::analytics::ops::add_sort(e - s);
             work[h].extend_from_slice(&self.items.as_slice()[s..e]);
             work[h].sort_unstable_by(T::total_cmp);
         }
@@ -408,6 +423,8 @@ impl<T: NumericalValue> KllDynamic<T> {
             let idx = other.num_levels - 1 - h;
             let levels = other.level_bounds_top_down.as_slice();
             let (s, e) = (levels[idx], levels[idx + 1]);
+            crate::analytics::ops::add(2 + 2 * (e - s));
+            crate::analytics::ops::add_sort(e - s);
             let self_len = work[h].len();
             work[h].extend_from_slice(&other.items.as_slice()[s..e]);
             work[h][self_len..].sort_unstable_by(T::total_cmp);
@@ -436,6 +453,8 @@ impl<T: NumericalValue> KllDynamic<T> {
                 let offset = usize::from(self.coin.toss());
                 let num_survivors = randomly_halve_up(work[h].as_mut_slice(), 0, pop, offset);
                 let discard = pop - num_survivors;
+                // The survivors move to the front, and level h+1 is appended.
+                crate::analytics::ops::add(2 * num_survivors + 2 * work[h + 1].len());
                 work[h].drain(0..discard);
 
                 // Promote the (sorted) survivors into level h+1, merging
@@ -453,6 +472,7 @@ impl<T: NumericalValue> KllDynamic<T> {
         // top level first, matching this type's storage order (array
         // index 0 == top level, growing toward level 0 at the tail).
         let total: usize = work[..self.num_levels].iter().map(Vec::len).sum();
+        crate::analytics::ops::add(2 * total + self.num_levels + 1);
         let mut items = Vec::with_capacity(total);
         let mut levels = Vec::with_capacity(self.num_levels + 1);
         levels.push(0usize);
@@ -481,6 +501,7 @@ impl<T: NumericalValue> KllDynamic<T> {
             let start = levels[idx];
             let end = levels[idx + 1];
             let weight = 1 << h;
+            crate::analytics::ops::add(2 + end - start);
 
             for &val in &items[start..end] {
                 if val.to_f64() <= x {
@@ -556,7 +577,10 @@ impl DynamicCdf {
             return 0.0;
         }
         let slice = self.entries.as_slice();
+        // One read per probe, and one for the entry returned.
+        crate::analytics::ops::add(1);
         match slice.binary_search_by(|e| {
+            crate::analytics::ops::add(1);
             e.normalized_rank
                 .partial_cmp(&p)
                 .unwrap_or(std::cmp::Ordering::Less)

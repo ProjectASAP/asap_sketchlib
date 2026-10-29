@@ -9,6 +9,7 @@ pub mod cardinality;
 pub mod count_matrix;
 pub mod heavy_hitters;
 pub mod ops;
+pub mod quantiles;
 pub mod top_k;
 
 pub use crate::capability::StatisticKind;
@@ -17,6 +18,9 @@ pub use count_matrix::MatrixParams;
 #[cfg(feature = "experimental")]
 pub use count_matrix::{CountMinHllParams, MicroCmData, MicroCmParams};
 pub use heavy_hitters::{CocoParams, ElasticParams, FlowData, SpaceSavingData, SpaceSavingParams};
+#[cfg(feature = "experimental")]
+pub use quantiles::UniformParams;
+pub use quantiles::{DdData, DdParams, KllParams, StreamData};
 pub use top_k::{FoldData, FoldParams, MatrixHeapParams, MatrixSpaceSavingParams};
 
 use crate::{FastPath, RegularPath};

@@ -11,4 +11,5 @@ mod support;
 mod cardinality;
 mod count_matrix;
 mod heavy_hitters;
+mod quantiles;
 mod top_k;
