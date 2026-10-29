@@ -63,6 +63,66 @@ impl EhBucketSketch {
         }
     }
 
+    /// Bytes this sketch holds: the enum and the wrapped sketch's heap, as
+    /// its `memory_bytes` counts them.
+    pub fn memory_bytes(&self) -> usize {
+        let (bytes, inline) = match self {
+            EhBucketSketch::CountMinSketch(s) => (s.memory_bytes(), size_of_val(s)),
+            EhBucketSketch::CocoSketch(s) => (s.memory_bytes(), size_of_val(s)),
+            EhBucketSketch::CountSketchWithL2Norm(s) => (s.memory_bytes(), size_of_val(s)),
+            EhBucketSketch::CountSketch(s) => (s.memory_bytes(), size_of_val(s)),
+            EhBucketSketch::DdSketch(s) => (s.memory_bytes(), size_of_val(s)),
+            EhBucketSketch::ElasticSketch(s) => (s.memory_bytes(), size_of_val(s)),
+            EhBucketSketch::Hll(s) => (s.memory_bytes(), size_of_val(s)),
+            EhBucketSketch::Kll(s) => (s.memory_bytes(), size_of_val(s)),
+            #[cfg(feature = "experimental")]
+            EhBucketSketch::Uniform(s) => (s.memory_bytes(), size_of_val(s)),
+            EhBucketSketch::UnivMon(s) => (s.memory_bytes(), size_of_val(s)),
+        };
+        size_of::<Self>() + bytes - inline
+    }
+
+    /// `C_in`: the cells a clone of this sketch copies, its heap bytes over
+    /// its cell bytes.
+    pub(crate) fn cells(&self) -> usize {
+        use crate::analytics::frameworks::{InnerSketch, heap_cells};
+        let heap = self.memory_bytes() - size_of::<Self>();
+        let cell = match self {
+            EhBucketSketch::CountMinSketch(_) => {
+                <CountMinSketch<Vector2D<i32>, FastPath> as InnerSketch>::cell_bytes(
+                    &Default::default(),
+                )
+            }
+            EhBucketSketch::CocoSketch(_) => {
+                <CocoSketch as InnerSketch>::cell_bytes(&Default::default())
+            }
+            EhBucketSketch::CountSketchWithL2Norm(_) => {
+                <CountSketchWithL2Norm as InnerSketch>::cell_bytes(&Default::default())
+            }
+            EhBucketSketch::CountSketch(_) => {
+                <CountSketch<Vector2D<i32>, FastPath> as InnerSketch>::cell_bytes(
+                    &Default::default(),
+                )
+            }
+            EhBucketSketch::DdSketch(_) => {
+                <DdSketch as InnerSketch>::cell_bytes(&Default::default())
+            }
+            EhBucketSketch::ElasticSketch(_) => {
+                <ElasticSketch as InnerSketch>::cell_bytes(&Default::default())
+            }
+            EhBucketSketch::Hll(_) => {
+                <HyperLogLog<Ertl> as InnerSketch>::cell_bytes(&Default::default())
+            }
+            EhBucketSketch::Kll(_) => <Kll as InnerSketch>::cell_bytes(&Default::default()),
+            #[cfg(feature = "experimental")]
+            EhBucketSketch::Uniform(_) => {
+                <UniformSampling as InnerSketch>::cell_bytes(&Default::default())
+            }
+            EhBucketSketch::UnivMon(_) => <UnivMon as InnerSketch>::cell_bytes(&Default::default()),
+        };
+        heap_cells(heap, 0, cell)
+    }
+
     pub(crate) fn eh_l2_mass(&self) -> Option<f64> {
         match self {
             EhBucketSketch::CountSketchWithL2Norm(sketch) => Some(sketch.l2_squared()),

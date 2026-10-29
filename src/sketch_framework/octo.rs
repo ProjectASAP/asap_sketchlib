@@ -928,6 +928,15 @@ enum WorkerMsg<T> {
 }
 
 #[cfg(feature = "octo-runtime")]
+/// Bytes one input-queue slot and one delta-queue slot of plan `L` hold,
+/// with 16 bytes of channel bookkeeping.
+pub(crate) fn queue_slot_bytes<L: OctoPlan>() -> usize {
+    size_of::<WorkerMsg<<L::Worker as OctoWorker>::Payload>>()
+        + size_of::<<L::Worker as OctoWorker>::Delta>()
+        + 16
+}
+
+#[cfg(feature = "octo-runtime")]
 enum AggregatorMsg {
     /// Apply everything already queued, then acknowledge.
     Drain(Sender<()>),

@@ -7,7 +7,10 @@
 
 pub mod cardinality;
 pub mod count_matrix;
+pub mod eh;
+pub mod frameworks;
 pub mod heavy_hitters;
+pub mod hydra;
 pub mod ops;
 pub mod quantiles;
 pub mod top_k;
@@ -18,7 +21,17 @@ pub use cardinality::{BloomParams, DistinctData, HllData, HllParams, KmvParams, 
 pub use count_matrix::MatrixParams;
 #[cfg(feature = "experimental")]
 pub use count_matrix::{CountMinHllParams, MicroCmData, MicroCmParams};
+pub use eh::{EhCell, EhData, EhParams};
+#[cfg(feature = "experimental")]
+pub use eh::{EhUnivMonData, EhUnivMonParams};
+pub use frameworks::{
+    CellData, EnsembleCell, EnsembleParams, InnerSketch, NitroData, NitroInner, NitroParams,
+    TumblingData, TumblingParams,
+};
+#[cfg(feature = "octo-runtime")]
+pub use frameworks::{OctoData, OctoParent};
 pub use heavy_hitters::{CocoParams, ElasticParams, FlowData, SpaceSavingData, SpaceSavingParams};
+pub use hydra::{HydraCell, HydraData, HydraParams};
 #[cfg(feature = "experimental")]
 pub use quantiles::UniformParams;
 pub use quantiles::{DdData, DdParams, KllParams, StreamData};

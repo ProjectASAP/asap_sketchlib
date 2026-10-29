@@ -186,6 +186,11 @@ impl KllShape {
     }
 }
 
+/// `L̂`, the most levels one KLL state holds after `n` updates.
+pub(crate) fn kll_levels(params: &KllParams, n: Option<u64>) -> usize {
+    KllShape::new(params, n.map(|n| usize::try_from(n).unwrap_or(usize::MAX))).levels
+}
+
 /// `3R + R·lg R + 2L + lg R + 2`: build the CDF and binary-search it.
 fn kll_quantile_ops(shape: &KllShape) -> f64 {
     let (r, l) = (shape.retained as f64, shape.levels as f64);

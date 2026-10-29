@@ -597,6 +597,13 @@ impl UnivMon {
             + self.candidate_complete.capacity() * size_of::<bool>()
     }
 
+    /// `C_in`: the cells a clone or clear copies, the heap bytes over 8.
+    pub(crate) fn cells(&self) -> usize {
+        use crate::analytics::frameworks::{InnerSketch, heap_cells};
+        let cell = <Self as InnerSketch>::cell_bytes(&Default::default());
+        heap_cells(self.memory_bytes(), size_of::<Self>(), cell)
+    }
+
     /// Bytes a pyramid of that shape, built by [`Self::new`], decoded or cloned,
     /// holds in steady state once keys shaped like `key` churn through every
     /// layer: the struct and, per layer,
@@ -660,6 +667,7 @@ impl UnivMonPool {
     /// Pops a recycled sketch from the free-list if available, otherwise
     /// allocates a fresh one.
     pub fn take(&mut self) -> UnivMon {
+        crate::analytics::ops::add(1);
         if let Some(sketch) = self.free_list.pop() {
             sketch
         } else {
@@ -670,6 +678,7 @@ impl UnivMonPool {
 
     /// Returns a sketch to the pool for reuse. Resets all internal state.
     pub fn put(&mut self, mut sketch: UnivMon) {
+        crate::analytics::ops::add(1 + sketch.cells());
         sketch.clear();
         self.free_list.push(sketch);
     }
@@ -682,6 +691,18 @@ impl UnivMonPool {
     /// Total number of sketches ever allocated by this pool.
     pub fn total_allocated(&self) -> usize {
         self.total_allocated
+    }
+
+    /// Bytes this pool holds: the struct, its free-list slots and each free
+    /// sketch's heap.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.free_list.capacity() * size_of::<UnivMon>()
+            + self
+                .free_list
+                .iter()
+                .map(|s| s.memory_bytes() - size_of::<UnivMon>())
+                .sum::<usize>()
     }
 }
 

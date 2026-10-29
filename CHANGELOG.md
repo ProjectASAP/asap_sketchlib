@@ -21,12 +21,18 @@ signals a backwards-compatible change.
 - **`memory_bytes()`** on `CountMinHll`, `MicroCm`, `SpaceSaving`,
   `ElasticSketch`, `CocoSketch`, `CountMinSketchWithSpaceSaving`,
   `CountSketchWithSpaceSaving`, `CountMinSketchFold`, `CountSketchFold`,
-  `SetAggregator`, `Bloom`, `UniformSampling` and `UnivMonTwoTier`, and
-  `SpaceSaving::theoretical_memory_bytes`,
+  `SetAggregator`, `Bloom`, `UniformSampling`, `UnivMonTwoTier`, `Hydra`,
+  `HydraCounter`, `ExponentialHistogram`, `EhBucketSketch`,
+  `ExponentialHistogramUnivMon`, `UnivMonPool`, `NitroBatch` over a
+  Count-Min or Count Sketch, `TumblingWindow`, `HashSketchEnsemble` and
+  `EnsembleSketch`, and `SpaceSaving::theoretical_memory_bytes`,
   `Bloom::theoretical_memory_bytes(rows, cols)`,
   `UnivMonTwoTier::theoretical_memory_bytes` and
   `UnivMonQ::theoretical_memory_bytes(config)`.
 - **`SetAggregator::contains`**: whether a key is in the set.
+- **`TumblingWindowSketch::tumbling_memory_bytes` and `tumbling_cells`**,
+  provided methods `TumblingWindow::memory_bytes` and the `op-count`
+  feature read; the built-in window sketches override both.
 - **`op-count` feature**: `analytics::ops::count(f)` returns the ops `f`
   performed on this thread, one per counter, register, bucket or item read or
   written, for testing the analytics op formulas. Off by default, and free
@@ -72,6 +78,8 @@ signals a backwards-compatible change.
   estimates, by estimate descending, ties by flow id.
 ### Changed
 
+- **Breaking: `CountMinFastOps` and `CountSketchFastOps` require
+  `memory_bytes`**, which `HashSketchEnsemble::memory_bytes` reads.
 - **`estimated_memory_bytes` is renamed `theoretical_memory_bytes`** on
   every sketch that has it (`CountMinSketch`, `CountSketch`,
   `CountSketchWithL2Norm`, the WithHeap sketches, `TopKHeap`, `HyperLogLog`,

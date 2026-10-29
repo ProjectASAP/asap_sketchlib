@@ -113,6 +113,19 @@ impl EnsembleSketch {
         }
     }
 
+    /// Bytes this sketch holds: the enum, and a boxed sketch's whole
+    /// allocation or an inline sketch's heap.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>()
+            + match self {
+                EnsembleSketch::CountMinFast(sketch) => sketch.memory_bytes(),
+                EnsembleSketch::CountSketchFast(sketch) => sketch.memory_bytes(),
+                EnsembleSketch::HllErtl(hll) => hll.memory_bytes() - size_of_val(hll),
+                EnsembleSketch::HllClassic(hll) => hll.memory_bytes() - size_of_val(hll),
+                EnsembleSketch::HllHip(hll) => hll.memory_bytes() - size_of_val(hll),
+            }
+    }
+
     /// Returns the frequency estimate for a key.
     /// `Some(f64)` for CMS / Count, `None` for HLL.
     pub fn estimate_with_hash(&self, hash: &MatrixHash) -> Option<f64> {
@@ -259,6 +272,7 @@ where
     /// Hash `val` once and insert into every sketch in the layer.
     pub fn update(&mut self, val: &DataInput) {
         let hash = self.hash_input(val);
+        crate::analytics::ops::add(self.sketches.len());
         for i in 0..self.sketches.len() {
             self.sketches[i].update_with_hash(&hash);
         }
@@ -266,6 +280,7 @@ where
 
     /// Insert a pre-computed hash into every sketch in the layer.
     pub fn update_with_hash(&mut self, hash: &H::HashType) {
+        crate::analytics::ops::add(self.sketches.len());
         for i in 0..self.sketches.len() {
             self.sketches[i].update_with_hash(hash);
         }
@@ -276,6 +291,7 @@ where
         let hash = self.hash_input(val);
         for &idx in indices {
             if idx < self.sketches.len() {
+                crate::analytics::ops::add(1);
                 self.sketches[idx].update_with_hash(&hash);
             }
         }
@@ -285,6 +301,7 @@ where
     pub fn update_at_with_hash(&mut self, indices: &[usize], hash: &H::HashType) {
         for &idx in indices {
             if idx < self.sketches.len() {
+                crate::analytics::ops::add(1);
                 self.sketches[idx].update_with_hash(hash);
             }
         }
@@ -329,6 +346,7 @@ where
             return Err("index out of bounds");
         }
         let hash = self.hash_input(val);
+        crate::analytics::ops::add(1);
         self.sketches[index]
             .estimate_with_hash(&hash)
             .ok_or("sketch at this index is not a frequency sketch")
@@ -343,6 +361,7 @@ where
         if index >= self.sketches.len() {
             return Err("index out of bounds");
         }
+        crate::analytics::ops::add(1);
         self.sketches[index]
             .estimate_with_hash(hash)
             .ok_or("sketch at this index is not a frequency sketch")
@@ -358,12 +377,25 @@ where
         if index >= self.sketches.len() {
             return Err("index out of bounds");
         }
+        crate::analytics::ops::add(1);
         self.sketches[index]
             .cardinality()
             .ok_or("sketch at this index is not a cardinality sketch")
     }
 
     // -- Accessors ------------------------------------------------------------
+
+    /// Bytes this ensemble holds: the struct, its sketch slots and each
+    /// sketch's own bytes ([`EnsembleSketch::memory_bytes`]).
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.sketches.capacity() * size_of::<EnsembleSketch>()
+            + self
+                .sketches
+                .iter()
+                .map(|s| s.memory_bytes() - size_of::<EnsembleSketch>())
+                .sum::<usize>()
+    }
 
     /// Returns the number of sketches in the ensemble.
     pub fn len(&self) -> usize {

@@ -285,6 +285,7 @@ impl Hydra {
         if self_cells.len() != other_cells.len() {
             return Err("Hydra storage length mismatch while merging".to_string());
         }
+        crate::analytics::ops::add(2 * self_cells.len());
         for (self_counter, other_counter) in self_cells.iter_mut().zip(other_cells.iter()) {
             self_counter.merge(other_counter)?;
         }
@@ -338,6 +339,23 @@ impl Hydra {
             self.cols,
             &DataInput::Str(&buffer),
         )
+    }
+
+    /// Bytes this Hydra holds: the struct, its cells
+    /// ([`HydraCounter::memory_bytes`]), the prototype's heap and the schema's
+    /// labels.
+    pub fn memory_bytes(&self) -> usize {
+        let heap = |cell: &HydraCounter| cell.memory_bytes() - size_of::<HydraCounter>();
+        let labels = |labels: &Vec<String>| {
+            labels.capacity() * size_of::<String>()
+                + labels.iter().map(String::capacity).sum::<usize>()
+        };
+        size_of::<Self>()
+            + self.cells.as_slice().len() * size_of::<HydraCounter>()
+            + self.cells.as_slice().iter().map(heap).sum::<usize>()
+            + heap(&self.prototype)
+            + labels(&self.schema.labels)
+            + labels(&self.schema.escaped_labels)
     }
 
     /// Convenience method for querying frequency (for CountMinSketch-based Hydra)

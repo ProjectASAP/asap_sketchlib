@@ -716,8 +716,12 @@ Data inputs: `n`, and whether the ordered readouts' heavy set is empty.
 ## Frameworks
 
 A framework's formulas use its inner sketch's trait functions.
-`U_in`, `Q_in`, `M_in` and `mem_in` are the inner update, query and merge ops and memory, `ε_in` and `δ_in` the inner error bound, and `C_in` the inner sketch's counters, registers or items, which a clone or clear touches.
+`U_in`, `Q_in`, `M_in` and `mem_in` are the inner update, query and merge ops and memory, `ε_in` and `δ_in` the inner error bound, and `C_in` the cells a clone or clear of one inner state touches, its heap bytes over the size of one counter, register or item (`InnerSketch::theoretical_cells`).
+Reading or writing one entry of a framework's own grid, bucket list, pool, queue or sketch list counts one op, and shifting `j` entries of a list counts `2j`.
+A list built with capacity `c` that holds at most `m` entries has `c` slots, or `max(2c, 2(m − 1), 4)` once it grows.
 A Kll bound needs independently seeded states, so a framework that merges Kll states cloned from one prototype or built from one seed gives its Kll readouts no bound.
+Where a framework's cells can be several kinds, `Params` carries the kind and its parameters (`HydraCell`, `EhCell`, `EnsembleCell`), and `CellData` carries each kind's inner data.
+A framework bound that adds `c` inner failures to its own `δ_f` has a fixed `δ = δ_f + c·δ_in` when the inner `δ` is fixed, and gives the inner bound `(δ − δ_f)/c` when the caller chooses `δ`.
 
 ### Hydra
 
@@ -733,10 +737,11 @@ A query takes the median over rows, which fails with probability `P_med(d, q·w/
 
 | Readout | Bound | δ | Contract |
 |---|---|---|---|
-| Count-Min frequency | `Absolute(L1)`, `ε = 4(2^a − 1)(1 + ε_in)/w + ε_in` | `P_med(d, q·w/4) + d·δ_in` | `hydra_cm_cell_markov_median_binomial_v1` |
-| Count-Min group total | `Absolute(L1)`, `ε = 4(2^a − 1)/w`, never under | `(q·w/4)^d` | `hydra_cm_group_total_markov_min_v1` |
-| Count Sketch frequency | `Absolute(L1)`, `ε = 4(2^a − 1)(1 + ε_in)/w + ε_in` | `P_med(d, q·w/4) + d·δ_in` | `hydra_cs_cell_markov_median_binomial_v1` |
-| Kll Rank, Quantile | `Absolute`, `ε = 4N(2^a − 1)/(w·N_Q) + ε_in`, on the rank scaled to [0, 1] | `P_med(d, q·w/4) + d·δ_in` | `hydra_kll_cell_mixture_rank_median_binomial_v1` |
+| Count-Min ItemFrequency | `Absolute(L1)`, `ε = 4(2^a − 1)(1 + ε_in)/w + ε_in` | `P_med(d, q·w/4) + d·δ_in` | `hydra_cm_cell_markov_median_binomial_v1` |
+| Count-Min group total, Total | `Absolute(L1)`, `ε = 4(2^a − 1)/w`, never under | `(q·w/4)^d` | `hydra_cm_group_total_markov_min_v1` |
+| Count Sketch ItemFrequency | `Absolute(L1)`, `ε = 4(2^a − 1)(1 + ε_in)/w + ε_in` | `P_med(d, q·w/4) + d·δ_in` | `hydra_cs_cell_markov_median_binomial_v1` |
+| Kll Quantile | `Rank`, `ε = 4N(2^a − 1)/(w·N_Q) + ε_in` | `P_med(d, q·w/4) + d·δ_in` | `hydra_kll_cell_mixture_rank_median_binomial_v1` |
+| Kll Rank, from `query_cdf` | `Absolute`, the same `ε` on the rank scaled to [0, 1] | `P_med(d, q·w/4) + d·δ_in` | `hydra_kll_cell_mixture_rank_median_binomial_v1` |
 | HyperLogLog Distinct | `Relative`, `ε = ε_in + (1 + ε_in)·4n(2^a − 1)/(w·D_Q)` | unknown | `hydra_hll_cell_collision_median_binomial_v1` |
 | UnivMon Total | `Absolute(L1)`, `ε = 4(2^a − 1)/w` | `P_med(d, q·w/4)` | `hydra_univmon_total_markov_median_binomial_v1` |
 | UnivMon FrequencyL2 | `Relative`, `ε = ε_in + (1 + ε_in)·4N(2^a − 1)/(w·‖f_Q‖₂)` | `P_med(d, q·w/4) + d·δ_in` | `hydra_univmon_l2_collision_median_binomial_v1` |
@@ -745,13 +750,16 @@ A query takes the median over rows, which fails with probability `P_med(d, q·w/
 
 - A HyperLogLog cell counts colliding updates, not their weight, so its term uses `n`, and its `δ` is unknown because `Ertl` gives only a standard error.
 - Hydra never merges its own cells, so Kll cells keep their bound.
-- `params_for` gives half of `ε` to collisions, `ε_in = (ε/2)/(1 + ε/2)` to the cells, and splits `δ` the same way.
+- `params_for` sizes ItemFrequency with Count-Min cells, Quantile and Rank with Kll, Distinct with HyperLogLog and FrequencyL2 with UnivMon, for the arity in `HydraData::arity`, 1 when unknown.
+  It gives half of `ε` to collisions, `ε_in = (ε/2)/(1 + ε/2)` to the cells, and splits `δ` the same way.
   It sets `w` to the smallest power of two that keeps the collision term at most `ε/2`, `d` to the smallest odd depth with `P_med(d, 1/4) ≤ δ/2`, and the cells to the inner `params_for(ε_in, δ/(2d))`.
-- Memory: `size_of::<Hydra>() + d·w·size_of::<HydraCounter>() + (d·w + 1)·(mem_in − size_of::<Inner>())` plus the label bytes.
-- An update writes one cell per row for each subkey, `(2^a − 1)·d·U_in`, and a Kll cell repeats its update once per unit of weight.
+- Memory: `size_of::<Hydra>() + d·w·size_of::<HydraCounter>() + (d·w + 1)·(mem_in − size_of::<Inner>()) + 2a·size_of::<String>() + 2·label bytes`, exact for Count-Min cells, where the label bytes include escapes.
+- An update reads one cell per row for each subkey and updates it, `(2^a − 1)·d·(1 + U_in)`, and a Kll cell repeats its update once per unit of weight.
 - An update computes `(2^a − 1)` grid hashes, `d` each when the slices do not fit, plus the cells' own hashes, since each cell hashes the value again.
-- A query reads one cell per row and one prototype cell, then takes the median, `(d + 1)·Q_in + d·lg d`.
-- A merge merges every cell, `d·w·M_in`, and merging two Hydras with Kll cells gives those readouts no bound.
+- A query probes the prototype cell, reads one cell per row into a buffer and takes the median, `(d + 1)·Q_in + 2d + d·lg d`.
+  A Kll Rank builds the cell's CDF, so its `Q_in` is the Kll Quantile's.
+- A group total reads one cell per row and sums each cell's mass, `d + (d + 1)·T`, with `T = w_in` for a Count-Min cell's row 0 and `T = 2L̂` for a Kll cell's levels.
+- A merge reads both grids and merges every cell, `d·w·(2 + M_in)`, and merging two Hydras with Kll cells gives those readouts no bound.
 - Kll cells require nonnegative weights.
 
 ### ExponentialHistogram
@@ -760,65 +768,71 @@ A query takes the median over rows, which fails with probability `P_med(d, q·w/
 It keeps an inner sketch per bucket over a sliding window and merges older buckets together.
 Parameters: `k` and the window length, the code's `k` and `window` (in time units, where the paper's `N` counts elements).
 It merges buckets by their L2 mass when the inner sketch is `CountSketchWithL2Norm` or `UnivMon`, and by their arrival count otherwise.
-Data inputs: `N_w` the arrivals in the window, `D_w` the distinct keys in the window, and `G` the number of buckets.
+Data inputs: `N_w` the arrivals in the window, `D_w` the distinct keys in the window, and `G` the most buckets the histogram keeps.
 
 | Readout | Bound | δ | Contract |
 |---|---|---|---|
-| Count-Min or Count Sketch frequency, by count | `Absolute(L1)`, `ε = ε_EH + ε_in(1 + ε_EH)` | `δ_in` | `eh_l1_boundary_bucket_v1` |
+| Count-Min or Count Sketch ItemFrequency, by count | `Absolute(L1)`, `ε = ε_EH + ε_in(1 + ε_EH)` | `δ_in` | `eh_l1_boundary_bucket_v1` |
 | HyperLogLog Distinct, by count | `Relative`, `ε = ε_in + (1 + ε_in)·ε_EH·N_w/D_w` | unknown | `eh_l1_boundary_bucket_v1` |
-| L2 readouts, by mass | `Relative`, `ε = ε_EH2 + ε_in(1 + ε_EH2)` | `(G + 2)·δ_mass + δ_in` | `eh_l2_boundary_bucket_mass_v1` |
-| Kll; DdSketch Quantile, Min and Max; CocoSketch; ElasticSketch; UniformSampling | none | | |
+| FrequencyL2, by mass | `Relative`, `ε = ε_EH2 + ε₂(1 + ε_EH2)` | `(G + 2)·δ_mass + δ_in` | `eh_l2_boundary_bucket_mass_v1` |
+| Kll; DdSketch; CocoSketch; ElasticSketch; UniformSampling | none | | |
 
 - Merging by count, the oldest bucket holds at most `ε_EH = 2/(⌈k/2⌉ + 1)` of the window, about `4/k`, and it is kept or dropped whole.
   This counts arrivals, so these bounds require unit-weight updates.
-- Merging by mass compares squared L2 estimates, so `ε_EH2 = ((1 + ε₂)/(1 − ε₂))·√(2/k)`, where `ε₂` is the inner L2 estimate's error and `δ_mass` its failure probability.
+- Merging by mass compares squared L2 estimates, so `ε_EH2 = ((1 + ε₂)/(1 − ε₂))·√(2/k)`, where `ε₂` is layer 0's L2 estimate error and `δ_mass` its failure probability, which is also `δ_in`.
 - Every bucket starts as a clone of one prototype, so Kll buckets get no bound.
 - The bounds hold for windows that end at the newest arrival, and a query endpoint that falls in a gap between two buckets selects the wrong bucket.
-- Merging by count keeps at most `G ≤ (⌊k/2⌋ + 2)(⌊log2(2N_w)⌋ + 1)` buckets.
-- Memory: `size_of::<EH>() + G·size_of::<EhBucket>() + (G + 1)·(mem_in − size_of::<Inner>())`.
-- An update clones the prototype into a new bucket (`C_in`), updates it (`U_in`) and scans the buckets (`G`).
-  Merging by count adds at most one merge per update on average, `C_in + M_in + G`.
-  Merging by mass, with `E` the cost of one L2 estimate, an update that triggers `g` merges costs `C_in + U_in + E + (2g + 1)·G + g·(C_in + M_in + E)`.
-- A query clones one bucket and merges the others in the range into it, at most `2G + C_in + G·M_in`.
+- Merging by count keeps at most `G ≤ (⌊k/2⌋ + 2)(⌊log2(2N_w)⌋ + 1)` buckets, which the functions use when `G` is unknown; merging by mass needs `G`.
+- Memory: `size_of::<EH>() + max(4, 2G)·size_of::<EhBucket>() + (G + 1)·(mem_in − size_of::<Inner>())`, the bucket list's slots grown for `G + 1` buckets.
+- An update scans and drops the expired buckets, clones the prototype into a new bucket (`C_in`), updates it (`U_in`), and scans the buckets for merges.
+  Each merge clones the newer bucket, merges it into the older one and shifts the list.
+  Merges remove buckets one for one, so on average an update makes at most one, and costs `2C_in + U_in + M_in + 8G + 4` merging by count.
+  Merging by mass adds an L2 estimate `E = Q_in(FrequencyL2)` for the new bucket and per merge, and three reads per bucket per scan, `2C_in + U_in + M_in + 2E + 10G + 4` on average.
+- A query scans the buckets, clones one and merges the others in the range into it, then reads the result, at most `2G + 4 + C_in + G·M_in + Q_in`.
 
-`EhBucketSketch` (`src/sketch_framework/eh_bucket_sketch.rs`) wraps one inner sketch, and its analytics are that sketch's.
+`EhBucketSketch` (`src/sketch_framework/eh_bucket_sketch.rs`) wraps one inner sketch, and its analytics are that sketch's, with `EhCell` as its `Params`.
 
 ### ExponentialHistogramUnivMon
 
 `src/sketch_framework/eh_univmon.rs`, experimental.
 It is an exponential histogram that merges by L2 mass, with exact `HashMap` buckets for recent data and UnivMon buckets for older data.
-Data inputs: `G_s` the UnivMon buckets, and the keys in the exact buckets.
+Data inputs: `G_s` and `G_e` the most UnivMon and exact buckets it holds, `K` the most keys its exact buckets hold together, the bytes each key owns, and whether a query reads only exact buckets.
 
-- Only FrequencyL2, as `Relative`, and ItemFrequency, as `Absolute(L2)`, have bounds, because only L2 mass decides the merges.
-- From the exact buckets, `ε = √(2/k)` and `δ = 0`, the whole error coming from the oldest bucket being kept or dropped whole; contract `eh_univmon_exact_boundary_bucket_v1`.
-- From the UnivMon buckets, `ε = ε_EH2 + ε_in(1 + ε_EH2)` and `δ = (G_s + 2)·δ_mass + δ_in`; contract `eh_univmon_l2_boundary_bucket_v1`.
-- Memory: the UnivMon pool's allocated sketches times `mem_in`, plus the exact buckets' keys.
-- An update inserts into a map, scans and merges the exact buckets, and when the oldest exact bucket moves to UnivMon it inserts its keys, `keys·U_in`.
-- A query over the UnivMon buckets clones one and merges the rest, `C_in + G_s·M_in`.
+- Only FrequencyL2, as `Relative`, has a bound, because only L2 mass decides the merges, and a query result answers no item frequency.
+- A query that reads only exact buckets has `ε = √(2/k)` and `δ = 0`, the whole error coming from the oldest bucket being kept or dropped whole; contract `eh_univmon_exact_boundary_bucket_v1`.
+- A query that reads UnivMon buckets has `ε = ε_EH2 + ε₂(1 + ε_EH2)` and `δ = (G_s + 2)·δ_mass + δ_in`, with `δ_in = δ_mass` from layer 0; contract `eh_univmon_l2_boundary_bucket_v1`.
+- Memory: `size_of::<Self>() + max(4, 2G_s)·size_of::<EhUnivMonSketchBucket>() + max(4, 2G_e)·size_of::<EhUnivMonExactBucket>() + S_f·size_of::<UnivMon>() + A·(mem_in − size_of::<UnivMon>()) + G_e·(map(K) + K·key bytes)`.
+  `A = max(pool_initial_size, G_s + 1)` is the most sketches the pool allocates, `S_f` its free list's slots, and `map(K)` the bytes of a `HashMap` after `K` inserts.
+- An update costs at most `K·(1 + U_in + 2G_e) + 2G_e² + 10G_e + 2G_s² + G_s·(2C_in + M_in + 3E + 7) + 3E + 6`, with `E` the cost of layer 0's L2 estimate, on average over the hashes.
+  It drops expired buckets and recycles their sketches (`C_in` each), inserts into a new map, scans and merges the exact buckets, rereading each merged map, and when the oldest exact bucket moves to UnivMon it inserts its keys, `K·U_in`, then scans and merges the UnivMon buckets.
+- A query scans both lists, then clones one UnivMon bucket and merges the rest, or merges the exact maps, or both and inserts the merged map into a fresh UnivMon, at most `2(G_s + G_e) + 6 + C_in + G_s·(1 + M_in) + G_e + K·(3 + U_in) + Q_in`.
 
 ### NitroBatch
 
 `src/sketch_framework/nitro.rs`.
 It admits each update with probability `ρ`, the code's `rate` and the paper's `p`, into a Count-Min or Count Sketch, and an admitted update writes all `d` rows with weight about `1/ρ`.
+Its analytics hold for the inner types that implement `NitroInner`, the `FastPath` Count-Min and Count Sketch over `Vector2D<i32>`.
 Data inputs: `N`.
 
 | Readout | Bound | δ | Contract |
 |---|---|---|---|
-| Count-Min frequency | `Absolute(L1)`, `ε = ε_s + ε_in(1 + ε_s)` with `ε_s = √(2V/(N·(δ − P_med(d, q·w/e))))` | `δ` chosen | `nitro_batch_item_sampling_chebyshev_v1` |
-| Count Sketch frequency | none | | |
+| Count-Min ItemFrequency | `Absolute(L1)`, `ε = ε_s + ε_in(1 + ε_s)` with `ε_s = √(2V/(N·(δ − P_med(d, q·w/e))))` | `δ` chosen | `nitro_batch_item_sampling_chebyshev_v1` |
+| Count Sketch ItemFrequency | none | | |
 
 - `V = (1 − ρ)/ρ + ρ·u(1 − u)`, with `u` the fractional part of `1/ρ`, is the sampling variance per unit of count, at most `1/ρ`.
 - The estimate is a median over rows, so Count-Min's `e^−d` does not apply, and `ε_in = e/w`.
 - The bound covers `update_batch`, not `update_batch_cached_step`, and states built with the same seed admit the same positions.
 - `theoretical_error` returns `None` when `delta ≤ P_med(d, q·w/e)` or `N` is unknown.
-- Memory: `size_of::<NitroBatch<S>>() + mem_in − size_of::<Inner>()`.
-- An update writes `ρ·d` counters on average, a query reads `d` and takes their median, `2d + d·lg d`, and a merge costs `d·w`.
+- Memory: `size_of::<NitroBatch<S>>() + mem_in − size_of::<Inner>()`, exact.
+- An update of a batch writes `ρ·d` counters on average, a query reads `d` into a buffer and takes their median, `2d + d·lg d`, and a merge is the inner merge, `M_in`.
 
 ### Octo
 
 `src/sketch_framework/octo.rs`, behind the `octo-runtime` feature.
 `K` workers keep 1-byte counters and send a cell's count to a parent sketch when it reaches a threshold, which adapts between `τ_min` and `τ_max ≤ 127`.
-`K` is the code's `num_workers` and the paper's `k`, the thresholds are `min_threshold` and `max_threshold`, and `K'` is 1 when `partition` splits keys by hash and `K` when it goes round robin.
+`K` is the code's `num_workers` and the paper's `k`, the thresholds are `min_threshold` and `max_threshold`, or the fixed `threshold` without `adaptive`, and `K'` is 1 when `partition` splits keys by hash and `K` when it goes round robin.
+A runtime has no one sketch type, so its analytics are the functions `octo_error`, `octo_memory_bytes` and `octo_update_ops` in `analytics::frameworks`, over an `OctoConfig` and an `OctoParent`.
+The Count-Min and Count Sketch parents hash on `RegularPath`, and the HyperLogLog parent is `Classic`.
 
 | Parent | After the queues drain, before a flush | After flush |
 |---|---|---|
@@ -838,22 +852,29 @@ Data inputs: `N`.
 
 `src/sketch_framework/tumbling.rs`.
 It keeps up to `max_windows` closed windows of an inner sketch, aligned to multiples of `window_size`, plus the active one, and takes sketches from a pool of `pool_initial_size`.
+Its analytics hold for inner types that implement `TumblingWindowSketch` and `InnerSketch`: `CountMinSketchFold`, `CountSketchFold`, `Kll` and `UnivMonQ`.
+Data inputs: `t` the closed windows a query merges, `max_windows` when unknown, and `b` the window boundaries one update crosses, 1 when unknown.
 
 - A query merges the chosen windows, so its error is the inner bound over exactly their updates.
-- Memory: `size_of::<TumblingWindow>() + A·mem_in`, with `A = max(pool_initial_size, max_windows + 2)`.
-- An update is `U_in`, and each window boundary it crosses adds a pool take, a shift of `max_windows` entries and a clear (`C_in`).
-- `query_recent(t)` clones the active window and merges up to `t` closed windows into it, `C_in + min(t, max_windows)·M_in`.
+- Kll windows get no bound, because a seeded `KllConfig` builds every window from one seed.
+- `params_for` is the inner `params_for`, around `TumblingParams::around`'s window length 1, 8 windows and a pool of 10.
+- Memory: `size_of::<TumblingWindow>() + S_c·size_of::<ClosedWindow>() + S_f·size_of::<Inner>() + A·(mem_in − size_of::<Inner>())`, with `A = max(pool_initial_size, max_windows + 2)` the most sketches alive.
+  `S_c = max(4, 2·max_windows)` and `S_f` are the closed list's and the pool's slots.
+- An update is `U_in`, and each window boundary it crosses adds a pool take, a push, a shift of `max_windows` entries and a clear, `U_in + b·(4 + 2·max_windows + C_in)`.
+- `query_recent(t)` clones the active window and merges up to `t` closed windows into it, `C_in + min(t, max_windows)·(1 + M_in)`.
 - Kll and UnivMonQ windows ignore the weight.
 
 ### HashSketchEnsemble
 
 `src/sketch_framework/hashlayer.rs`.
 A list of Count-Min, Count Sketch and HyperLogLog sketches that share one hash per insert.
+`EnsembleParams` lists the sketches and names `index`, the one the query and error functions read.
 
 - Each sketch keeps its own bound, and a statement about several adds their `δ`, because they share a hash.
 - When the list holds a Count-Min or Count Sketch, its HyperLogLog reads a different hash than a standalone one, so the two do not merge.
-- Memory: `size_of::<Self>() + (number of sketches)·size_of::<EnsembleSketch>()` plus each boxed sketch's `mem_in`.
-- An update costs the sum of the sketches' `U_in`, and computes one hash when the sketches' slices fit in it.
+- Memory: `size_of::<Self>() + m·size_of::<EnsembleSketch>()` for `m` sketch slots, plus each boxed sketch's `mem_in` and each inline HyperLogLog's `mem_in − size_of::<Inner>()`, exact when the list was built at its length.
+- An update reads each sketch and updates it, `Σ(1 + U_in)`, and computes one hash when the sketches' slices fit in it.
+- A query reads the sketch at `index`, `1 + Q_in`.
 
 ## Tests
 

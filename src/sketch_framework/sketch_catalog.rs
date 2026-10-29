@@ -32,6 +32,8 @@ pub trait CountMinFastOps {
     fn update_with_hash(&mut self, hash: &MatrixHash);
     /// Returns the estimate for one precomputed hash.
     fn estimate_with_hash(&self, hash: &MatrixHash) -> f64;
+    /// Bytes the sketch holds.
+    fn memory_bytes(&self) -> usize;
 }
 
 /// Type-erased adapter for regular-path Count Sketches.
@@ -56,6 +58,8 @@ pub trait CountSketchFastOps {
     fn update_with_hash(&mut self, hash: &MatrixHash);
     /// Returns the estimate for one precomputed hash.
     fn estimate_with_hash(&self, hash: &MatrixHash) -> f64;
+    /// Bytes the sketch holds.
+    fn memory_bytes(&self) -> usize;
 }
 
 impl<S> CountMinRegularOps for CountMinSketch<S, RegularPath>
@@ -101,6 +105,10 @@ where
     fn estimate_with_hash(&self, hash: &MatrixHash) -> f64 {
         self.estimate_with_hash(hash).to_f64()
     }
+
+    fn memory_bytes(&self) -> usize {
+        self.memory_bytes()
+    }
 }
 
 impl<S> CountSketchRegularOps for CountSketch<S, RegularPath>
@@ -145,5 +153,9 @@ where
 
     fn estimate_with_hash(&self, hash: &MatrixHash) -> f64 {
         self.estimate_with_hash(hash)
+    }
+
+    fn memory_bytes(&self) -> usize {
+        self.memory_bytes()
     }
 }

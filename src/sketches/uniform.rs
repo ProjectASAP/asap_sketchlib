@@ -13,6 +13,9 @@ struct SampleEntry {
     value: f64,
 }
 
+/// Bytes one sample slot holds.
+pub(crate) const SAMPLE_ENTRY_BYTES: usize = size_of::<SampleEntry>();
+
 impl SampleEntry {
     fn new(priority: u64, value: f64) -> Self {
         Self { priority, value }

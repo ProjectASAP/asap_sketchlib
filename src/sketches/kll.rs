@@ -883,6 +883,7 @@ impl<T: NumericalValue> Kll<T> {
 
     /// Returns the total (weighted) number of items ingested by the sketch.
     pub fn count(&self) -> usize {
+        crate::analytics::ops::add(2 * self.num_levels);
         let mut total = 0;
         for h in 0..self.num_levels {
             total += self.level_size(h) * (1 << h);
