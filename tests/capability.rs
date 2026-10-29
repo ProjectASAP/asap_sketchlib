@@ -23,7 +23,7 @@ const QUANTILE_RANK: Readouts = &[(Quantile, U), (Rank, U)];
 
 #[rustfmt::skip]
 const DECIDED: &[(SketchAlgorithm, Option<MergeInputRule>, Readouts)] = &[
-    (F::CountMinSketch, Some(D), &[(ItemFrequency, U), (Total, E)]),
+    (F::CountMinSketch, Some(D), &[(ItemFrequency, U), (Total, U)]),
     (F::CountSketch, Some(D), &[(ItemFrequency, U)]),
     (F::CountSketchWithL2Norm, Some(D), &[(ItemFrequency, U), (FrequencyL2, U)]),
     (F::CountMinSketchWithHeap, Some(D), FREQ_TOP_K),

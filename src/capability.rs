@@ -17,6 +17,7 @@
 )]
 pub enum SketchAlgorithm {
     /// `CountMinSketch` over every storage and path, and `CountMinF64`.
+    /// Total is exact unless Nitro sampling is enabled.
     CountMinSketch,
     CountSketch,
     CountSketchWithL2Norm,
@@ -199,7 +200,7 @@ impl SketchAlgorithm {
         ];
         const FREQUENCY_TOP_K: &[(StatisticKind, MergedError)] = &[(ItemFrequency, U), (TopK, A)];
         let (merge_inputs, readouts): (_, &'static [(StatisticKind, MergedError)]) = match self {
-            Self::CountMinSketch => (Some(Disjoint), &[(ItemFrequency, U), (Total, E)]),
+            Self::CountMinSketch => (Some(Disjoint), &[(ItemFrequency, U), (Total, U)]),
             Self::CountSketch => (Some(Disjoint), &[(ItemFrequency, U)]),
             Self::CountSketchWithL2Norm => {
                 (Some(Disjoint), &[(ItemFrequency, U), (FrequencyL2, U)])
