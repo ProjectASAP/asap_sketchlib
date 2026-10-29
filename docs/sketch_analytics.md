@@ -480,7 +480,7 @@ Data inputs: `D`.
 
 - An inserted key always reads as present, and a key that was not reads as present with probability exactly `δ`, if it was chosen without knowing the hash seeds.
 - For other `c` the columns are not equally likely, so `theoretical_error` returns `None`.
-- `dimensions_for(n, δ)` solves an approximation of this rate, and is not `params_for`.
+- `dimensions_for(n, δ)` meets this rate without minimizing `r·c`, and is not `params_for`.
 - An update sets one bit per slice and adds to the inserted count, and a query reads one bit per slice, stopping at the first zero on `RegularPath`.
 - A merge ORs the bit arrays a 64-bit word at a time, and inputs may overlap.
 

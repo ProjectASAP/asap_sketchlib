@@ -233,7 +233,7 @@ fn sizing_meets_the_target_and_is_one_power_of_two_from_missing_it() {
         (10_000, 1e-12),
         (1, 0.5),
     ] {
-        let (rows, cols) = Bloom::<RegularPath>::dimensions_for(n, p);
+        let (rows, cols) = Bloom::<RegularPath>::dimensions_for(n, p).unwrap();
         assert!(
             cols.is_power_of_two(),
             "n={n} p={p} gave a non-power-of-two slice of {cols}"
@@ -265,7 +265,7 @@ fn sizing_meets_the_target_and_is_one_power_of_two_from_missing_it() {
 #[test]
 fn sizing_never_asks_for_more_slices_than_the_seed_list_has() {
     for (n, p) in [(10_000usize, 1e-7), (10_000, 1e-9), (10_000, 1e-12)] {
-        let (rows, cols) = Bloom::<RegularPath>::dimensions_for(n, p);
+        let (rows, cols) = Bloom::<RegularPath>::dimensions_for(n, p).unwrap();
         assert!(
             rows <= BLOOM_MAX_SLICES,
             "n={n} p={p:e} asked for {rows} slices"
@@ -283,9 +283,9 @@ fn sizing_never_asks_for_more_slices_than_the_seed_list_has() {
     }
 }
 
-/// A target the seed list cannot reach within [`BLOOM_MAX_BITS`] yields the
-/// widest slices that fit rather than an unbounded allocation, and a huge
-/// `expected_items` does not wrap the power-of-two rounding to zero.
+/// A target the seed list cannot reach within [`BLOOM_MAX_BITS`] yields
+/// `None` rather than an unbounded allocation, and a huge `expected_items`
+/// does not wrap the power-of-two rounding to zero.
 #[test]
 fn sizing_stays_inside_the_allocation_ceiling() {
     for (n, p) in [
@@ -296,7 +296,9 @@ fn sizing_stays_inside_the_allocation_ceiling() {
         (1_000, 0.0),
         (1_000, 2.0),
     ] {
-        let (rows, cols) = Bloom::<RegularPath>::dimensions_for(n, p);
+        let Some((rows, cols)) = Bloom::<RegularPath>::dimensions_for(n, p) else {
+            continue;
+        };
         assert!(cols >= 1, "n={n} p={p:e} gave {cols} columns");
         assert!(cols.is_power_of_two(), "n={n} p={p:e} gave {cols} columns");
         assert!(
@@ -311,28 +313,24 @@ fn sizing_stays_inside_the_allocation_ceiling() {
     }
 }
 
-/// The allocation ceiling is a documented number, and the geometry a target
-/// past it settles on is that number divided by the slice count and rounded
-/// down to a power of two.
+/// The allocation ceiling is a documented number, and a target past it has
+/// no geometry.
 #[test]
 fn the_allocation_ceiling_is_the_documented_number() {
     assert_eq!(BLOOM_MAX_BITS, 1 << 31);
-    assert_eq!(
-        Bloom::<RegularPath>::dimensions_for(1 << 40, 1e-9),
-        (20, 1 << 26)
-    );
+    assert_eq!(Bloom::<RegularPath>::dimensions_for(1 << 40, 1e-9), None);
 }
 
-/// A degenerate sizing input yields a real geometry rather than the widest
-/// slice count over one bit each, which would answer yes to everything.
+/// A degenerate sizing input yields a real geometry or `None`, never the
+/// widest slice count over one bit each, which would answer yes to everything.
 #[test]
 fn degenerate_sizing_inputs_give_a_usable_geometry() {
-    assert_eq!(Bloom::<RegularPath>::dimensions_for(0, 0.01), (7, 2));
+    assert_eq!(Bloom::<RegularPath>::dimensions_for(0, 0.01), Some((7, 2)));
+    assert_eq!(Bloom::<RegularPath>::dimensions_for(1_000, 0.0), None);
     assert_eq!(
-        Bloom::<RegularPath>::dimensions_for(1_000, 0.0),
-        (20, 1 << 26)
+        Bloom::<RegularPath>::dimensions_for(1_000, 2.0),
+        Some((1, 32))
     );
-    assert_eq!(Bloom::<RegularPath>::dimensions_for(1_000, 2.0), (1, 32));
 }
 
 /// The default filter is the documented geometry.

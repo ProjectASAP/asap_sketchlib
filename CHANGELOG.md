@@ -133,6 +133,12 @@ signals a backwards-compatible change.
 - **`CountMinSketchFold::new` and `CountSketchFold::new` panic for
   `full_cols` above 65536** (`MAX_FULL_COLS`). A full column is stored as
   `u16`, and a wider sketch folded distinct columns together.
+- **`Bloom::dimensions_for` meets its target.** It returns
+  `Option<(usize, usize)>`, widens the slices until the exact rate
+  `(1 - (1 - 1/cols)^n)^rows` is at most the target, and returns `None` when
+  that needs more than `BLOOM_MAX_BITS`, where it used to return the widest
+  slices that fit. `with_capacity` panics there. `predicted_fpp` uses the
+  exact rate in place of `(1 - e^(-n/cols))^rows`.
 - **`Kll::update` regains most of its pre-0.4.0 speed.** With the lazily grown
   buffer, `compress_while_updating` was inlined into the insert path, which
   then no longer inlined into callers; a stream of updates ran about 10%

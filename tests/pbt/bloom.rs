@@ -322,7 +322,9 @@ proptest! {
             Just(f64::MIN),
         ],
     ) {
-        let (rows, cols) = Bloom::<RegularPath>::dimensions_for(expected, target);
+        let Some((rows, cols)) = Bloom::<RegularPath>::dimensions_for(expected, target) else {
+            return Ok(());
+        };
 
         prop_assert!(
             (1..=BLOOM_MAX_SLICES).contains(&rows),

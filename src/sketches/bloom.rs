@@ -35,9 +35,6 @@ pub const BLOOM_DEFAULT_COLS: usize = 1 << 16;
 pub const BLOOM_MAX_SLICES: usize = MATRIX_MAX_ROWS;
 
 /// Ceiling on the bits [`Bloom::with_capacity`] will size to, 256 MiB packed.
-///
-/// A target the ceiling cannot reach yields the widest slices that fit, and
-/// [`Bloom::predicted_fpp`] then reports the rate those slices deliver.
 pub const BLOOM_MAX_BITS: usize = 1 << 31;
 
 /// Wire tag identifying the hash path a filter was built on.
@@ -95,9 +92,15 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
     /// See [`Self::dimensions_for`] for the sizing and its bounds.
     ///
     /// # Panics
-    /// If `target_fpp` is NaN or infinite.
+    /// If `target_fpp` is NaN or infinite, or no filter within
+    /// [`BLOOM_MAX_BITS`] meets it.
     pub fn with_capacity(expected_items: usize, target_fpp: f64) -> Self {
-        let (rows, cols) = Self::dimensions_for(expected_items, target_fpp);
+        let Some((rows, cols)) = Self::dimensions_for(expected_items, target_fpp) else {
+            panic!(
+                "no Bloom filter within BLOOM_MAX_BITS ({BLOOM_MAX_BITS}) bits holds \
+                 {expected_items} items at false-positive rate {target_fpp}"
+            );
+        };
         Self::with_dimensions(rows, cols)
     }
 
@@ -107,20 +110,19 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
     /// the bit budget `m = ceil(-n * ln(p) / ln(2)^2)` for `n = expected_items`
     /// (at least 1) at target `p`. Then the slice width that hits `p` with
     /// exactly that many slices, `cols = -n / ln(1 - p^(1/k))`, rounded up to a
-    /// power of two. Solving for the capped `k` rather than assuming the `k`-optimal
-    /// split is what keeps a small target reachable: the cap costs bits, not
-    /// accuracy, until [`BLOOM_MAX_BITS`] binds.
+    /// power of two, then doubled until [`Self::predicted_fpp`] for `n` items is
+    /// at most `p`. Solving for the capped `k` rather than assuming the
+    /// `k`-optimal split is what keeps a small target reachable: the cap costs
+    /// bits, not accuracy.
     ///
-    /// The power-of-two rounding keeps the column fold free of modulo bias, so
-    /// the measured rate lands at or under the target rather than above it.
-    /// `target_fpp` is clamped into `(0, 1)` and both dimensions floor at 1. A
-    /// target needing more than [`BLOOM_MAX_BITS`] gets the widest slices that
-    /// fit, and [`Self::predicted_fpp`] reports the rate they deliver.
+    /// The power-of-two width keeps the column fold free of modulo bias.
+    /// `target_fpp` is clamped into `(0, 1)` and both dimensions floor at 1.
+    /// `None` when meeting the target needs more than [`BLOOM_MAX_BITS`] bits.
     ///
     /// # Panics
     /// If `target_fpp` is NaN or infinite. Clamping cannot order those, and a
     /// silently degenerate filter answers yes to everything.
-    pub fn dimensions_for(expected_items: usize, target_fpp: f64) -> (usize, usize) {
+    pub fn dimensions_for(expected_items: usize, target_fpp: f64) -> Option<(usize, usize)> {
         assert!(
             target_fpp.is_finite(),
             "target false-positive rate must be finite, got {target_fpp}"
@@ -134,12 +136,18 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
         let per_slice_fill = p.powf(1.0 / rows as f64);
         let wanted = (-n / (1.0 - per_slice_fill).ln()).ceil().max(1.0);
         let widest = 1usize << (BLOOM_MAX_BITS / rows).max(1).ilog2();
-        let cols = if wanted >= widest as f64 {
+        let mut cols = if wanted >= widest as f64 {
             widest
         } else {
             (wanted as usize).next_power_of_two().min(widest)
         };
-        (rows, cols)
+        while partitioned_fpp(rows, cols, n) > p {
+            if cols >= widest {
+                return None;
+            }
+            cols *= 2;
+        }
+        Some((rows, cols))
     }
 
     /// Number of hash functions.
@@ -192,12 +200,10 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
         self.fill_ratio().powi(self.rows() as i32)
     }
 
-    /// False-positive rate the sizing formula predicts for `distinct_items`
-    /// distinct keys, `(1 - e^(-n/cols))^rows`.
+    /// False-positive rate for `distinct_items` distinct keys,
+    /// `(1 - (1 - 1/cols)^n)^rows`, exact for a power-of-two `cols`.
     pub fn predicted_fpp(&self, distinct_items: usize) -> f64 {
-        let n = distinct_items as f64;
-        let per_slice = 1.0 - (-n / self.cols() as f64).exp();
-        per_slice.powi(self.rows() as i32)
+        partitioned_fpp(self.rows(), self.cols(), distinct_items as f64)
     }
 
     /// Unions `other` into `self`.
@@ -208,6 +214,11 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
         self.bits.union_from(&other.bits);
     }
 }
+fn partitioned_fpp(rows: usize, cols: usize, items: f64) -> f64 {
+    let per_slice = -(items * (-1.0 / cols as f64).ln_1p()).exp_m1();
+    per_slice.powi(rows as i32)
+}
+
 // Regular-path membership: one seeded hash per slice.
 impl<H: SketchHasher> Bloom<RegularPath, H> {
     /// Records `value` as a member.
@@ -288,7 +299,7 @@ mod tests {
     fn with_capacity_builds_exactly_the_geometry_dimensions_for_reports() {
         for expected in [0usize, 1, 17, 1_000, 250_000] {
             for target in [0.5, 0.1, 0.01, 1e-4, 1e-6] {
-                let (rows, cols) = Bloom::<RegularPath>::dimensions_for(expected, target);
+                let (rows, cols) = Bloom::<RegularPath>::dimensions_for(expected, target).unwrap();
                 let built = Bloom::<RegularPath>::with_capacity(expected, target);
                 assert_eq!(
                     (built.rows(), built.cols()),
@@ -311,7 +322,7 @@ mod tests {
             [(1usize, 0.05, 5usize), (1, 1.0 / 128.0, 8), (2, 1e-4, 14)]
         {
             let exponent = (1.0f64 / target).log2().round() as usize;
-            let (rows, _) = Bloom::<RegularPath>::dimensions_for(expected, target);
+            let (rows, _) = Bloom::<RegularPath>::dimensions_for(expected, target).unwrap();
             assert_eq!(
                 rows, slices,
                 "dimensions_for({expected}, {target}) chose {rows} slices, not {slices}"
@@ -330,7 +341,7 @@ mod tests {
                 .round()
                 .clamp(1.0, BLOOM_MAX_SLICES as f64) as usize;
             for expected in [1_000usize, 100_000, 10_000_000] {
-                let (rows, _) = Bloom::<RegularPath>::dimensions_for(expected, target);
+                let (rows, _) = Bloom::<RegularPath>::dimensions_for(expected, target).unwrap();
                 assert_eq!(
                     rows, exponent,
                     "dimensions_for({expected}, {target}) chose {rows} slices, \
@@ -339,20 +350,20 @@ mod tests {
             }
         }
 
-        let (capped, _) = Bloom::<RegularPath>::dimensions_for(1_000_000, 1e-12);
+        let (capped, _) = Bloom::<RegularPath>::dimensions_for(1_000_000, 1e-12).unwrap();
         assert_eq!(
             capped, BLOOM_MAX_SLICES,
             "a target needing more slices than the seed list holds chose {capped}"
         );
     }
 
-    /// A target outside `(0, 1)` is clamped rather than rejected, and the clamp
-    /// lands on the interval's own endpoints: a caller who passes `0.0` must get
-    /// the sharpest filter the sizing can express, not a degenerate one.
+    /// A target outside `(0, 1)` is clamped to the interval's own endpoints,
+    /// and the lowest one needs more bits than any filter has.
     #[test]
     fn a_target_outside_the_open_unit_interval_is_clamped_to_the_endpoints() {
         let lowest = Bloom::<RegularPath>::dimensions_for(1_000, f64::MIN_POSITIVE);
         let highest = Bloom::<RegularPath>::dimensions_for(1_000, 1.0 - f64::EPSILON);
+        assert_eq!(lowest, None, "a target of 2^-1022 was met");
         for below in [0.0, -0.0, -1.0, f64::MIN] {
             assert_eq!(
                 Bloom::<RegularPath>::dimensions_for(1_000, below),
@@ -367,13 +378,23 @@ mod tests {
                 "target {above} did not clamp down to the largest rate below one {highest:?}"
             );
         }
-        for (rows, cols) in [lowest, highest] {
-            assert!(rows >= 1 && cols >= 1, "clamping produced {rows}x{cols}");
-            assert!(
-                cols.is_power_of_two(),
-                "clamped cols {cols} is not a power of two"
-            );
-        }
+        let (rows, cols) = highest.unwrap();
+        assert!(rows >= 1 && cols >= 1, "clamping produced {rows}x{cols}");
+        assert!(
+            cols.is_power_of_two(),
+            "clamped cols {cols} is not a power of two"
+        );
+    }
+
+    #[test]
+    fn a_target_past_the_bit_ceiling_is_unreachable() {
+        assert_eq!(Bloom::<RegularPath>::dimensions_for(1 << 30, 1e-12), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "no Bloom filter within BLOOM_MAX_BITS")]
+    fn with_capacity_panics_on_an_unreachable_target() {
+        Bloom::<RegularPath>::with_capacity(1 << 30, 1e-12);
     }
 
     /// A NaN target cannot be ordered, so clamping it would silently produce a
@@ -396,14 +417,14 @@ mod tests {
     /// that would panic the moment a key arrives.
     #[test]
     fn sizing_for_zero_expected_items_still_yields_a_filter_that_answers() {
-        let (rows, cols) = Bloom::<RegularPath>::dimensions_for(0, 0.01);
+        let (rows, cols) = Bloom::<RegularPath>::dimensions_for(0, 0.01).unwrap();
         assert!(
             rows >= 1 && cols >= 1,
             "sizing for nothing gave {rows}x{cols}"
         );
         assert_eq!(
             (rows, cols),
-            Bloom::<RegularPath>::dimensions_for(1, 0.01),
+            Bloom::<RegularPath>::dimensions_for(1, 0.01).unwrap(),
             "sizing for zero items differs from sizing for one"
         );
 
@@ -489,10 +510,10 @@ mod tests {
             "estimated_fpp did not use the slice count"
         );
 
-        let per_slice = 1.0 - (-400.0f64 / WIDE_COLS as f64).exp();
-        assert_eq!(
-            filter.predicted_fpp(400),
-            per_slice.powi(rows as i32),
+        let per_slice = 1.0 - (1.0 - 1.0 / WIDE_COLS as f64).powi(400);
+        let expected = per_slice.powi(rows as i32);
+        assert!(
+            (filter.predicted_fpp(400) / expected - 1.0).abs() < 1e-12,
             "predicted_fpp did not use the slice count"
         );
     }
