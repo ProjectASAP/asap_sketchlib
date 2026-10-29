@@ -17,8 +17,9 @@ signals a backwards-compatible change.
   family, the `StatisticKind`s one state answers, whether states merge and
   whether the inputs may overlap (`MergeInputRule`), and the error of each
   statistic read from a merged state (`MergedError`).
-  `SketchAlgorithm::ALL` lists the families. The names are the ASAPPlanner's,
-  which reads the table directly; the enums are exhaustive and serde-derived.
+  `SketchAlgorithm::ALL` lists the families. Variants use full names and
+  upper-case acronyms (`CountMinSketch`, `HydraKLL`, `HLL`); the ASAPPlanner
+  reads the table directly; the enums are exhaustive and serde-derived.
   Rows list each sketch's own estimates only: exact aggregates kept in side
   fields next to a sketch (DDSketch's sum/min/max, a Space-Saving total) are
   a separate exact operator (#250); a total read from the sketch's own
