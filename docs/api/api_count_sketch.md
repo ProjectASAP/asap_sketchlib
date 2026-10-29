@@ -132,6 +132,8 @@ added to each. `new` and the decoder refuse anything else. `merge_delta` adds
 the delta to the counters; a delta of other dimensions or admission rate, or an
 integer add that overflows, fails and leaves the sketch unchanged.
 
+With `f64` counters a receiver equals the producer only up to floating-point rounding: each `merge_delta` adds at most `2^-53 * |result|` of rounding to whatever error the delta already carries (at most `2^-53 * |delta|` when the producer formed it as `new - old`), and the errors accumulate over applies (bound in `docs/asapv1_wire_format.md` §3.23). With `i32` / `i64` counters it equals the producer exactly.
+
 ## Admission rate
 
 ```rust

@@ -120,6 +120,14 @@ signals a backwards-compatible change.
 - **KLL merges require the same `k` and `m`.** `Kll::merge` and
   `KllDynamic::merge` panic when either differs, where they merged before;
   `Hydra::merge` and `EhBucketSketch::merge` return `Err` for such KLL states.
+
+### Docs
+
+- **A receiver of `f64` deltas matches the producer only up to rounding.**
+  For Count-Min, Count Sketch and the two heap kinds, the wire format
+  (§3.23), the `DeltaCounter` docs and the API pages now state the bound;
+  `i32` / `i64` receivers match exactly. Tests cover both. No behavior change.
+
 ### Fixed
 
 - **`Kll::update` regains most of its pre-0.4.0 speed.** With the lazily grown

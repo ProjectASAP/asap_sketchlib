@@ -7,6 +7,16 @@ use std::ops::RangeBounds;
 
 /// A counter a delta adds to. An integer add that overflows has no result; a
 /// float one always has.
+///
+/// Integer adds are exact, so a receiver of `i32` or `i64` deltas equals the
+/// producer cell for cell. An `f64` add rounds once to nearest, off by at most
+/// `2^-53 * |result|`, so after `n` applies a cell differs from the producer's
+/// by at most the sum of `e_i + 2^-53 * |r_i|` (finite values), where `r_i` is
+/// the receiver's cell after apply `i` and `e_i` is how far delta `i` is from
+/// the producer's true change. A producer forming each delta as `new - old` of
+/// its own `f64` cells has `e_i <= 2^-53 * |delta_i|`; one summing updates in a
+/// separate buffer has that buffer's summation error. Not guaranteed equal
+/// (`docs/asapv1_wire_format.md` §3.23).
 pub trait DeltaCounter: Copy + PartialEq + Default {
     /// `self + delta`.
     fn checked_add(self, delta: Self) -> Option<Self>;
