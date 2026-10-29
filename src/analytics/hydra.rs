@@ -6,7 +6,9 @@ use super::count_matrix::{MatrixParams, collision_probability};
 use super::frameworks::{Cell, CellData, split_delta};
 use super::quantiles::KllParams;
 use super::univmon::UnivMonParams;
-use super::{ErrorBound, ErrorMetric, SketchAnalytics, StatisticKind, p_med, sort_ops};
+use super::{
+    ErrorBound, ErrorMetric, SketchAnalytics, StatisticKind, is_positive, p_med, sort_ops,
+};
 use crate::Hydra;
 use crate::input::HydraCounter;
 
@@ -298,7 +300,7 @@ impl SketchAnalytics for Hydra {
         delta: f64,
         data: &HydraData,
     ) -> Option<HydraParams> {
-        if !(epsilon > 0.0) || !(delta > 0.0) {
+        if !is_positive(epsilon) || !is_positive(delta) {
             return None;
         }
         let half = epsilon / 2.0;

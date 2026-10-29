@@ -9,7 +9,7 @@ use super::count_matrix::{
 use super::heavy_hitters::FlowData;
 use super::{
     DEFAULT_DELTA, ErrorBound, HashPath, SketchAnalytics, StatisticKind, est_count_min,
-    est_count_sketch, fixed_delta, heap_update_ops, max_row_failure, sort_ops,
+    est_count_sketch, fixed_delta, heap_update_ops, is_positive, max_row_failure, sort_ops,
 };
 use crate::common::heap::DEFAULT_HEAP_SIZE;
 use crate::common::structures::fixed_structure::{DEFAULT_COLS, DEFAULT_ROWS};
@@ -439,13 +439,13 @@ fn fold_params(
 /// The odd `d ≤ 19` and power-of-two `W` with `q ≤ β·ε²` on `RegularPath`
 /// that minimize `d·W`.
 fn fold_count_sketch_params_for(epsilon: f64, delta: f64) -> Option<MatrixParams> {
-    if !(epsilon > 0.0) || !(delta > 0.0) {
+    if !is_positive(epsilon) || !is_positive(delta) {
         return None;
     }
     let mut best: Option<MatrixParams> = None;
     for rows in (1..=MATRIX_MAX_ROWS).step_by(2) {
         let room = max_row_failure(rows, delta) * epsilon * epsilon - TWO_POW_MINUS_32;
-        if !(room > 0.0) || 1.0 / room > MAX_FULL_COLS as f64 {
+        if !is_positive(room) || 1.0 / room > MAX_FULL_COLS as f64 {
             continue;
         }
         let cols = ((1.0 / room).ceil() as usize).next_power_of_two();

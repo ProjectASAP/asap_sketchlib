@@ -9,7 +9,7 @@ use super::quantiles::{DdData, DdParams, KllParams, StreamData};
 use super::univmon::UnivMonParams;
 use super::{
     DEFAULT_DELTA, ErrorBound, ErrorMetric, HashPath, SketchAnalytics, StatisticKind,
-    est_count_sketch, p_med,
+    est_count_sketch, is_positive, p_med,
 };
 use crate::common::numerical::NumericalValue;
 use crate::sketches::hll::{HyperLogLogHipImpl, HyperLogLogImpl};
@@ -318,7 +318,7 @@ pub(crate) fn split_delta(
     }
     let total = delta.unwrap_or(DEFAULT_DELTA);
     let room = (total - own_delta) / copies;
-    if !(room > 0.0) {
+    if !is_positive(room) {
         return None;
     }
     inner(Some(room)).map(|bound| (bound, total))
@@ -792,9 +792,9 @@ mod octo {
         }
     }
 
-    /// Octo's memory: `mem_in + K·(size_of::<Worker>() + worker counter
-    /// bytes) + K·queue_capacity·(size_of::<WorkerMsg>() + size_of::<Delta>()
-    /// + 16)`.
+    /// Octo's memory:
+    /// `mem_in + K·(size_of::<Worker>() + worker counter bytes)`
+    /// `+ K·queue_capacity·(size_of::<WorkerMsg>() + size_of::<Delta>() + 16)`.
     pub fn octo_memory_bytes<L: OctoPlan>(
         config: &OctoConfig,
         parent_bytes: usize,

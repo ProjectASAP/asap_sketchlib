@@ -351,7 +351,7 @@ impl Hydra {
                 + labels.iter().map(String::capacity).sum::<usize>()
         };
         size_of::<Self>()
-            + self.cells.as_slice().len() * size_of::<HydraCounter>()
+            + size_of_val(self.cells.as_slice())
             + self.cells.as_slice().iter().map(heap).sum::<usize>()
             + heap(&self.prototype)
             + labels(&self.schema.labels)

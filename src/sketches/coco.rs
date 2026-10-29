@@ -175,7 +175,7 @@ impl<H: SketchHasher> CocoSketch<H> {
             .iter()
             .filter_map(|b| b.full_key.as_ref().map(String::capacity))
             .sum();
-        size_of::<Self>() + self.table.as_slice().len() * size_of::<CocoBucket>() + keys
+        size_of::<Self>() + size_of_val(self.table.as_slice()) + keys
     }
 
     /// Adds `v` to `key` using the paper's stochastic variance-optimized update.

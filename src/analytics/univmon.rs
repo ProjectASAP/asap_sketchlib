@@ -6,7 +6,7 @@ use super::count_matrix::{
 use super::heavy_hitters::FlowData;
 use super::{
     DEFAULT_DELTA, ErrorBound, ErrorMetric, SketchAnalytics, StatisticKind, est_count_sketch,
-    floor_log2, heap_update_ops, lg, max_row_failure,
+    floor_log2, heap_update_ops, is_positive, lg, max_row_failure,
 };
 use crate::common::heap::DEFAULT_HEAP_SIZE;
 use crate::sketch_framework::univmon::{UNIVMON_MAX_LAYERS, wire::check_univmon_dimensions};
@@ -138,7 +138,7 @@ fn distinct_error(
 /// `1.35/(k·ε²) + (e/4)^(k/2) ≤ δ`, and `L = lg(D/k) + 2`; `None` past
 /// [`UNIVMON_MAX_LAYERS`].
 fn distinct_params_for(epsilon: f64, delta: f64, data: &FlowData) -> Option<(usize, usize)> {
-    if !(epsilon > 0.0) || !(delta > 0.0) {
+    if !is_positive(epsilon) || !is_positive(delta) {
         return None;
     }
     let distinct = data.distinct?;
@@ -459,13 +459,13 @@ fn sample_error(
 /// ItemFrequency sizing: the odd `d` and power-of-two `W`, with no halving,
 /// that meet `(ε, δ)` with the fewest counters `d·W`.
 fn univmonq_item_params_for(epsilon: f64, delta: f64) -> Option<UnivMonQConfig> {
-    if !(epsilon > 0.0) || !(delta > 0.0) {
+    if !is_positive(epsilon) || !is_positive(delta) {
         return None;
     }
     let mut best: Option<UnivMonQConfig> = None;
     for rows in (1..=63).step_by(2) {
         let target = max_row_failure(rows, delta) * epsilon * epsilon;
-        if !(target > 0.0) || 1.0 / target > (1u64 << 32) as f64 {
+        if !is_positive(target) || 1.0 / target > (1u64 << 32) as f64 {
             continue;
         }
         let config = UnivMonQConfig {
@@ -555,7 +555,10 @@ impl<H: SketchHasher> SketchAnalytics for UnivMonQ<H> {
         match statistic {
             StatisticKind::ItemFrequency => univmonq_item_params_for(epsilon, delta),
             StatisticKind::Quantile | StatisticKind::Rank => {
-                if !(epsilon > 0.0) || !(delta > 0.0) || data.heavy_set_empty == Some(false) {
+                if !is_positive(epsilon)
+                    || !is_positive(delta)
+                    || data.heavy_set_empty == Some(false)
+                {
                     return None;
                 }
                 let samples = ((2.0 / delta).ln() / (2.0 * epsilon * epsilon)).ceil();

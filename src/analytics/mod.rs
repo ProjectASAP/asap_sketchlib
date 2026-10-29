@@ -165,6 +165,11 @@ pub trait SketchAnalytics {
     ) -> Option<Self::Params>;
 }
 
+/// `x > 0`, false for NaN.
+pub(crate) fn is_positive(x: f64) -> bool {
+    x > 0.0
+}
+
 /// `⌈log2 x⌉`, and 0 for `x ≤ 1`.
 pub fn lg(x: f64) -> f64 {
     if x <= 1.0 { 0.0 } else { x.log2().ceil() }

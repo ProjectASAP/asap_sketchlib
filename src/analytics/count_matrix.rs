@@ -3,7 +3,7 @@
 
 use super::{
     DEFAULT_DELTA, ErrorBound, ErrorMetric, HashPath, SketchAnalytics, StatisticKind,
-    est_count_min, est_count_sketch, fixed_delta, max_row_failure, p_med,
+    est_count_min, est_count_sketch, fixed_delta, is_positive, max_row_failure, p_med,
 };
 use crate::common::structures::fixed_structure::{DEFAULT_COLS, DEFAULT_ROWS};
 use crate::{
@@ -62,7 +62,7 @@ pub(crate) fn count_min_params_for(
     fast_path: bool,
     max_rows: usize,
 ) -> Option<MatrixParams> {
-    if !(epsilon > 0.0) || !(delta > 0.0) {
+    if !is_positive(epsilon) || !is_positive(delta) {
         return None;
     }
     let mut cols = (E / epsilon).ceil().max(1.0);
@@ -119,20 +119,20 @@ pub(crate) fn count_sketch_params_for(
     delta: f64,
     fast_path: bool,
 ) -> Option<MatrixParams> {
-    if !(epsilon > 0.0) || !(delta > 0.0) {
+    if !is_positive(epsilon) || !is_positive(delta) {
         return None;
     }
     let mut best: Option<MatrixParams> = None;
     for rows in (1..=MATRIX_MAX_ROWS).step_by(2) {
         let target = max_row_failure(rows, delta) * epsilon * epsilon;
         let cols = if fast_path {
-            if !(target > 0.0) || 1.0 / target > (1u64 << 32) as f64 {
+            if !is_positive(target) || 1.0 / target > (1u64 << 32) as f64 {
                 continue;
             }
             ((1.0 / target).ceil() as usize).next_power_of_two()
         } else {
             let room = target - TWO_POW_MINUS_32;
-            if !(room > 0.0) || 1.0 / room > u32::MAX as f64 {
+            if !is_positive(room) || 1.0 / room > u32::MAX as f64 {
                 continue;
             }
             (1.0 / room).ceil() as usize
@@ -282,7 +282,7 @@ pub(crate) fn l2_norm_error(
 /// FrequencyL2 sizing: the narrowest power-of-two width with
 /// `20q ≤ (1 − (1 − ε)²)²` and the fewest rows with `P_med(d, 0.1) ≤ δ`.
 pub(crate) fn l2_norm_params_for(epsilon: f64, delta: f64) -> Option<MatrixParams> {
-    if !(epsilon > 0.0) || !(delta > 0.0) {
+    if !is_positive(epsilon) || !is_positive(delta) {
         return None;
     }
     let spread = 1.0 - (1.0 - epsilon.min(1.0)).powi(2);
