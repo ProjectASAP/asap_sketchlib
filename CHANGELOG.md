@@ -21,9 +21,11 @@ signals a backwards-compatible change.
 - **`memory_bytes()`** on `CountMinHll`, `MicroCm`, `SpaceSaving`,
   `ElasticSketch`, `CocoSketch`, `CountMinSketchWithSpaceSaving`,
   `CountSketchWithSpaceSaving`, `CountMinSketchFold`, `CountSketchFold`,
-  `SetAggregator`, `Bloom` and `UniformSampling`, and
-  `SpaceSaving::theoretical_memory_bytes` and
-  `Bloom::theoretical_memory_bytes(rows, cols)`.
+  `SetAggregator`, `Bloom`, `UniformSampling` and `UnivMonTwoTier`, and
+  `SpaceSaving::theoretical_memory_bytes`,
+  `Bloom::theoretical_memory_bytes(rows, cols)`,
+  `UnivMonTwoTier::theoretical_memory_bytes` and
+  `UnivMonQ::theoretical_memory_bytes(config)`.
 - **`SetAggregator::contains`**: whether a key is in the set.
 - **`op-count` feature**: `analytics::ops::count(f)` returns the ops `f`
   performed on this thread, one per counter, register, bucket or item read or

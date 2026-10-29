@@ -11,6 +11,7 @@ pub mod heavy_hitters;
 pub mod ops;
 pub mod quantiles;
 pub mod top_k;
+pub mod univmon;
 
 pub use crate::capability::StatisticKind;
 pub use cardinality::{BloomParams, DistinctData, HllData, HllParams, KmvParams, SetData};
@@ -22,6 +23,7 @@ pub use heavy_hitters::{CocoParams, ElasticParams, FlowData, SpaceSavingData, Sp
 pub use quantiles::UniformParams;
 pub use quantiles::{DdData, DdParams, KllParams, StreamData};
 pub use top_k::{FoldData, FoldParams, MatrixHeapParams, MatrixSpaceSavingParams};
+pub use univmon::{TwoTierParams, UnivMonParams, UnivMonQData};
 
 use crate::{FastPath, RegularPath};
 

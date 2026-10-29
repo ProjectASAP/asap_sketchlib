@@ -295,7 +295,7 @@ pub(crate) fn l2_norm_params_for(epsilon: f64, delta: f64) -> Option<MatrixParam
     (rows * (cols.ilog2() as usize + 1) <= 128).then_some(MatrixParams { rows, cols })
 }
 
-const L2_NORM_CONTRACT: &str = "univmon_layer0_f2_median_chebyshev_binomial_v1";
+pub(crate) const L2_NORM_CONTRACT: &str = "univmon_layer0_f2_median_chebyshev_binomial_v1";
 
 impl<H: SketchHasher> SketchAnalytics for CountSketchWithL2Norm<H> {
     type Params = MatrixParams;

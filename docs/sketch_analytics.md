@@ -631,32 +631,35 @@ UnivMon keeps `L` layers, and an update goes to layer 0 and to each further laye
 
 `src/sketch_framework/univmon.rs`.
 Parameters: heap capacity `k`, `d` rows, `w` columns and `L ≤ 19` layers, the code's `heap_size`, `rows`, `cols` and `layers`; each layer is a `CountSketchWithL2Norm` and a heap of `k` keys.
-Data inputs: `D_max`, an upper bound on `D`, and the key for memory.
+Data inputs: `D_max`, an upper bound on `D`, and the bytes each key owns for memory, 0 when unknown.
+`c = min(k, D_max)` is the most keys one layer's heap holds, and `k` when `D_max` is unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
 | Total error | | exact; contract `univmon_unit_update_total` |
-| FrequencyL2 error | | as CountSketchWithL2Norm on layer 0 |
-| Distinct error | | `Relative`, `ε = √(1.35/(k·(δ − ψ)))`, `δ` chosen, `k ≥ 8`; contract `univmon_distinct_complete_top_layer_chebyshev_v1` |
-| Distinct sizing | | the smallest `k ≥ 8` with `1.35/(k·ε²) + (e/4)^(k/2) ≤ δ`, and `L ≥ lg(D_max/k) + 2`; `None` when that needs `L > 19` |
+| FrequencyL2 error | | as CountSketchWithL2Norm on layer 0, with its contract |
+| FrequencyL2 sizing | | as CountSketchWithL2Norm for `d` and `w`; `k` and `L` are not set by the bound |
+| Distinct error | | `Relative`, `ε = √(1.35/(k·(δ − ψ)))`, `δ` chosen, `k ≥ 8`; contract `univmon_distinct_complete_top_layer_chebyshev_v1`; `None` without `D_max` |
+| Distinct sizing | | the smallest `k ≥ 8` with `1.35/(k·ε²) + (e/4)^(k/2) ≤ δ`, and `L = lg(D_max/k) + 2`; `None` when that needs `L > 19` |
 | FrequencyEntropy, GSum error | | none |
 | Memory | `O(L(dw + k))` | `theoretical_memory_bytes(heap_size, rows, cols, layers, key)` |
-| Update | `O(d log d + log k)` average | `1 + λ(L)·(5d + d·lg d + 9 + 16·⌊log2 k⌋)` |
+| Update | `O(d log d + log k)` average | `1 + λ(L)·(5d + d·lg d + 9 + 14·⌊log2 k⌋)` |
 | Query Total | `O(1)` | 1 |
 | Query FrequencyL2 | `O(d log d)` | `2d + d·lg d` |
-| Query Distinct, GSum, FrequencyEntropy | `O(min(Lk, LD)·d log d)` | `min(Lk, L·D)·(1 + 2d + d·lg d)` |
-| Merge | `O(L(dw + k(d log d + log k)))` | `2 + L·(3dw + d + 3 + k·(18 + 4d + 2d·lg d + 30·⌊log2 k⌋))` |
+| Query Distinct, GSum, FrequencyEntropy | `O(min(Lk, LD)·d log d)` | `4 + 2L + L·c·(1 + 2d + d·lg d)` |
+| Merge | `O(L(dw + k(d log d + log k)))` | `2 + L·(3dw + d + 6 + c·(22 + 4d + 2d·lg d + 28·⌊log2 k⌋))` |
 
 - Distinct uses a Chebyshev bound on the heap estimator, whose variance is at most `1.35·D²/k`.
 - `ψ` is the probability that the top layer sees more than `k` keys: 0 when `D_max ≤ k`, `(e/4)^(k/2)` when `L ≥ lg(D_max/k) + 2`, and 1 otherwise.
   `theoretical_error` returns `None` when `delta ≤ ψ`.
 - A merged state keeps the Distinct bound, because its top layer overflows only if the union's does.
 - Entropy and G-sum are computed from the layers' heaps, and nothing proves those heaps are large enough for the paper's guarantee.
-- The bounds cover states built with `update`, and `theoretical_error` returns `None` for a state built with `update_weighted_terminal`.
+- The bounds and the update formula cover states built with `update_weighted`, not with `update_weighted_terminal`.
 - `L ≤ 19` because hash seed 19 selects the layers.
-- An update adds to the running total, then in each layer it reaches updates `d` counters and row sums, estimates the key, updates that layer's heap, and records whether the heap is full.
-- Distinct, GSum and Entropy re-estimate every key in every layer's heap.
-- A merge rebuilds each layer as CountSketchWithL2Norm and the heap variants do, and requires the same update mode or one side empty.
+- An update adds to the running total, then in each layer it reaches updates `d` counters and row sums, estimates the key, updates that layer's heap, and clears the layer's candidate flag when the heap turned a key away.
+- Distinct, GSum and Entropy read the total, re-estimate every key in every layer's heap, and write and read one partial sum per layer; Entropy reads the total three more times.
+- A merge adds the totals, then per layer reads both candidate flags, reads both heaps' keys into a set, merges the counters, clears the heap, re-estimates each key in the set into it, and writes the flag.
+- A merge requires the same update mode or one side empty.
 
 ### UnivMonTwoTier
 
@@ -668,8 +671,9 @@ Data inputs as UnivMon.
 | Item | Big O | Formula |
 |---|---|---|
 | Error, every readout | | as UnivMon, with layer 0's dimensions for FrequencyL2 |
-| Memory | as the summary | `size_of::<Self>()`, plus each layer's `CountSketchWithL2Norm::theoretical_memory_bytes`, plus `L·TopKHeap::theoretical_memory_bytes(k, key)` |
-| Update | as UnivMon | `1 + λ_e·(5d_e + d_e·lg d_e + 9 + 16·⌊log2 k⌋) + λ_m·(5d_m + d_m·lg d_m + 9 + 16·⌊log2 k⌋)` average |
+| Sizing | | as UnivMon; FrequencyL2 sets the elephant dimensions |
+| Memory | as the summary | `theoretical_memory_bytes(heap_size, elephant_layers, elephant_rows, elephant_cols, mouse_rows, mouse_cols, layers, key)`: `size_of::<Self>()`, plus per layer its `CountSketchWithL2Norm::theoretical_memory_bytes`, `TopKHeap::theoretical_memory_bytes(k, key)` and a candidate flag |
+| Update | as UnivMon | `1 + λ_e·(5d_e + d_e·lg d_e + 9 + 14·⌊log2 k⌋) + λ_m·(5d_m + d_m·lg d_m + 9 + 14·⌊log2 k⌋)` average |
 | Query, Merge | as UnivMon | as UnivMon, with each layer's own `d` and `w` |
 
 - An update reaches `λ_e = 2 − 2^(1 − min(L_e, L))` elephant layers and `λ_m = λ(L) − λ_e` mouse layers on average.
@@ -678,31 +682,35 @@ Data inputs as UnivMon.
 
 `src/sketch_framework/univmon_q.rs`.
 Parameters, all fields of `UnivMonQConfig`: `L` layers, top-layer width `W`, halving period `P` (0 for none), `d` odd rows, `b` counter bits, heap capacity `k` and `M` ordered samples, the config's `layers`, `top_layer_cols`, `cols_halving_period`, `rows`, `counter_bits`, `heap_size` and `ordered_samples`, plus a seed index.
-Layer `j` has width `w_j = max(W >> ⌊j/P⌋, min(k, W))`, or `W` when `P = 0`, and `w_min` is the narrowest.
+Layer `j` has width `w_j = max(W >> ⌊j/P⌋, min(k, W))`, or `W` when `P = 0`.
+`q` is the most collision probability over the layers: `1/w_j` for a power-of-two `w_j`, and `min(1/w_j + 2^(−lg W), 9/(8·w_j))` otherwise.
 Updates are unit-weight `f64` values, and each update goes to exactly one layer.
-Data inputs: `n`.
+Data inputs: `n`, and whether the ordered readouts' heavy set is empty.
 
 | Item | Big O | Formula |
 |---|---|---|
-| Total, Min, Max error | | exact; contract `exact_v1` |
-| ItemFrequency error | | `Absolute(L2)`, `ε = √(3/w_min)`, `δ = P_med(d, q·w_min/3)` with `q ≤ min(1/w_min + 2^(−lg W), 9/(8·w_min))`; contract `univmonq_terminal_count_sketch_l2_median_binomial_v1` |
-| Quantile error | | `Rank`, `ε = √(ln(2/δ)/(2·min(M, n)))`, `δ` chosen, when the heavy set is empty; contract `univmonq_rank_diffuse_occurrence_hoeffding_v1` |
-| Rank error | | `Absolute(L1)`, the same `ε` and condition |
-| Quantile, Rank sizing | | `M = ⌈ln(2/δ)/(2ε²)⌉` |
+| ItemFrequency error | | `Absolute(L2)`, `ε = √(q/β)` with `β` the largest per-row failure probability with `P_med(d, β) ≤ δ`, `δ` chosen; contract `univmonq_terminal_count_sketch_l2_median_chosen_row_rate_v1` |
+| ItemFrequency sizing | | the odd `d` and power-of-two `W`, with `P = 0`, that meet `(ε, δ)` with the fewest counters `d·W` and fit the 128-bit hash |
+| Quantile error | | `Rank`, `ε = √(ln(2/δ)/(2·min(M, n)))`, `δ` chosen, when the heavy set is empty; contract `univmonq_rank_diffuse_occurrence_hoeffding_v1`; `None` without `n` or without knowing the heavy set is empty |
+| Rank error | | `Absolute(L1)`, the same `ε`, condition and contract |
+| Quantile, Rank sizing | | `M = ⌈ln(2/δ)/(2ε²)⌉`; `None` when the heavy set is not empty or `n < M` |
 | FrequencyL2, Distinct, GSum, FrequencyEntropy, TopK error | | none |
-| Memory | `O(d·Σw_j + Lk + M)` | `size_of::<Self>() + L·size_of::<Layer>() + d·(b/8)·Σw_j + 50Lk + 24M` |
-| Update | `O(d log d + k log k + log M)` | `18 + 3d + d·lg d + 10·⌊log2 k⌋ + k·(11 + 10·⌊log2 k⌋) + (10 + 10·⌊log2 M⌋ when M > 0)` |
-| Query Total, Min, Max | `O(1)` | 1 |
-| Query ItemFrequency | `O(d log d)` | `2d + d·lg d` |
-| Query every other readout | as the summary | rebuilds every layer's candidate keys first |
-| Merge | as the summary | rebuilds the candidate keys and merges the counters and ordered samples |
+| Memory | `O(d·Σw_j + Lk + M)` | `theoretical_memory_bytes(config)`: `size_of::<Self>() + L·size_of::<Layer>() + d·(b/8)·Σw_j + L·(T(k) + 16k) + 24M`, with `T(k)` the bytes of a churned hash table of `k` `(u64, u64)` entries |
+| Update | `O(d log d + k log k + log M)` | `18 + 3d + d·lg d + 7·⌊log2 k⌋ + k·(9 + 7·⌊log2 k⌋) + (8 + 7·⌊log2 M⌋ when M > 0)` |
+| Query ItemFrequency | `O(d log d)` | `1 + 2d + d·lg d` |
+| Query every other readout | as the summary | none; it rebuilds every layer's candidate keys first |
+| Merge | as the summary | `6 + 2d·Σw_j + L·(4 + k·(15 + 4d + 2d·lg d + 2·lg k + 2·⌊log2 k⌋)) + M·(9 + 7·⌊log2 M⌋)` |
 
+- The count, min and max are exact, and UnivMonQ's capability row does not list Total, so they have no rows.
 - ItemFrequency reads only the layer the key went to, whose columns are `lg W` hash bits modulo `w_j`.
 - Rank and Quantile read a uniform sample of `M` updates, so Hoeffding's inequality for sampling without replacement gives the bound.
-  The heavy set is the frequent values the readout handles separately, and when it is not empty the error depends on the data.
+  The heavy set is the frequent values the readout handles separately, and `ordered_query_diagnostics().heavy` reports it.
+  It is empty on a stream where no value is frequent, and when it is not empty the error depends on the data.
 - FrequencyL2, Distinct and GSum come from candidate keys cut off by a threshold, so UnivMon's bounds do not carry over.
-- An update adds to the count, min, max and sequence number, adds to one counter per row in its layer, estimates the key, updates the candidate heap, and adds to the ordered sample.
-- An update of a key already in the candidate heap costs `5 + 3d + d·lg d` plus the ordered sample, and the `k` term comes from re-queuing up to `k` stale heap entries when a new key enters a full layer.
+- A `BinaryHeap` push into a heap that then holds `n` entries counts `3 + 2·⌊log2 n⌋`, and a pop from `n` entries counts `4 + 5·⌊log2 n⌋`, the most std's sifts move.
+- An update reads and increments the sequence number, adds to the count, min and max, adds to one counter per row in its layer, estimates the key, updates the candidate table and heap, and adds to the ordered sample.
+- An update of a key already in the candidate table costs `6 + 3d + d·lg d` plus the ordered sample, and the `k` term comes from re-queuing up to `k` stale heap entries when a new key enters a full layer.
+- A merge adds the counts, mins and maxes, then per layer adds the counters, reads both candidate tables into a set, re-estimates and sorts the set, and refills the table and heap with its top `k`; it then adds each of the other state's samples to the ordered sample.
 - Merge also requires the same seed index and a distinct source id, the id of the stream a state was built from, on each input.
 
 ## Frameworks

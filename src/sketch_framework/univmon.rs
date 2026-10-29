@@ -35,9 +35,9 @@ use std::collections::{HashMap, HashSet};
 
 pub(crate) mod wire;
 
-const DEFAULT_ROWS: usize = 5;
-const DEFAULT_COLS: usize = 2048;
-const DEFAULT_LAYERS: usize = 8;
+pub(crate) const DEFAULT_ROWS: usize = 5;
+pub(crate) const DEFAULT_COLS: usize = 2048;
+pub(crate) const DEFAULT_LAYERS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum UnivMonUpdateMode {
@@ -184,6 +184,7 @@ impl UnivMon {
             current if current == mode => {}
             _ => panic!("cannot mix standard and terminal-only updates in one UnivMon"),
         }
+        crate::analytics::ops::add(1);
         self.total_weight = self
             .total_weight
             .checked_add(value as usize)
@@ -284,6 +285,7 @@ impl UnivMon {
         for i in 0..=bottom_layer_num {
             let count = self.layer_sketches[i].update_weighted_and_estimate(key, value);
             if !self.layer_heaps[i].update(key, count as i64) {
+                crate::analytics::ops::add(1);
                 self.candidate_complete[i] = false;
             }
         }
@@ -333,6 +335,7 @@ impl UnivMon {
     where
         F: Fn(f64) -> f64,
     {
+        crate::analytics::ops::add(1);
         if self.total_weight == 0 && !count_every_key {
             return 0.0;
         }
@@ -341,6 +344,8 @@ impl UnivMon {
         }
 
         let counted = |count: i64| count_every_key || count > 0;
+        // Each `y` slot is written once and read once.
+        crate::analytics::ops::add(2 * self.layers);
         let mut y = vec![0.0; self.layers];
         let mut tmp: f64;
 
@@ -460,6 +465,7 @@ impl UnivMon {
 
     /// Returns the exact L1 norm for the supported non-negative update stream.
     pub fn estimate_l1(&self) -> f64 {
+        crate::analytics::ops::add(1);
         self.total_weight as f64
     }
 
@@ -478,6 +484,7 @@ impl UnivMon {
 
     /// Returns the estimated Shannon entropy, in bits (log2).
     pub fn estimate_entropy(&self) -> f64 {
+        crate::analytics::ops::add(1);
         if self.total_weight == 0 {
             return 0.0;
         }
@@ -487,6 +494,7 @@ impl UnivMon {
             },
             false,
         );
+        crate::analytics::ops::add(2);
         (self.total_weight as f64).log2() - tmp / (self.total_weight as f64)
     }
 
@@ -532,27 +540,34 @@ impl UnivMon {
                 "cannot merge standard and terminal-only UnivMon states"
             ),
         }
+        crate::analytics::ops::add(2);
         self.total_weight = self
             .total_weight
             .checked_add(other.total_weight)
             .expect("merged UnivMon total weight overflowed usize");
         for i in 0..self.layers {
+            crate::analytics::ops::add(2);
             let sources_complete = self.candidate_complete[i] && other.candidate_complete[i];
             let candidate_keys: HashSet<OwnedDataInput> = self.layer_heaps[i]
                 .heap()
                 .iter()
                 .chain(other.layer_heaps[i].heap())
-                .map(|item| item.key.clone())
+                .map(|item| {
+                    crate::analytics::ops::add(1);
+                    item.key.clone()
+                })
                 .collect();
             let merged_candidates_complete =
                 sources_complete && candidate_keys.len() <= self.heap_size;
             self.layer_sketches[i].merge(&other.layer_sketches[i]);
             self.layer_heaps[i].clear();
             for key in candidate_keys {
+                crate::analytics::ops::add(1);
                 let input = key.as_data_input();
                 let count = self.layer_sketches[i].estimate(&input) as i64;
                 self.layer_heaps[i].update(&input, count);
             }
+            crate::analytics::ops::add(1);
             self.candidate_complete[i] = merged_candidates_complete;
         }
     }
