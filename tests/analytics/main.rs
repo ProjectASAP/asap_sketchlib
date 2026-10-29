@@ -8,6 +8,7 @@
 
 mod support;
 
+mod cardinality;
 mod count_matrix;
 mod heavy_hitters;
 mod top_k;

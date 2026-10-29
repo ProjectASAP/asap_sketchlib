@@ -20,8 +20,10 @@ signals a backwards-compatible change.
 - **`StatisticKind::QuantileInterpolated`**, answered by `DDSketch`.
 - **`memory_bytes()`** on `CountMinHll`, `MicroCm`, `SpaceSaving`,
   `ElasticSketch`, `CocoSketch`, `CountMinSketchWithSpaceSaving`,
-  `CountSketchWithSpaceSaving`, `CountMinSketchFold` and `CountSketchFold`, and
-  `SpaceSaving::theoretical_memory_bytes`.
+  `CountSketchWithSpaceSaving`, `CountMinSketchFold`, `CountSketchFold`,
+  `SetAggregator` and `Bloom`, and `SpaceSaving::theoretical_memory_bytes` and
+  `Bloom::theoretical_memory_bytes(rows, cols)`.
+- **`SetAggregator::contains`**: whether a key is in the set.
 - **`op-count` feature**: `analytics::ops::count(f)` returns the ops `f`
   performed on this thread, one per counter, register, bucket or item read or
   written, for testing the analytics op formulas. Off by default, and free

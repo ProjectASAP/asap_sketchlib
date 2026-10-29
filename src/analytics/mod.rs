@@ -5,12 +5,14 @@
 //! calls its functions directly, and a caller with a target `(ε, δ)` first
 //! calls [`SketchAnalytics::params_for`].
 
+pub mod cardinality;
 pub mod count_matrix;
 pub mod heavy_hitters;
 pub mod ops;
 pub mod top_k;
 
 pub use crate::capability::StatisticKind;
+pub use cardinality::{BloomParams, DistinctData, HllData, HllParams, KmvParams, SetData};
 pub use count_matrix::MatrixParams;
 #[cfg(feature = "experimental")]
 pub use count_matrix::{CountMinHllParams, MicroCmData, MicroCmParams};

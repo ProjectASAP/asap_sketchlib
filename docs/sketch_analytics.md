@@ -405,7 +405,7 @@ Data inputs: `max_distinct`, an upper bound on `D`.
 | Item | Big O | Formula |
 |---|---|---|
 | Distinct error | | `Relative`, `ε = 1.04/√m`, `δ` unknown; contract `generic_hll_rse_only_no_confidence_v1` |
-| Distinct error, `Classic` with `max_distinct` | | `Relative`, `δ = max over D ≤ max_distinct of λ^t/t!`, with `λ = D(D − 1)/(2m)` and `t = ⌊εD⌋ + 1`; contract `classic_hll_linear_counting_collision_bound_v1` |
+| Distinct error, `Classic` with `max_distinct` | | `Relative`, `δ` chosen, `ε` the smallest from `max_distinct/(2(m − max_distinct))` to 1 with `max over D ≤ max_distinct of λ^t/t! ≤ δ`, where `λ = D(D − 1)/(2m)` and `t = ⌊εD⌋ + 1`; contract `classic_hll_linear_counting_collision_bound_v1` |
 | Distinct sizing | | the smallest `p` meeting the second contract when it applies, otherwise `p = ⌈2·log2(1.04/ε)⌉` |
 | Memory | `O(m)` | `theoretical_memory_bytes(precision)` |
 | Update | `O(1)` | 1 |
@@ -413,12 +413,13 @@ Data inputs: `max_distinct`, an upper bound on `D`.
 | Merge | `O(m)` | `2m` |
 
 - `1.04/√m` is a standard error, not a bound with a probability (Flajolet et al. 2007, Theorem 1).
-- The second contract applies when `max_distinct ≤ m/2`, `max_distinct ≤ 2^17`, `max_distinct/(2(m − max_distinct)) ≤ ε`, and `p` is from 4 to 18.
-  There `Classic` always uses linear counting, and `λ^t/t!` bounds the chance that `t` keys land on registers already taken.
+- The second contract applies when `max_distinct ≤ m/2`, `max_distinct ≤ 2^17` and `p` is from 4 to 18, and its `ε` is at most 1.
+  There `Classic` always uses linear counting, which overcounts by at most `max_distinct/(2(m − max_distinct))` of `D` and undercounts by more than `εD` only when `t` keys land on registers already taken, with probability at most `λ^t/t!`.
+  `λ^t/t!` is not monotone in `D`, so the maximum is taken over every `D`.
 - `Ertl` does not use linear counting, so only the standard error applies to it.
-- An update raises one register.
+- An update reads one register and writes it when the new rank is larger.
   A `Classic` query reads every register, and an `Ertl` query also fills and reads a histogram of `64 − p + 2` bins.
-- Inputs may overlap.
+- A merge reads each register of the other state and raises this state's, and inputs may overlap.
 
 ### HyperLogLogHip
 
@@ -429,74 +430,79 @@ Data inputs: none.
 | Item | Big O | Formula |
 |---|---|---|
 | Distinct error | | `Relative`, `ε = √(ln 2)/√m ≈ 0.833/√m`, `δ` unknown; contract `hip_hll_rse_only_no_confidence_v1` |
-| Distinct sizing | | `p = ⌈2·log2(0.833/ε)⌉` |
+| Distinct sizing | | `p = ⌈2·log2(√(ln 2)/ε)⌉` |
 | Memory | `O(m)` | `theoretical_memory_bytes(precision)` |
-| Update | `O(1)` | 4 |
+| Update | `O(1)` | 6 |
 | Query Distinct | `O(1)` | 1 |
 
 - The HIP estimator is unbiased with variance about `ln 2·D²/m` (Cohen 2015, Ting 2014), so `ε` is a standard error, for a state built by inserts from one stream.
-- An update reads one register, and when the register grows it writes it and three running totals.
+- An update reads one register.
+  When the register grows it writes it, reads the two running sums of `2^−register`, adds to the running estimate, and moves the register's term between the sums.
 - The running estimate depends on arrival order, so two states do not merge.
 
 ### Kmv
 
 `src/sketches/kmv.rs`.
 Parameter: `k ≥ 2`.
-Data inputs: `n`, `D`.
+Data inputs: `D`, unbounded when unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
-| Distinct error | | `Relative`, exact while `D < k`, `δ = exp(−ε²(k − 1)/((1 + ε)(2 + ε))) + exp(−ε²(k − 1)/(2(1 − ε)))`, the second term 0 for `ε ≥ 1`; contract `kmv_exact_below_k_chernoff_v1` |
-| Distinct sizing | | the smallest `k` meeting `δ`, such as 4323 at `ε = 0.05`, `δ = 0.01` |
-| Memory | `O(k)` | `theoretical_memory_bytes(k, distinct)` |
-| Update | `O(k)` | `k + 3 + 8·⌊log2 k⌋` |
-| Query Distinct | `O(1)` | 2 |
-| Merge | `O(k²)` | `k·(k + 4 + 8·⌊log2 k⌋)` |
+| Distinct error | | `Relative`; `ε = δ = 0` for a known `D < k`; otherwise `δ` chosen and `ε` the smallest with `exp(−ε²(k − 1)/((1 + ε)(2 + ε))) + exp(−ε²(k − 1)/(2(1 − ε))) ≤ δ`, the second term 0 for `ε ≥ 1`; contract `kmv_exact_below_k_chernoff_v1` |
+| Distinct sizing | | the smallest `k` meeting `(ε, δ)`, such as 4323 at `ε = 0.05`, `δ = 0.01`, or `D + 1` for a known `D` when smaller |
+| Memory | `O(k)` | `theoretical_memory_bytes(k, D)` |
+| Update | `O(k)` | `k + 3 + 6·⌊log2 k⌋` |
+| Query Distinct | `O(1)` | 1 |
+| Merge | `O(k²)` | `k·(k + 4 + 6·⌊log2 k⌋)` |
 
-- The sketch keeps the `k` smallest hashes, and the estimate is `k − 1` divided by the largest of them scaled to (0, 1) (Beyer et al. 2007).
+- The sketch keeps the `k` smallest hashes, and the estimate is `k − 1` divided by the largest of them scaled to (0, 1) (Beyer et al. 2007), or the count of kept hashes while fewer than `k` are kept.
   The two terms of `δ` are Chernoff bounds on overestimating and underestimating by more than `ε`.
-- An update reads the largest kept hash and stops if the sketch is full and the new hash is larger.
-  Otherwise it reads the kept hashes one by one looking for a duplicate, then adds the hash to the heap, which costs 8 ops per level it moves.
+- An update reads the largest kept hash when the sketch is full, and stops if the new hash is not smaller.
+  Otherwise it reads the kept hashes one by one looking for a duplicate, then pushes the hash.
+  A full heap re-reads and replaces its root and sifts it down at 6 ops per level, and a heap with room appends the hash and sifts it up at 5 per level.
 - With every key equally frequent and arriving in random order, the duplicate scan reads about `D/2` hashes on average when `D ≤ k` and about `k²/(2D)` when `D > k`.
+- A query reads the largest kept hash, or nothing while fewer than `k` are kept.
 - The heap starts at `min(k, 1024)` slots and doubles, so it can hold up to about `2k`.
-- A merge offers each of the other state's hashes as an update, and inputs may overlap.
+- A merge reads each of the other state's hashes and offers it as an update, and inputs may overlap.
 
 ### SetAggregator
 
 `src/sketches/set_aggregator.rs`.
 No parameters.
-Data inputs: `D`, and the mean key length `ℓ` in bytes.
+Data inputs: `D`, unbounded when unknown, and the mean key length `ℓ` in bytes, 0 when unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
 | Distinct, Membership error | | exact; contract `exact_v1` |
-| Memory | `O(Dℓ)` | `size_of::<Self>() + hash_map_bytes::<String>(D) + D·ℓ` |
+| Memory | `O(Dℓ)` | `size_of::<Self>() + hash_map_bytes_after_inserts::<String>(D) + ⌈D·ℓ⌉` |
 | Update | `O(ℓ)` | 1 |
-| Query Distinct, Membership | `O(1)` | 1 |
-| Merge | `O(D)` | one per key of the other state |
+| Query Distinct | `O(1)` | 0 |
+| Query Membership | `O(1)` | 1 |
+| Merge | `O(D)` | `2D`, with `D` the other state's keys |
 
 - An update probes the set once, after copying the key into a new `String`.
-- Inputs may overlap.
+- Distinct reads the set's length, and `contains` probes the set once.
+- A merge reads each key of the other state and probes this state with it, and inputs may overlap.
 
 ### Bloom
 
 `src/sketches/bloom.rs`, partitioned.
-Parameters: `r` slices and `c` bits per slice, the code's `rows` and `cols` and Kirsch and Mitzenmacher's `k` and `m'`.
+Parameters: `r` slices and `c` bits per slice, the code's `rows` and `cols` and Kirsch and Mitzenmacher's `k` and `m'`, plus path.
 Data inputs: `D`.
 
 | Item | Big O | Formula |
 |---|---|---|
-| Membership error | | `Absolute`, `ε = 0`, `δ = (1 − (1 − 1/c)^D)^r` for a power-of-two `c` up to `2^32`; contract `bloom_partitioned_fpr_v1` |
-| Membership sizing | | the `r ≤ 20` and power-of-two `c` that minimize `r·c` and meet `δ` |
-| Memory | `O(rc)` bits | `size_of::<Self>() + 8r·⌈c/64⌉` |
-| Update | `O(r)` | `r + 1` on `RegularPath`, `2r + 1` on `FastPath` |
+| Membership error | | `Absolute`, `ε = 0`, `δ = (1 − (1 − 1/c)^D)^r` fixed, for a power-of-two `c` up to `2^32`; `None` without `D`; contract `bloom_partitioned_fpr_v1` |
+| Membership sizing | | the `r ≤ BLOOM_MAX_SLICES` and power-of-two `c` with `r·c ≤ BLOOM_MAX_BITS` that minimize `r·c` and meet `δ`; `None` without `D` |
+| Memory | `O(rc)` bits | `theoretical_memory_bytes(rows, cols) = size_of::<Self>() + 8r·⌈c/64⌉` |
+| Update | `O(r)` | `r` |
 | Query Membership | `O(r)` | `r` |
-| Merge | `O(rc)` | `2r·⌈c/64⌉ + 2` |
+| Merge | `O(rc)` | `2r·⌈c/64⌉` |
 
 - An inserted key always reads as present, and a key that was not reads as present with probability exactly `δ`, if it was chosen without knowing the hash seeds.
 - For other `c` the columns are not equally likely, so `theoretical_error` returns `None`.
 - `dimensions_for(n, δ)` meets this rate without minimizing `r·c`, and is not `params_for`.
-- An update sets one bit per slice and adds to the inserted count, and a query reads one bit per slice, stopping at the first zero on `RegularPath`.
+- An update sets one bit per slice, and a query reads one bit per slice, stopping at the first zero on `RegularPath`.
 - A merge ORs the bit arrays a 64-bit word at a time, and inputs may overlap.
 
 ## Quantiles and sampling

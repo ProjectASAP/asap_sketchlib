@@ -3,6 +3,7 @@
 //! `SetAggregator` is not a sketch — it is a plain `HashSet<String>` with an
 //! ASAPv1 form (§3.21); [`SetAggregatorDelta`] is its delta (§3.22).
 
+use crate::common::heap::hash_map_bytes;
 use std::collections::HashSet;
 
 mod delta;
@@ -25,7 +26,21 @@ impl SetAggregator {
 
     /// Insert a key into the set.
     pub fn update(&mut self, key: &str) {
+        crate::analytics::ops::add(1);
         self.values.insert(key.to_string());
+    }
+
+    /// True when `key` is in the set.
+    pub fn contains(&self, key: &str) -> bool {
+        crate::analytics::ops::add(1);
+        self.values.contains(key)
+    }
+
+    /// Bytes this set holds: the struct, the hash table and each key's bytes.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>()
+            + hash_map_bytes::<String>(self.values.capacity())
+            + self.values.iter().map(String::capacity).sum::<usize>()
     }
 
     /// Merge another SetAggregator into self in place (set union).
@@ -34,6 +49,7 @@ impl SetAggregator {
         other: &SetAggregator,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         for v in &other.values {
+            crate::analytics::ops::add(2);
             self.values.insert(v.clone());
         }
         Ok(())

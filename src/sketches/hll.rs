@@ -216,6 +216,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
         let leading_zero = ((hashed_val << Registers::PRECISION) + Registers::INDEX_MASK)
             .leading_zeros() as u8
             + 1;
+        crate::analytics::ops::add(1);
         let registers = self.registers.as_mut_slice();
         if leading_zero > registers[bucket_num] {
             registers[bucket_num] = leading_zero;
@@ -241,6 +242,7 @@ impl<Variant, Registers: HllRegisterStorage, H: SketchHasher>
             self.admission_rate, other.admission_rate,
             "admission rate mismatch while merging HyperLogLog sketches"
         );
+        crate::analytics::ops::add(2 * Registers::NUM_REGISTERS);
         for (reg, other_val) in self
             .registers
             .as_mut_slice()
@@ -314,6 +316,7 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Classic, Re
     /// algorithm with the small-range correction. Ranks are drawn from a
     /// 64-bit hash, so the estimate needs no large-range correction.
     pub fn estimate(&self) -> usize {
+        crate::analytics::ops::add(Registers::NUM_REGISTERS);
         classic_estimate(self.registers.as_slice()) as usize
     }
 }
@@ -379,6 +382,7 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Ertl, Regis
     /// Otmar Ertl, arXiv:1702.01284
     #[inline]
     fn get_histogram(&self) -> [u32; ERTL_HISTOGRAM_CAP] {
+        crate::analytics::ops::add(2 * Registers::NUM_REGISTERS);
         let mut histogram = [0; ERTL_HISTOGRAM_CAP];
         for &register in self.registers.as_slice() {
             histogram[register as usize] += 1;
@@ -389,6 +393,7 @@ impl<Registers: HllRegisterStorage, H: SketchHasher> HyperLogLogImpl<Ertl, Regis
     /// Returns the estimated cardinality using the Ertl MLE algorithm.
     pub fn estimate(&self) -> usize {
         let histogram = self.get_histogram();
+        crate::analytics::ops::add(Registers::RANK_HASH_BITS + 2);
         let m: f64 = Registers::NUM_REGISTERS as f64;
         let mut z =
             m * self.hll_ertl_tau((m - histogram[Registers::RANK_HASH_BITS + 1] as f64) / m);
@@ -441,10 +446,12 @@ impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
         let leading_zero = ((hashed_val << Registers::PRECISION) + Registers::INDEX_MASK)
             .leading_zeros() as u8
             + 1;
+        crate::analytics::ops::add(1);
         let registers = self.registers.as_mut_slice();
         let old_value = registers[bucket_num];
         let new_value = leading_zero;
         if new_value > old_value {
+            crate::analytics::ops::add(5);
             registers[bucket_num] = leading_zero;
             self.est += Registers::NUM_REGISTERS as f64 / (self.kxq0 + self.kxq1);
             if old_value < 32 {
@@ -470,6 +477,7 @@ impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
 
     /// Returns the estimated cardinality from the HIP running estimate.
     pub fn estimate(&self) -> usize {
+        crate::analytics::ops::add(1);
         self.est as usize
     }
 

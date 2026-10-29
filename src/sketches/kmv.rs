@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 mod wire;
 
 // expect error bound to be less than 2%
-const KMV_DEFAULT_K: usize = 4096_usize;
+pub(crate) const KMV_DEFAULT_K: usize = 4096_usize;
 
 #[derive(Clone, Debug)]
 pub struct Kmv<H: SketchHasher = DefaultXxHasher> {
@@ -48,18 +48,17 @@ impl<H: SketchHasher> Kmv<H> {
     pub fn update_with_hash(&mut self, hash_value: u64) {
         // A full sketch keeps only hashes below its largest retained one.
         if self.retained_hashes.is_full()
-            && self
-                .retained_hashes
-                .peek()
-                .is_some_and(|max| hash_value >= *max)
+            && self.retained_hashes.peek().is_some_and(|max| {
+                crate::analytics::ops::add(1);
+                hash_value >= *max
+            })
         {
             return;
         }
-        if self
-            .retained_hashes
-            .iter()
-            .any(|value| *value == hash_value)
-        {
+        if self.retained_hashes.iter().any(|value| {
+            crate::analytics::ops::add(1);
+            *value == hash_value
+        }) {
             return;
         }
         self.retained_hashes.push(hash_value);
@@ -71,6 +70,7 @@ impl<H: SketchHasher> Kmv<H> {
         if self.retained_hashes.len() < self.k {
             return self.retained_hashes.len() as f64;
         }
+        crate::analytics::ops::add(1);
         let largest = *self
             .retained_hashes
             .peek()
@@ -86,6 +86,7 @@ impl<H: SketchHasher> Kmv<H> {
             "Two KMV sketch have different k size, not mergeable"
         );
         for &value in other.retained_hashes.iter() {
+            crate::analytics::ops::add(1);
             self.update_with_hash(value);
         }
     }

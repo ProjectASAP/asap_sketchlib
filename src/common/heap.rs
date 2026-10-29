@@ -528,6 +528,16 @@ pub(crate) fn hash_index_bytes<T>(reserved: usize, len: usize) -> usize {
 
 /// Buckets of the table [`hash_index_bytes`] describes; `None` past `usize`.
 fn hash_index_buckets(reserved: usize, len: usize, entry_bytes: usize) -> Option<usize> {
+    let mut buckets = hash_growth_buckets(reserved, len, entry_bytes)?;
+    if len >= HASH_GROUP_WIDTH && len > hash_capacity_of(buckets) / 2 {
+        buckets = hash_buckets_for(hash_capacity_of(buckets) + 1, entry_bytes)?;
+    }
+    Some(buckets)
+}
+
+/// Buckets of a table created with capacity `reserved` after `len` distinct
+/// inserts and no removals; `None` past `usize`.
+fn hash_growth_buckets(reserved: usize, len: usize, entry_bytes: usize) -> Option<usize> {
     let mut buckets = hash_buckets_for(reserved, entry_bytes)?;
     while (buckets == 0 && len > 0) || (buckets > 0 && hash_capacity_of(buckets) < len) {
         let held = if buckets == 0 {
@@ -537,10 +547,13 @@ fn hash_index_buckets(reserved: usize, len: usize, entry_bytes: usize) -> Option
         };
         buckets = hash_buckets_for(held + 1, entry_bytes)?;
     }
-    if len >= HASH_GROUP_WIDTH && len > hash_capacity_of(buckets) / 2 {
-        buckets = hash_buckets_for(hash_capacity_of(buckets) + 1, entry_bytes)?;
-    }
     Some(buckets)
+}
+
+/// Bytes std's `HashMap` of entries `T` holds after `len` distinct inserts
+/// into an empty map and no removals. Saturates at `usize::MAX`.
+pub(crate) fn hash_map_bytes_after_inserts<T>(len: usize) -> usize {
+    hash_growth_buckets(0, len, size_of::<T>()).map_or(usize::MAX, hash_table_bytes::<T>)
 }
 
 /// Every element sits in heap order beneath the parent the array layout gives

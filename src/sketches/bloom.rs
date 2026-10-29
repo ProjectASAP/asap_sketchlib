@@ -172,6 +172,19 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
         self.bits.size_in_bytes()
     }
 
+    /// Bytes this filter holds: the struct and its packed words.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() + self.bits.size_in_bytes()
+    }
+
+    /// Bytes a filter of `rows` slices of `cols` bits holds: the struct and
+    /// `rows·⌈cols/64⌉` words. Saturates at `usize::MAX`.
+    pub fn theoretical_memory_bytes(rows: usize, cols: usize) -> usize {
+        rows.saturating_mul(cols.div_ceil(64))
+            .saturating_mul(size_of::<u64>())
+            .saturating_add(size_of::<Self>())
+    }
+
     /// Fraction of bits set.
     pub fn fill_ratio(&self) -> f64 {
         self.bits.fill_ratio()
@@ -214,7 +227,7 @@ impl<Mode, H: SketchHasher> Bloom<Mode, H> {
         self.bits.union_from(&other.bits);
     }
 }
-fn partitioned_fpp(rows: usize, cols: usize, items: f64) -> f64 {
+pub(crate) fn partitioned_fpp(rows: usize, cols: usize, items: f64) -> f64 {
     let per_slice = -(items * (-1.0 / cols as f64).ln_1p()).exp_m1();
     per_slice.powi(rows as i32)
 }
