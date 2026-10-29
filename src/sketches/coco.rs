@@ -68,11 +68,11 @@ impl CocoRng {
 
 /// Buckets per array in a default `CocoSketch`. Width sets the collision rate, and
 /// `rows * cols` buckets at 32 bytes each set the table footprint.
-const DEFAULT_WIDTH: usize = 1024;
+pub(crate) const DEFAULT_WIDTH: usize = 1024;
 
 /// Arrays in a default `CocoSketch`, inside the paper's recommended 2..=4. Every
 /// update scans the `rows` buckets its key maps to.
-const DEFAULT_DEPTH: usize = 4;
+pub(crate) const DEFAULT_DEPTH: usize = 4;
 
 impl Default for CocoBucket {
     fn default() -> Self {
@@ -166,6 +166,18 @@ impl<H: SketchHasher> CocoSketch<H> {
         }
     }
 
+    /// Bytes this sketch holds: the struct, the bucket table and the stored
+    /// keys' owned bytes.
+    pub fn memory_bytes(&self) -> usize {
+        let keys: usize = self
+            .table
+            .as_slice()
+            .iter()
+            .filter_map(|b| b.full_key.as_ref().map(String::capacity))
+            .sum();
+        size_of::<Self>() + self.table.as_slice().len() * size_of::<CocoBucket>() + keys
+    }
+
     /// Adds `v` to `key` using the paper's stochastic variance-optimized update.
     ///
     /// The `rows` mapped buckets are scanned for `key` first; a match absorbs `v`
@@ -183,6 +195,7 @@ impl<H: SketchHasher> CocoSketch<H> {
 
         for i in 0..self.rows {
             let idx = H::hash64_seeded(i, &key_input) as usize % self.cols;
+            crate::analytics::ops::add(1);
             let bucket = &self.table[i][idx];
             if bucket.full_key.as_deref() == Some(key) {
                 self.table[i][idx].val += weight;
@@ -202,6 +215,7 @@ impl<H: SketchHasher> CocoSketch<H> {
             }
         }
 
+        crate::analytics::ops::add(1);
         let bucket = &mut self.table[victim.0][victim.1];
         bucket.val += weight;
         let elected = match bucket.full_key {
@@ -226,6 +240,7 @@ impl<H: SketchHasher> CocoSketch<H> {
         let mut total = 0;
         for i in 0..self.rows {
             let idx = H::hash64_seeded(i, &key_input) as usize % self.cols;
+            crate::analytics::ops::add(1);
             if self.table[i][idx].full_key.as_deref() == Some(key) {
                 total += self.table[i][idx].val;
             }
@@ -239,6 +254,7 @@ impl<H: SketchHasher> CocoSketch<H> {
     pub fn recorded_flows(&self) -> impl Iterator<Item = (&str, u64)> {
         (0..self.rows).flat_map(move |i| {
             (0..self.cols).filter_map(move |j| {
+                crate::analytics::ops::add(1);
                 let bucket = &self.table[i][j];
                 bucket.full_key.as_deref().map(|key| (key, bucket.val))
             })
@@ -296,6 +312,7 @@ impl<H: SketchHasher> CocoSketch<H> {
         assert_eq!(self.cols, other.cols, "Different cols, do nothing");
         for i in 0..self.rows {
             for j in 0..self.cols {
+                crate::analytics::ops::add(1);
                 if let Some(k) = &other.table[i][j].full_key {
                     self.update_weighted(k.as_str(), other.table[i][j].val);
                 }

@@ -102,7 +102,7 @@ Query is the sketch's main readout, and each row's symbols are defined in that s
 | CountMinHll | none | `O(dw·2^p)` | `O(d)` | `O(d·2^p)` | `O(dw·2^p)` | 2 |
 | MicroCm | none | `O(dwT)` | `O(d + dw/I)` average | `O(dT)` | `O(dwT)` | 1 |
 | SpaceSaving | `ε = 1/m`, `δ = 0`, `Absolute(L1)` | `O(m)` | `O(1)` | `O(1)` | `O(m log m)` | 1 |
-| ElasticSketch | `ε = e/w`, `δ = e^−d`, `Absolute(L1)` | `O(H + dw)` | `O(d)` | `O(d)` | `O(Hd + dw)` | `1 + d` |
+| ElasticSketch | `ε = e/w`, `δ = e^−min(d, 5)`, `Absolute(L1)` | `O(H + dw)` | `O(d)` | `O(d)` | `O(Hd + dw)` | `1 + d` |
 | CocoSketch | none | `O(dw)` | `O(d)` | `O(d)` | `O(d²w)` | `d` |
 | Count-Min or Count Sketch with heap | as the base sketch | `O(dw + k)` | `O(est(d) + log k)` | `O(est(d))` | `O(dw + k(est(d) + log k))` | `2d + 1`, or 3 |
 | Count-Min or Count Sketch with Space-Saving | as the base sketch | `O(dw + m)` | `O(d)` | `O(est(d))` | `O(dw + m log m)` | `d + 1`, or 2 |
@@ -233,56 +233,61 @@ Data inputs: `I`, the updates per sub-window, the code's `items_per_sub_window` 
 
 `src/sketches/space_saving.rs`, Space-Saving on the Stream-Summary structure (Metwally et al. 2005).
 Parameter: `m` counters, the code's `capacity`.
-Data inputs: the key for memory, and the TopK size `k`.
+Data inputs: the bytes each key owns for memory, 0 when unknown, and the TopK size `k`, `m` when unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
 | ItemFrequency error | | `Absolute(L1)`, `ε = 1/m`, `δ = 0`; contract `space_saving_min_counter_v1` |
 | ItemFrequency sizing | | `m = ⌈1/ε⌉` |
 | TopK error | | each reported count as ItemFrequency |
-| Total error | | exact; contract `exact_v1` |
-| Memory | `O(m)` | `size_of::<Self>() + m·(80 + key bytes) + 80(m + 1) + hash_map_bytes::<(u64, Slot)>(m)` |
-| Update | `O(1)` | 45 at unit weight, plus 2 per count bucket passed |
+| Memory | `O(m)` | `size_of::<Self>() + m·(80 + key bytes) + 40·s(m + 1) + hash_index_bytes::<(u64, Slot)>(m, m)` |
+| Update | `O(1)` | 47 at unit weight, plus 2 per count bucket passed |
 | Query ItemFrequency | `O(1)` | 4 |
-| Query TopK | `O(k)` | `1 + 7k` |
-| Query Total | `O(1)` | 1 |
-| Merge | `O(m log m)` | `36m + 2m·lg(2m) + 17` |
+| Query TopK | `O(k)` | `1 + 7·min(k, m)` |
+| Merge | `O(m log m)` | `44m + 2m·lg(2m) + 13` |
 
 - In one unmerged state, an estimate is off by at most `N/m`.
   The counters sum to `N`, so the smallest is at most `N/m`, a held key overcounts by at most the smallest counter, and a key not held has `f(x)` at most the smallest counter.
-- Each entry is 80 bytes plus its key, and each count bucket 32 bytes plus 8 on the free list, in vectors that grow by doubling.
+- Total has no accessor, so it has no formula.
+- Each entry is 80 bytes plus its key, and each count bucket 32 bytes plus 8 on the free list.
+  At most `m + 1` buckets exist at once, and `s(n)` is the slots a vector holds after doubling from 4 to `n`.
+  The key index is std's `HashMap` reserved for `m` keys under churn.
 - The summary links keys into buckets of equal count.
-  An update of a held key moves its entry to the next count's bucket, creating it and dropping the old one if needed, at most 34 ops.
-  A new key in a full summary also takes over the lowest bucket's first entry and swaps the keys in the index, at most 45.
-- TopK walks down from the highest bucket, reading each key's entry and links.
-- A merge reads both summaries, sorts their `2m` entries by count, and inserts the top `m` at 14 ops each.
-- After a merge, ItemFrequency and TopK have no bound, and Total stays exact.
+  An update of a held key moves its entry to the next count's bucket, creating it and dropping the old one if needed, at most 36 ops.
+  A new key in a full summary also takes over the lowest bucket's first entry and swaps the keys in the index, at most 47.
+- A unit update on an unmerged state passes no count bucket, and a weighted update or a new key seated in an under-full merged state may pass many.
+- TopK walks down from the highest bucket, reading each bucket's count and links and each key's entry, and writing each reported key.
+- A merge reads both summaries into a temporary map, sorts their up to `2m` entries by count, and seats the top `m` at 22 ops each.
+- After a merge, ItemFrequency and TopK have no bound.
 - Capacities may differ in a merge, which keeps this state's.
 
 ### ElasticSketch
 
 `src/sketches/elastic.rs`.
 Parameters: `H` heavy buckets with one flow each, and a light Count-Min of `d × w` `i32` counters, the code's `bucket_count`, `light_rows` and `light_cols`.
-Data inputs: `D`, and the key length in bytes for memory.
+Data inputs: `D`, and the bytes each flow id owns for memory, 0 when unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
-| ItemFrequency error | | `Absolute(L1)`, `0 ≤ estimate − f(x) ≤ (e/w)·N` with `δ = e^−d` fixed; contract `elastic_one_sided_light_cms_v1` |
+| ItemFrequency error | | `Absolute(L1)`, `0 ≤ estimate − f(x) ≤ (e/w)·N` with `δ = e^−min(d, 5)` fixed; contract `elastic_one_sided_light_cms_v1` |
 | ItemFrequency sizing | | `w = ⌈e/ε⌉`, `d = max(1, ⌈ln(1/δ)⌉)`, `None` for `δ < e^−5`; `H` is not set by the bound |
-| TopK error | | each reported count as ItemFrequency, with `δ = D·e^−d` |
+| TopK error | | each reported count as ItemFrequency, with `δ = D·e^−min(d, 5)`; `None` when that is at least 1 |
+| TopK sizing | | as ItemFrequency at `δ/D` |
 | Memory | `O(H + dw)` | `size_of::<Self>() + H·(40 + key bytes) + 4dw` |
-| Update | `O(d)` | `1 + d` |
+| Update | `O(d)` | `2 + d` |
 | Query ItemFrequency | `O(d)` | `1 + d` |
-| Query TopK | `O(H(d + log H))` | `H·(1 + d) + 2H·lg H` |
-| Merge | `O(Hd + dw)` | `H·(17 + 3d) + 2dw` |
+| Query TopK | `O(H(d + log H))` | `H·(5 + d) + 2H·lg H` |
+| Merge | `O(Hd + dw)` | `H·(13 + 3d) + 2dw` |
 
 - A flow that holds a heavy bucket and has never been evicted is counted exactly.
   Any other flow's error is the light Count-Min's error on the weight sent to the light part, so the Count-Min bound applies, derived from the update rule.
-- The bound holds for `d ≤ 5`, because heavy routing uses hash seed 5 and light row `i` uses seed `i`.
+- Heavy routing uses hash seed 5 and light row `i` uses seed `i`, so light rows past the fifth add nothing to `δ`.
 - The bound does not cover `update_heavy_only`, which drops weight, nor `compress_heavy` and `expand_heavy`, which pick flows by their light estimates.
 - The bound holds while every flow's count is below `2^28`, where the eviction vote overflows `i32`.
 - A heavy bucket is 40 bytes plus the key.
 - An update reads and writes one heavy bucket, and adds to one light counter per row when the flow does not stay there.
+  While copies left by `expand_heavy` remain, it reads the bucket once more.
+- TopK reads each heavy bucket up to three times, estimates its flow, writes it to a buffer, and sorts the buffer twice.
 - A merge clones and compares each pair of heavy buckets by estimating both flows, sends the loser into the light part, and adds the light counters.
 - After a merge, no readout has a bound.
 
@@ -290,22 +295,22 @@ Data inputs: `D`, and the key length in bytes for memory.
 
 `src/sketches/coco.rs`.
 Parameters: `d` rows and `w` columns, the code's `rows` and `cols`.
-Data inputs: `D`, and the key length in bytes for memory.
+Data inputs: `D`, and the bytes each key owns for memory, 0 when unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
 | ItemFrequency, PartialKeySum error | | none |
-| Total error | | exact; contract `exact_v1` |
 | Memory | `O(dw)` | `size_of::<Self>() + 32d·w + min(d·w, D)·key bytes` |
-| Update | `O(d)` | `d` |
+| Update | `O(d)` | `d + 1` |
 | Query ItemFrequency | `O(d)` | `d` |
-| Query PartialKeySum, Total | `O(dw)` | `dw` |
-| Merge | `O(d²w)` | `dw·(1 + d)` |
+| Query PartialKeySum | `O(dw)` | `dw` |
+| Merge | `O(d²w)` | `dw·(d + 2)` |
 
 - The paper guarantees only that estimates are unbiased, which gives no bound on one estimate.
-- `update_weighted` reads one bucket per row, adds the weight to the smallest, and may replace that bucket's key.
-- Total has no accessor and sums every bucket, since every update adds its weight to exactly one bucket.
-- A merge reads every bucket of the other state and replays it into this one as an update, computing `d` hashes each.
+- Total has no accessor, so it has no formula.
+- `update_weighted` is the update, and it reads one bucket per row, then adds the weight to the smallest and may replace that bucket's key.
+- PartialKeySum is `estimate_projected`, `estimate_with_udf` or `estimate_substring`, each reading every bucket once.
+- A merge reads every bucket of the other state and replays each held key into this one as an update, computing `d` hashes each.
 
 ## Counter matrices with top-k
 

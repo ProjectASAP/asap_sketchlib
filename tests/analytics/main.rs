@@ -9,3 +9,4 @@
 mod support;
 
 mod count_matrix;
+mod heavy_hitters;

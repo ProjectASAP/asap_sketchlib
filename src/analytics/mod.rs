@@ -6,12 +6,14 @@
 //! calls [`SketchAnalytics::params_for`].
 
 pub mod count_matrix;
+pub mod heavy_hitters;
 pub mod ops;
 
 pub use crate::capability::StatisticKind;
 pub use count_matrix::MatrixParams;
 #[cfg(feature = "experimental")]
 pub use count_matrix::{CountMinHllParams, MicroCmData, MicroCmParams};
+pub use heavy_hitters::{CocoParams, ElasticParams, FlowData, SpaceSavingData, SpaceSavingParams};
 
 use crate::{FastPath, RegularPath};
 
