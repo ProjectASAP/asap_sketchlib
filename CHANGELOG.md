@@ -130,6 +130,9 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- **`CountMinSketchFold::new` and `CountSketchFold::new` panic for
+  `full_cols` above 65536** (`MAX_FULL_COLS`). A full column is stored as
+  `u16`, and a wider sketch folded distinct columns together.
 - **`Kll::update` regains most of its pre-0.4.0 speed.** With the lazily grown
   buffer, `compress_while_updating` was inlined into the insert path, which
   then no longer inlined into callers; a stream of updates ran about 10%

@@ -20,6 +20,9 @@ use std::marker::PhantomData;
 
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
+/// The widest `full_cols`, since a full column is stored as `u16`.
+pub const MAX_FULL_COLS: usize = 1 << 16;
+
 // ---------------------------------------------------------------------------
 // FoldEntry / FoldCell
 // ---------------------------------------------------------------------------
@@ -227,11 +230,16 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
     ///
     /// # Panics
     ///
-    /// Panics if `full_cols` is not a power of two or `fold_level` is too large.
+    /// Panics if `full_cols` is not a power of two, is above 65536, or
+    /// `fold_level` is too large.
     pub fn new(rows: usize, full_cols: usize, fold_level: u32, heap_size: usize) -> Self {
         assert!(
             full_cols.is_power_of_two(),
             "full_cols must be a power of two, got {full_cols}"
+        );
+        assert!(
+            full_cols <= MAX_FULL_COLS,
+            "full_cols must be at most {MAX_FULL_COLS}, got {full_cols}"
         );
         assert!(
             fold_level <= full_cols.trailing_zeros(),
@@ -749,6 +757,12 @@ mod tests {
     #[should_panic(expected = "full_cols must be a power of two")]
     fn count_min_sketch_fold_rejects_non_power_of_two() {
         let _: CountMinSketchFold = CountMinSketchFold::new(3, 1000, 0, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "full_cols must be at most 65536")]
+    fn count_min_sketch_fold_rejects_more_columns_than_u16_holds() {
+        let _: CountMinSketchFold = CountMinSketchFold::new(3, 1 << 17, 0, 10);
     }
 
     #[test]

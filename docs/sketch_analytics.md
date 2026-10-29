@@ -363,7 +363,7 @@ Data inputs: `D`; `E`, the most entries one cell holds, at most `min(2^F, D)`; `
 
 | Item | Big O | Formula |
 |---|---|---|
-| ItemFrequency error | | as the base sketch on `RegularPath`, with `w = min(W, 65536)` |
+| ItemFrequency error | | as the base sketch on `RegularPath`, with `w = W` |
 | TopK error | | as the heap variant, for a state not produced by `merge_same_level` |
 | Memory | `O(d(W/2^F + min(W, D)) + k)` | `size_of::<Self>() − size_of::<TopKHeap>() + 24d·W/2^F + 32S + TopKHeap::theoretical_memory_bytes(k, key)` |
 | Update | `O(dE + est(d) + log k)` | `2dE + d + est(d) + h(k)` |
@@ -376,7 +376,7 @@ Data inputs: `D`; `E`, the most entries one cell holds, at most `min(2^F, D)`; `
 - A same-level merge adds each entry of the other state into this state's matching cell, then re-estimates only the other heap's keys, so this state's heap counts go stale.
 - `hierarchical_merge` accepts mixed levels and costs `dW + 2·Σ e_i + Σ k_i·(d + est(d) + h(k))`, where state `i` holds `e_i` entries and `k_i` heap keys.
 - The fold level does not change the error.
-- Columns are stored as `u16`, so a width above 65536 behaves as 65536.
+- `W` is at most 65536, because columns are stored as `u16`.
 - CountSketchFold truncates an even-`d` median to an integer, which adds up to 0.5 to its error.
 
 ## Cardinality and membership
