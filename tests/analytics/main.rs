@@ -10,3 +10,4 @@ mod support;
 
 mod count_matrix;
 mod heavy_hitters;
+mod top_k;

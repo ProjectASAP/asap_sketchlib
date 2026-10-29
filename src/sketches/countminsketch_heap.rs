@@ -323,8 +323,10 @@ where
         for item in other.heap.heap() {
             candidate_keys.push(item.key.clone());
         }
+        crate::analytics::ops::add(candidate_keys.len());
         self.heap.clear();
         for key in candidate_keys {
+            crate::analytics::ops::add(1);
             let key_ref = key.as_data_input();
             let est = self.count_min_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, est.into());
@@ -399,8 +401,10 @@ where
         for item in other.heap.heap() {
             candidate_keys.push(item.key.clone());
         }
+        crate::analytics::ops::add(candidate_keys.len());
         self.heap.clear();
         for key in candidate_keys {
+            crate::analytics::ops::add(1);
             let key_ref = key.as_data_input();
             let est = self.count_min_sketch.estimate(&key_ref);
             self.heap.update(&key_ref, est.into());

@@ -19,7 +19,9 @@ signals a backwards-compatible change.
   meet a target `(ε, δ)`, as `docs/sketch_analytics.md` defines them.
 - **`StatisticKind::QuantileInterpolated`**, answered by `DDSketch`.
 - **`memory_bytes()`** on `CountMinHll`, `MicroCm`, `SpaceSaving`,
-  `ElasticSketch` and `CocoSketch`, and `SpaceSaving::theoretical_memory_bytes`.
+  `ElasticSketch`, `CocoSketch`, `CountMinSketchWithSpaceSaving`,
+  `CountSketchWithSpaceSaving`, `CountMinSketchFold` and `CountSketchFold`, and
+  `SpaceSaving::theoretical_memory_bytes`.
 - **`op-count` feature**: `analytics::ops::count(f)` returns the ops `f`
   performed on this thread, one per counter, register, bucket or item read or
   written, for testing the analytics op formulas. Off by default, and free

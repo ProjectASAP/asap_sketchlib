@@ -182,8 +182,11 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
     pub fn push(&mut self, value: T) {
         if self.data.len() < self.size {
             self.push_back_with(value, &mut |_, _| {});
-        } else if !self.data.is_empty() && self.order.should_replace_root(&self.data[0], &value) {
-            self.replace_root_with(value, &mut |_, _| {});
+        } else if !self.data.is_empty() {
+            crate::analytics::ops::add(1);
+            if self.order.should_replace_root(&self.data[0], &value) {
+                self.replace_root_with(value, &mut |_, _| {});
+            }
         }
     }
 
@@ -196,6 +199,7 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
     /// The caller is responsible for the capacity check; this appends
     /// unconditionally.
     pub fn push_back_with(&mut self, value: T, on_swap: &mut impl FnMut(usize, usize)) {
+        crate::analytics::ops::add(1);
         self.data.push(value);
         self.bubble_up_with(self.data.len() - 1, on_swap);
     }
@@ -206,6 +210,7 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
     ///
     /// Panics if the heap is empty.
     pub fn replace_root_with(&mut self, value: T, on_swap: &mut impl FnMut(usize, usize)) -> T {
+        crate::analytics::ops::add(1);
         let displaced = std::mem::replace(&mut self.data[0], value);
         self.bubble_down_with(0, on_swap);
         displaced
@@ -217,8 +222,10 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
             return None;
         }
         if self.data.len() == 1 {
+            crate::analytics::ops::add(1);
             return self.data.pop();
         }
+        crate::analytics::ops::add(3);
         let root = self.data.swap_remove(0);
         self.bubble_down(0);
         Some(root)
@@ -297,6 +304,7 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
             let left = Self::left_child(idx);
             let right = Self::right_child(idx);
             let mut target = idx;
+            crate::analytics::ops::add((left < len) as usize + (right < len) as usize);
 
             // Find which child (if any) should be swapped with parent
             if left < len && self.order.should_swap(&self.data[target], &self.data[left]) {
@@ -314,6 +322,7 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
                 break;
             }
 
+            crate::analytics::ops::add(4);
             self.data.swap(idx, target);
             on_swap(idx, target);
             idx = target;
@@ -326,10 +335,12 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
     fn bubble_up_with(&mut self, mut idx: usize, on_swap: &mut impl FnMut(usize, usize)) {
         while idx > 0 {
             let parent_idx = Self::parent(idx);
+            crate::analytics::ops::add(1);
             if self
                 .order
                 .should_swap(&self.data[parent_idx], &self.data[idx])
             {
+                crate::analytics::ops::add(4);
                 self.data.swap(parent_idx, idx);
                 on_swap(parent_idx, idx);
                 idx = parent_idx;

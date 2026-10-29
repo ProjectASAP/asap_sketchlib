@@ -172,6 +172,7 @@ impl<C: HeapCount> TopKHeap<C> {
     /// Provides access to the underlying data as a slice.
     /// Named `heap` for API compatibility with TopKHeap.
     pub fn heap(&self) -> &[HeapEntry<C>] {
+        crate::analytics::ops::add(self.heap.len());
         self.heap.as_slice()
     }
 
@@ -203,6 +204,7 @@ impl<C: HeapCount> TopKHeap<C> {
 
     /// Clears the heap.
     pub fn clear(&mut self) {
+        crate::analytics::ops::add(3);
         self.heap.clear();
         self.slots.clear();
         self.positions.clear();
@@ -279,15 +281,16 @@ impl<C: HeapCount> TopKHeap<C> {
     // -- index maintenance ---------------------------------------------------
 
     fn lookup(&self, slot: u64, matches: impl Fn(&HeapEntry<C>) -> bool) -> Option<usize> {
-        self.positions
-            .get(&slot)?
-            .iter()
-            .copied()
-            .find(|idx| matches(&self.heap[*idx]))
+        crate::analytics::ops::add(1);
+        self.positions.get(&slot)?.iter().copied().find(|idx| {
+            crate::analytics::ops::add(1);
+            matches(&self.heap[*idx])
+        })
     }
 
     /// Writes a new count onto a resident and re-sifts it.
     fn rescore(&mut self, idx: usize, count: C) {
+        crate::analytics::ops::add(1);
         self.heap[idx].count = count;
         let Self {
             heap,
@@ -304,6 +307,7 @@ impl<C: HeapCount> TopKHeap<C> {
         let item = HeapEntry::new(key, count);
         if self.heap.len() < self.heap_size {
             let idx = self.heap.len();
+            crate::analytics::ops::add(2);
             self.slots.push(slot);
             self.positions.entry(slot).or_default().push(idx);
             let Self {
@@ -314,6 +318,7 @@ impl<C: HeapCount> TopKHeap<C> {
             } = self;
             heap.push_back_with(item, &mut |i, j| swap_entry(slots, positions, i, j));
         } else {
+            crate::analytics::ops::add(3);
             let displaced = self.slots[0];
             drop_entry(&mut self.positions, displaced, 0);
             self.slots[0] = slot;
@@ -337,6 +342,7 @@ impl<C: HeapCount> TopKHeap<C> {
         if self.heap.len() < self.heap_size {
             return true;
         }
+        crate::analytics::ops::add(1);
         debug_assert!(
             !self.heap.is_empty(),
             "a full heap of capacity k > 0 has a root"
@@ -363,17 +369,20 @@ impl<C: HeapCount> TopKHeap<C> {
 /// positions leaves that bucket unchanged and there is nothing to write.
 #[inline]
 fn swap_entry(slots: &mut [u64], positions: &mut Index, i: usize, j: usize) {
+    crate::analytics::ops::add(2);
     let (left, right) = (slots[i], slots[j]);
     if left == right {
         return;
     }
     retarget(positions, left, i, j);
     retarget(positions, right, j, i);
+    crate::analytics::ops::add(4);
     slots.swap(i, j);
 }
 
 #[inline]
 fn retarget(positions: &mut Index, digest: u64, from: usize, to: usize) {
+    crate::analytics::ops::add(1);
     if let Some(bucket) = positions.get_mut(&digest)
         && let Some(entry) = bucket.iter_mut().find(|entry| **entry == from)
     {
@@ -383,11 +392,13 @@ fn retarget(positions: &mut Index, digest: u64, from: usize, to: usize) {
 
 #[inline]
 fn drop_entry(positions: &mut Index, digest: u64, idx: usize) {
+    crate::analytics::ops::add(1);
     if let Some(bucket) = positions.get_mut(&digest) {
         if let Some(at) = bucket.iter().position(|entry| *entry == idx) {
             bucket.swap_remove(at);
         }
         if bucket.is_empty() {
+            crate::analytics::ops::add(1);
             positions.remove(&digest);
         }
     }

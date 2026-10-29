@@ -146,6 +146,16 @@ impl<H: SketchHasher> CountSketchFold<H> {
         &self.cells[row * self.fold_cols + fold_col]
     }
 
+    /// Bytes this sketch holds: the struct, the allocated cells, the entry
+    /// lists of collided cells and [`TopKHeap::memory_bytes`].
+    pub fn memory_bytes(&self) -> usize {
+        let lists: usize = self.cells.iter().map(FoldCell::list_bytes).sum();
+        size_of::<Self>() - size_of::<TopKHeap>()
+            + self.cells.capacity() * size_of::<FoldCell>()
+            + lists
+            + self.heap.memory_bytes()
+    }
+
     /// Total number of `(full_col, count)` entries across all cells.
     pub fn total_entries(&self) -> usize {
         self.cells.iter().map(|c| c.entry_count()).sum()
@@ -211,6 +221,7 @@ impl<H: SketchHasher> CountSketchFold<H> {
             let cell_value = self.cells[r * self.fold_cols + fc].get(full_col);
             estimates.push((sign * cell_value) as f64);
         }
+        crate::analytics::ops::add(self.rows);
         compute_median_inline_f64(&mut estimates) as i64
     }
 
@@ -250,6 +261,11 @@ impl<H: SketchHasher> CountSketchFold<H> {
             let dst_row_off = r * target_fold_cols;
             for c in 0..self.fold_cols {
                 let cell = &self.cells[src_row_off + c];
+                let listed = match cell {
+                    FoldCell::Collided(entries) => entries.len(),
+                    _ => 0,
+                };
+                crate::analytics::ops::add(1 + listed);
                 for (full_col, count) in cell.iter() {
                     let new_fc = (full_col as usize) & (target_fold_cols - 1);
                     target.cells[dst_row_off + new_fc].add(full_col, count);
@@ -277,7 +293,10 @@ impl<H: SketchHasher> CountSketchFold<H> {
             fold_cols: new_fold_cols,
             full_cols: a.full_cols,
             fold_level: new_level,
-            cells: vec![FoldCell::Empty; a.rows * new_fold_cols],
+            cells: {
+                crate::analytics::ops::add(a.rows * new_fold_cols);
+                vec![FoldCell::Empty; a.rows * new_fold_cols]
+            },
             heap: TopKHeap::new(heap_k),
             _hasher: PhantomData,
         };
@@ -327,7 +346,10 @@ impl<H: SketchHasher> CountSketchFold<H> {
             fold_cols: new_fold_cols,
             full_cols: self.full_cols,
             fold_level: target_level,
-            cells: vec![FoldCell::Empty; self.rows * new_fold_cols],
+            cells: {
+                crate::analytics::ops::add(self.rows * new_fold_cols);
+                vec![FoldCell::Empty; self.rows * new_fold_cols]
+            },
             heap: TopKHeap::new(self.heap.capacity()),
             _hasher: PhantomData,
         };
@@ -366,7 +388,10 @@ impl<H: SketchHasher> CountSketchFold<H> {
             fold_cols: full_cols,
             full_cols,
             fold_level: 0,
-            cells: vec![FoldCell::Empty; rows * full_cols],
+            cells: {
+                crate::analytics::ops::add(rows * full_cols);
+                vec![FoldCell::Empty; rows * full_cols]
+            },
             heap: TopKHeap::new(heap_k),
             _hasher: PhantomData,
         };

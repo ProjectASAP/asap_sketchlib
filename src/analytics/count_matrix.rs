@@ -28,7 +28,7 @@ impl Default for MatrixParams {
     }
 }
 
-const TWO_POW_MINUS_32: f64 = 1.0 / 4_294_967_296.0;
+pub(crate) const TWO_POW_MINUS_32: f64 = 1.0 / 4_294_967_296.0;
 
 /// `q`, the most probability two keys share a column of a `w`-column row.
 pub fn collision_probability(cols: usize, fast_path: bool) -> f64 {
@@ -144,8 +144,8 @@ pub(crate) fn count_sketch_params_for(
     best
 }
 
-const COUNT_MIN_CONTRACT: &str = "count_min_l1_markov_v1";
-const COUNT_SKETCH_CONTRACT: &str = "count_sketch_l2_median_chosen_row_rate_v1";
+pub(crate) const COUNT_MIN_CONTRACT: &str = "count_min_l1_markov_v1";
+pub(crate) const COUNT_SKETCH_CONTRACT: &str = "count_sketch_l2_median_chosen_row_rate_v1";
 
 impl<S: MatrixStorage, Mode: HashPath, H: SketchHasher> SketchAnalytics
     for CountMinSketch<S, Mode, H>

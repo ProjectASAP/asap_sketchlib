@@ -15,8 +15,9 @@ Each op formula is the most one call can cost, unless its section marks it avera
 - `n` is the number of updates a state has received, `N` their total weight, and `D` the distinct keys among them.
 - `f(x)` is the total weight of key `x`, and `‖f‖₂` is the square root of the sum of `f(x)²` over all keys.
 - For a sketch with `d` rows, estimating one key costs `est(d)` ops: `d` for Count-Min, which takes the minimum of `d` counters, and `2d + d·lg d` for Count Sketch, which copies them into a buffer and takes their median.
-- A `TopKHeap` update costs `h(k) = 8 + 16·⌊log2 k⌋` for a heap of capacity `k`.
-  It probes the heap's index, replaces or rescores one slot, then moves the key down at most `⌊log2 k⌋` levels, and each level reads both children, swaps two slots and their digests, and repoints two index entries.
+- A `TopKHeap` update costs `h(k) = 8 + 14·⌊log2 k⌋` for a heap of capacity `k`.
+  It probes the heap's index, reads the root, and gives the root's slot, digest and index entries to the new key in 8 ops, or rescores a resident's slot in fewer.
+  It then moves the key at most `⌊log2 k⌋` levels, and each level reads both children, swaps two slots, reads and swaps their digests, and repoints two index entries.
 
 Counter matrices pick a column per row in one of two ways.
 
@@ -106,7 +107,7 @@ Query is the sketch's main readout, and each row's symbols are defined in that s
 | CocoSketch | none | `O(dw)` | `O(d)` | `O(d)` | `O(d²w)` | `d` |
 | Count-Min or Count Sketch with heap | as the base sketch | `O(dw + k)` | `O(est(d) + log k)` | `O(est(d))` | `O(dw + k(est(d) + log k))` | `2d + 1`, or 3 |
 | Count-Min or Count Sketch with Space-Saving | as the base sketch | `O(dw + m)` | `O(d)` | `O(est(d))` | `O(dw + m log m)` | `d + 1`, or 2 |
-| Count-Min or Count Sketch fold | as the base sketch | `O(d(W/2^F + min(W, D)) + k)` | `O(dE + est(d) + log k)` | `O(dE + est(d))` | `O(dW·2^F)` | `2d + 1` |
+| Count-Min or Count Sketch fold | as the base sketch | `O(d(W/2^F + min(W, D)) + k)` | `O(dE + est(d) + log k)` | `O(dE + est(d))` | `O(d(W/2^F + min(W, D)·E) + k(dE + est(d) + log k))` | `2d + 1` |
 | HyperLogLog | `ε = 1.04/√m`, `Relative` | `O(m)` | `O(1)` | `O(m)` | `O(m)` | 1 |
 | HyperLogLogHip | `ε = 0.833/√m`, `Relative` | `O(m)` | `O(1)` | `O(1)` | none | 1 |
 | Kmv | `δ = e^(−Θ(ε²k))`, `Relative` | `O(k)` | `O(k)` | `O(1)` | `O(k²)` | 1 |
@@ -321,41 +322,47 @@ Each section covers both bases, through `est(d)` and the base sketch's `δ`.
 
 `src/sketches/countminsketch_heap.rs` and `src/sketches/countsketch_heap.rs`.
 Parameters: `d` rows, `w` columns and heap capacity `k`, the code's `rows`, `cols` and `heap_size`, plus counter type and path.
-Data inputs: `D`, and the key (`DataInput`) for memory.
+Data inputs: `D`, and the bytes each key owns for memory, 0 when unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
-| ItemFrequency error | | as the base sketch |
-| TopK error | | each reported count as ItemFrequency, with `D` times the base sketch's `δ` |
-| Memory | `O(dw + k)` | `theoretical_memory_bytes(rows, cols, heap_size, key)` |
+| ItemFrequency error | | as the base sketch, with its contract |
+| ItemFrequency sizing | | as the base sketch; `k` is not set by the bound |
+| TopK error | | each reported count as ItemFrequency at a per-key `δ` of `δ/D`; for Count-Min `δ = D·e^−d` fixed, `None` when that is at least 1; `None` without `D` |
+| TopK sizing | | as ItemFrequency at `δ/D` |
+| Memory | `O(dw + k)` | `size_of::<Self>() − size_of::<TopKHeap>() + d·w·size_of::<Counter>() + TopKHeap::theoretical_memory_bytes(k, key)` |
 | Update | `O(est(d) + log k)` | `d + est(d) + h(k)` |
 | Query ItemFrequency | `O(est(d))` | `est(d)` |
 | Query TopK | `O(k)` | `k` |
-| Merge | `O(dw + k(est(d) + log k))` | `2dw + u·(3 + est(d) + h(k))`, with `u` the two heaps' sizes summed |
+| Merge | `O(dw + k(est(d) + log k))` | `2dw + 3 + u·(3 + est(d) + h(k))`, with `u ≤ 2·min(k, D)` the two heaps' sizes summed |
 
+- On `Vector2D` storage the memory formula is the inherent `theoretical_memory_bytes(rows, cols, heap_size, key)`.
 - An update adds to `d` counters, estimates the key from them, then updates the heap.
 - TopK returns the heap's `k` entries unsorted.
-- A merge adds the counters, then re-estimates each key from both heaps into a new heap of this state's capacity.
+- A merge adds the counters, copies both heaps' keys into a buffer, clears the heap, then re-estimates each key into it at this state's capacity.
 - A key's stored count is its estimate at its own last update, and its true count has not changed since, so the stored count keeps the base sketch's bound.
+- CountSketchWithHeap over integer counters stores the median truncated to an integer, which adds up to 0.5 to a reported count's error for even `d`.
 
 ### CountMinSketchWithSpaceSaving and CountSketchWithSpaceSaving
 
 `src/sketches/countminsketch_space_saving.rs` and `src/sketches/countsketch_space_saving.rs`.
 Parameters: `d` rows, `w` columns and `m` Space-Saving counters, the code's `rows`, `cols` and `capacity`, plus counter type and path.
-Data inputs: `D`, and the key for memory.
+Data inputs: `D`, and the bytes each key owns for memory, 0 when unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
-| ItemFrequency error | | as the base sketch |
-| TopK error | | each reported count as ItemFrequency, with `min(m, D)` times the base sketch's `δ` |
-| Memory | `O(dw + m)` | the base sketch's memory plus SpaceSaving's with `m` counters |
-| Update | `O(d)` | `d + 45` |
+| ItemFrequency error | | as the base sketch, with its contract |
+| ItemFrequency sizing | | as the base sketch; `m` is not set by the bound |
+| TopK error | | each reported count as ItemFrequency at a per-key `δ` of `δ/min(m, D)`; for Count-Min `δ = min(m, D)·e^−d` fixed, `None` when that is at least 1; `None` without `D` |
+| TopK sizing | | as ItemFrequency at `δ/min(m, D)` |
+| Memory | `O(dw + m)` | `size_of::<Self>() − size_of::<SpaceSaving>() + d·w·size_of::<Counter>() + SpaceSaving::theoretical_memory_bytes(m, key bytes)` |
+| Update | `O(d)` | `d + 47` at unit weight, plus 2 per count bucket passed |
 | Query ItemFrequency | `O(est(d))` | `est(d)` |
-| Query TopK | `O(m·est(d) + m log m)` | `m'·(7 + est(d)) + m'·lg m'`, with `m' = min(m, D)` |
-| Merge | `O(dw + m log m)` | `2dw + 36m + 2m·lg(2m) + 17` |
+| Query TopK | `O(m·est(d) + m log m)` | `m'·(5 + est(d)) + m'·lg m'`, with `m' = min(m, D)` |
+| Merge | `O(dw + m log m)` | `2dw + 44m + 2m·lg(2m) + 13` |
 
-- An update adds to `d` counters and offers the key to a SpaceSaving summary.
-- TopK reads each key in the summary, estimates it from the counters, and sorts.
+- An update adds to `d` counters and offers the key to a SpaceSaving summary, whose update costs as in its section.
+- TopK copies each key in the summary with its count into a buffer, estimates it from the counters into a second buffer, and sorts.
 - A merge adds the counters and merges the summaries as SpaceSaving does, and requires equal `m`.
 - With nonnegative integer weights, in one unmerged state, every key with `f(x) > N/m` is in the summary.
   `f64` weights enter the summary rounded up, so this does not hold for fractional weights.
@@ -363,26 +370,28 @@ Data inputs: `D`, and the key for memory.
 ### CountMinSketchFold and CountSketchFold
 
 `src/sketches/count_min_fold.rs` and `src/sketches/count_sketch_fold.rs`.
-Parameters: `d` rows, full width `W` (a power of two), fold level `F` and heap capacity `k`, the code's `rows`, `full_cols`, `fold_level` and `heap_size`.
+Parameters: `d` rows, full width `W` (a power of two, at most 65536), fold level `F` and heap capacity `k`, the code's `rows`, `full_cols`, `fold_level` and `heap_size`.
 Each row stores `W/2^F` cells, and each cell is a short list of (full column, count) entries.
-Data inputs: `D`; `E`, the most entries one cell holds, at most `min(2^F, D)`; `S`, the entries in cells holding more than one, at most `d·min(W, D)`; and the key for memory.
+Data inputs: `D`; `E`, the most entries one cell holds, at most `min(2^F, D)`; `S`, the entries in cells holding more than one, at most `d·min(W, D)`; and the bytes each key owns for memory, 0 when unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
 | ItemFrequency error | | as the base sketch on `RegularPath`, with `w = W` |
+| ItemFrequency sizing | | as the base sketch on `RegularPath`, with `W` rounded up to a power of two; `None` when `W > 65536`; `F` and `k` are not set by the bound |
 | TopK error | | as the heap variant, for a state not produced by `merge_same_level` |
+| TopK sizing | | as ItemFrequency at `δ/D` |
 | Memory | `O(d(W/2^F + min(W, D)) + k)` | `size_of::<Self>() − size_of::<TopKHeap>() + 24d·W/2^F + 32S + TopKHeap::theoretical_memory_bytes(k, key)` |
 | Update | `O(dE + est(d) + log k)` | `2dE + d + est(d) + h(k)` |
 | Query ItemFrequency | `O(dE + est(d))` | `dE + est(d)` |
 | Query TopK | `O(k)` | `k` |
-| Merge, same level | `O(dW·2^F)` | `dW·2^F + k·(dE + est(d) + h(k))` |
+| Merge, same level | `O(d(W/2^F + min(W, D)·E) + k(dE + est(d) + log k))` | `dW/2^F + d·min(W, D)·(2 + E) + min(k, D)·(1 + dE + est(d) + h(k))` |
 
 - A cell is 24 bytes, and each entry in a list is 16 bytes with the list grown by doubling, so at most 32.
+- Reading a cell costs 1, and each listed entry it scans costs 1 more.
 - An update scans one cell per row for its entry and adds to it, scans the same cells again to estimate the key, then updates the heap.
-- A same-level merge adds each entry of the other state into this state's matching cell, then re-estimates only the other heap's keys, so this state's heap counts go stale.
-- `hierarchical_merge` accepts mixed levels and costs `dW + 2·Σ e_i + Σ k_i·(d + est(d) + h(k))`, where state `i` holds `e_i` entries and `k_i` heap keys.
+- A same-level merge reads each cell of the other state and adds each of its entries into this state's matching cell, then re-estimates only the other heap's keys, so this state's heap counts go stale.
+- `hierarchical_merge` accepts mixed levels and costs `dW + Σ (dW/2^F_i + 2e_i + k_i·(1 + est(d) + h(k)))`, where state `i` is at level `F_i` and holds `e_i` entries and `k_i` heap keys.
 - The fold level does not change the error.
-- `W` is at most 65536, because columns are stored as `u16`.
 - CountSketchFold truncates an even-`d` median to an integer, which adds up to 0.5 to its error.
 
 ## Cardinality and membership

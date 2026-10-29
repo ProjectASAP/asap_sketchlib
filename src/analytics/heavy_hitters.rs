@@ -124,12 +124,14 @@ impl Default for ElasticParams {
     }
 }
 
-/// The data inputs of ElasticSketch and CocoSketch.
+/// `D` and the key bytes, the data inputs of ElasticSketch, CocoSketch and
+/// the matrices with a heap or a Space-Saving summary.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FlowData {
     /// `D`, the distinct keys.
     pub distinct: Option<u64>,
-    /// Bytes each flow id owns. Unknown counts as 0.
+    /// Bytes each key owns: a string's or byte slice's length, 0 for a
+    /// number. Unknown counts as 0.
     pub key_bytes: Option<usize>,
 }
 

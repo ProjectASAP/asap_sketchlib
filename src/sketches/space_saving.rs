@@ -334,6 +334,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
 
     /// Every monitored key as `(key, count, error)`, in no particular order.
     pub fn entries(&self) -> Vec<(OwnedDataInput, u64, u64)> {
+        crate::analytics::ops::add(3 * self.monitored.len());
         self.monitored
             .iter()
             .map(|c| (c.key.clone(), self.buckets[c.bucket].count, c.error))

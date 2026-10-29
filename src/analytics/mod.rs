@@ -8,12 +8,14 @@
 pub mod count_matrix;
 pub mod heavy_hitters;
 pub mod ops;
+pub mod top_k;
 
 pub use crate::capability::StatisticKind;
 pub use count_matrix::MatrixParams;
 #[cfg(feature = "experimental")]
 pub use count_matrix::{CountMinHllParams, MicroCmData, MicroCmParams};
 pub use heavy_hitters::{CocoParams, ElasticParams, FlowData, SpaceSavingData, SpaceSavingParams};
+pub use top_k::{FoldData, FoldParams, MatrixHeapParams, MatrixSpaceSavingParams};
 
 use crate::{FastPath, RegularPath};
 
@@ -170,7 +172,7 @@ pub fn est_count_sketch(d: usize) -> f64 {
 
 /// `h(k)`, the most ops one `TopKHeap` update costs at capacity `k`.
 pub fn heap_update_ops(k: usize) -> f64 {
-    8.0 + 16.0 * floor_log2(k)
+    8.0 + 14.0 * floor_log2(k)
 }
 
 /// `P_med(d, β) = P(Binomial(d, β) ≥ ⌈d/2⌉)`: the chance a median over `d`
@@ -294,6 +296,6 @@ mod tests {
         assert_eq!(lg(8.0), 3.0);
         assert_eq!(floor_log2(1), 0.0);
         assert_eq!(floor_log2(5), 2.0);
-        assert_eq!(heap_update_ops(8), 56.0);
+        assert_eq!(heap_update_ops(8), 50.0);
     }
 }
