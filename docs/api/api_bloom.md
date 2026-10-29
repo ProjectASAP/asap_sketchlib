@@ -61,7 +61,8 @@ fn update_batch(&mut self, values: &[DataInput])
 ```
 
 One bit per slice. Re-inserting a key sets nothing new, so the fill is a
-function of the distinct keys alone while `inserted()` counts every call.
+function of the distinct keys alone. The filter keeps no insert counter; a
+caller that needs the number of inserts keeps a separate exact count.
 
 ## Query
 
@@ -75,7 +76,6 @@ False is exact: the key was never inserted. True is probabilistic.
 fn predicted_fpp(&self, distinct_items: usize) -> f64
 fn estimated_fpp(&self) -> f64
 fn fill_ratio(&self) -> f64
-fn inserted(&self) -> u64
 fn rows(&self) -> usize
 fn cols(&self) -> usize
 fn bit_capacity(&self) -> usize
@@ -104,12 +104,15 @@ fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
-These produce/consume the **ASAPv1** wire envelope (kind `0x17 0x00`) — see the
+These produce/consume the **ASAPv1** wire envelope (kind `0x17 0x01`) — see the
 [ASAPv1 wire format spec](../asapv1_wire_format.md). The impl is bounded on
 `Mode: BloomMode` and `H: SketchHasher + HashProfile`, so a hasher that declares
 no profile cannot serialize at all. `rows`, `cols` and `mode` are carried in the
-envelope metadata; the payload is just `[words, inserted]`, the packed bit words
-row-major plus the insert counter, with the word stride derived from `cols`.
+envelope metadata; the payload is just `[words]`, the packed bit words
+row-major, with the word stride derived from `cols`. `from_asapv1` also reads
+the retired kind `0x17 0x00`, whose payload `[words, inserted]` carried an
+insert counter: the counter is dropped, and the filter re-encodes as
+`0x17 0x01`. Nothing encodes `0x17 0x00`.
 
 The wire covers the geometries `with_capacity` produces: at most
 `BLOOM_MAX_SLICES` slices, a power-of-two `cols`, and at most `BLOOM_MAX_BITS`

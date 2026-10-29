@@ -99,14 +99,6 @@ macro_rules! mode_laws {
             "{} path fill ratio is not the bits set over the addressable grid",
             $path
         );
-        prop_assert_eq!(
-            filter.inserted(),
-            $stream.len() as u64,
-            "{} path counted {} of {} inserts",
-            $path,
-            filter.inserted(),
-            $stream.len()
-        );
     }};
 }
 
@@ -277,7 +269,6 @@ proptest! {
             bloom_bits(&Bloom::with_dimensions(rows, cols)),
             "clear left a {}x{} filter unlike a fresh one", rows, cols
         );
-        prop_assert_eq!(filter.inserted(), 0, "clear left the insert count standing");
         prop_assert!(filter.is_empty(), "a cleared filter reports bits set");
         prop_assert_eq!(filter.fill_ratio(), 0.0, "a cleared filter reports a fill");
         for v in &stream {
@@ -305,12 +296,6 @@ proptest! {
             bloom_bits(&bloom_of(rows, cols, &concatenated)),
             "merging {} and {} keys into a {}x{} filter is not the concatenated stream",
             a.len(), b.len(), rows, cols
-        );
-        prop_assert_eq!(
-            merged.inserted(),
-            concatenated.len() as u64,
-            "the merged count is {} over {} inserts",
-            merged.inserted(), concatenated.len()
         );
     }
 

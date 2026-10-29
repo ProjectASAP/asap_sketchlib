@@ -129,8 +129,13 @@ const GOLDEN_CS_ADMISSION: &str = include_str!("../asapv1_golden/cs_i64_regular_
 const GOLDEN_DD_ADMISSION: &str =
     include_str!("../asapv1_golden/ddsketch_signed_a001_admission.hex");
 const GOLDEN_KMV: &str = include_str!("../asapv1_golden/kmv_k8.hex");
+// The retired Bloom kind `17 00`, decode-only.
 const GOLDEN_BLOOM_REGULAR: &str = include_str!("../asapv1_golden/bloom_regular_3x128.hex");
 const GOLDEN_BLOOM_FAST: &str = include_str!("../asapv1_golden/bloom_fast_5x32.hex");
+// The current Bloom kind `17 01`.
+const GOLDEN_BLOOM_BITS_REGULAR: &str =
+    include_str!("../asapv1_golden/bloom_bits_regular_3x128.hex");
+const GOLDEN_BLOOM_BITS_FAST: &str = include_str!("../asapv1_golden/bloom_bits_fast_5x32.hex");
 const GOLDEN_SPACE_SAVING_I64: &str = include_str!("../asapv1_golden/space_saving_i64_c8.hex");
 const GOLDEN_SPACE_SAVING_BYTES: &str = include_str!("../asapv1_golden/space_saving_bytes_c3.hex");
 #[cfg(feature = "experimental")]
@@ -1782,19 +1787,21 @@ fn kmv_k8_matches_golden() {
 // ---------------------------------------------------------------------------
 // Bloom: golden decodes to the known bit grid and round-trips. Encoding the
 // known grid is checked in `src/sketches/bloom/wire.rs`. Column `c` of row `r` is bit `c % 64` of word
-// `r * ceil(cols / 64) + c / 64`.
+// `r * ceil(cols / 64) + c / 64`. Each retired `17 00` fixture decodes, its
+// `inserted` counter dropped, to the same grid and re-encodes as its
+// `bloom_bits_*` twin.
 // ---------------------------------------------------------------------------
 
+/// Decodes `golden` and checks the decoded grid. A current `17 01` fixture
+/// re-serializes to itself; a retired `17 00` fixture re-serializes to `twin`.
 fn assert_bloom_golden<Mode: asap_sketchlib::BloomMode>(
     golden: &str,
+    twin: &str,
     (rows, cols): (usize, usize),
     words: &[u64],
-    inserted: u64,
 ) {
-    let want = decode_hex(golden);
-    let decoded = Bloom::<Mode>::from_asapv1(&want).expect("decode");
+    let decoded = Bloom::<Mode>::from_asapv1(&decode_hex(golden)).expect("decode");
     assert_eq!((decoded.rows(), decoded.cols()), (rows, cols));
-    assert_eq!(decoded.inserted(), inserted);
     let stride = cols.div_ceil(64);
     for r in 0..rows {
         for c in 0..cols {
@@ -1802,19 +1809,40 @@ fn assert_bloom_golden<Mode: asap_sketchlib::BloomMode>(
             assert_eq!(decoded.as_bits().get(r, c), bit, "bit ({r}, {c})");
         }
     }
-    assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);
+    assert_eq!(decoded.to_asapv1().expect("re-serialize"), decode_hex(twin));
+}
+
+const BLOOM_REGULAR_WORDS: [u64; 6] = [1, 1 << 63, 0, 0xff, u64::MAX, 0x10000];
+const BLOOM_FAST_WORDS: [u64; 5] = [1, 0x8000_0000, 0, 0xffff_ffff, 0x10000];
+
+#[test]
+fn bloom_bits_regular_3x128_matches_golden() {
+    let (golden, words) = (GOLDEN_BLOOM_BITS_REGULAR, &BLOOM_REGULAR_WORDS);
+    assert_bloom_golden::<RegularPath>(golden, golden, (3, 128), words);
 }
 
 #[test]
-fn bloom_regular_3x128_matches_golden() {
-    let words = [1, 1 << 63, 0, 0xff, u64::MAX, 0x10000];
-    assert_bloom_golden::<RegularPath>(GOLDEN_BLOOM_REGULAR, (3, 128), &words, 300);
+fn bloom_bits_fast_5x32_matches_golden() {
+    let (golden, words) = (GOLDEN_BLOOM_BITS_FAST, &BLOOM_FAST_WORDS);
+    assert_bloom_golden::<FastPath>(golden, golden, (5, 32), words);
 }
 
+/// Each retired `17 00` fixture decodes to its twin's grid and re-encodes as
+/// the twin.
 #[test]
-fn bloom_fast_5x32_matches_golden() {
-    let words = [1, 0x8000_0000, 0, 0xffff_ffff, 0x10000];
-    assert_bloom_golden::<FastPath>(GOLDEN_BLOOM_FAST, (5, 32), &words, 9);
+fn bloom_retired_fixtures_decode_to_their_bits_twins() {
+    assert_bloom_golden::<RegularPath>(
+        GOLDEN_BLOOM_REGULAR,
+        GOLDEN_BLOOM_BITS_REGULAR,
+        (3, 128),
+        &BLOOM_REGULAR_WORDS,
+    );
+    assert_bloom_golden::<FastPath>(
+        GOLDEN_BLOOM_FAST,
+        GOLDEN_BLOOM_BITS_FAST,
+        (5, 32),
+        &BLOOM_FAST_WORDS,
+    );
 }
 
 // ---------------------------------------------------------------------------

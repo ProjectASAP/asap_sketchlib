@@ -106,9 +106,10 @@ Converted:
   `src/sketches/kll_dynamic/wire.rs` dynamic → `0x06 0x01`) — both variants share
   one payload `[levels, items, coin]` and differ only by `kind_id`. KLL never
   hashes, so its metadata carries no hash-spec group.
-- **Bloom** (`src/sketches/bloom/wire.rs`, kind `0x17 0x00`) — the payload is the
-  bit grid packed into `u64`s plus the insert count; the wire covers the
-  geometries `Bloom::with_capacity` produces.
+- **Bloom** (`src/sketches/bloom/wire.rs`, kind `0x17 0x01`) — the payload is the
+  bit grid packed into `u64`s; the wire covers the geometries
+  `Bloom::with_capacity` produces. The retired `0x17 0x00` also carried an
+  insert count; it still decodes, with the count dropped, and is never encoded.
 - **Space-Saving** (`src/sketches/space_saving/wire.rs`, kind `0x18 0x00`) — the
   payload is the `(key, count, error)` triples plus `total` and `discarded_max`; the
   Stream-Summary's links and arenas are rebuilt on decode.

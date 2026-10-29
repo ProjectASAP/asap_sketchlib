@@ -99,9 +99,7 @@ fn an_empty_filter_rejects_every_probe() {
     let regular = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
     let fast = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
     assert!(regular.is_empty());
-    assert_eq!(regular.inserted(), 0);
     assert!(fast.is_empty());
-    assert_eq!(fast.inserted(), 0);
     for key in probes().into_iter().take(10_000) {
         assert!(!regular.contains(&DataInput::I64(key)));
         assert!(!fast.contains(&DataInput::I64(key)));
@@ -141,8 +139,8 @@ fn the_measured_false_positive_rate_matches_what_the_sizing_predicts() {
     }
 }
 
-/// `estimated_fpp` reads the bits actually set rather than the insert count,
-/// so it tracks the measured rate on a filter that saw duplicates.
+/// `estimated_fpp` reads the bits actually set, so it tracks the measured rate
+/// on a filter that saw duplicates.
 #[test]
 fn the_fill_based_estimate_tracks_the_measured_rate() {
     let mut filter = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
@@ -151,7 +149,6 @@ fn the_fill_based_estimate_tracks_the_measured_rate() {
             filter.update(&DataInput::I64(key));
         }
     }
-    assert_eq!(filter.inserted(), 3 * MEMBERS as u64);
 
     let measured = false_positive_rate(|k| filter.contains(&DataInput::I64(k)));
     let estimated = filter.estimated_fpp();
@@ -160,18 +157,17 @@ fn the_fill_based_estimate_tracks_the_measured_rate() {
         "measured {measured:.5} outside 0.75-1.25x of estimated {estimated:.5}"
     );
 
-    // The same keys once set the same bits and a third of the inserts, so an
-    // estimate that read the counter would move and this one does not.
+    // The same keys once set the same bits from a third of the inserts, so the
+    // estimate does not move.
     let mut once = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
     for key in members() {
         once.update(&DataInput::I64(key));
     }
     assert_eq!(all_bits(once.as_bits()), all_bits(filter.as_bits()));
-    assert_ne!(once.inserted(), filter.inserted());
     assert_eq!(
         once.estimated_fpp(),
         estimated,
-        "estimated_fpp moved with the insert count"
+        "estimated_fpp moved with the duplicate inserts"
     );
 }
 
@@ -189,8 +185,6 @@ fn repeated_updates_leave_the_bits_unchanged() {
     assert_eq!(once.as_bits().count_ones(), twice.as_bits().count_ones());
     // The same population is not the same bits; compare the grids cell by cell.
     assert_eq!(all_bits(once.as_bits()), all_bits(twice.as_bits()));
-    assert_eq!(once.inserted(), 1_000);
-    assert_eq!(twice.inserted(), 2_000);
 }
 
 /// A union is exact: merging two filters gives the same bits as one filter
@@ -212,7 +206,6 @@ fn a_union_equals_the_filter_of_the_concatenated_stream() {
 
     left.merge(&right);
     assert_eq!(left.as_bits().count_ones(), whole.as_bits().count_ones());
-    assert_eq!(left.inserted(), whole.inserted());
 
     for key in 0..10_000i64 {
         assert!(left.contains(&DataInput::I64(key)), "union lost key {key}");
@@ -475,7 +468,6 @@ fn clearing_restores_an_empty_filter() {
     let (rows, cols) = (filter.rows(), filter.cols());
     filter.clear();
     assert!(filter.is_empty());
-    assert_eq!(filter.inserted(), 0);
     assert_eq!((filter.rows(), filter.cols()), (rows, cols));
     for key in members().into_iter().take(1_000) {
         assert!(!filter.contains(&DataInput::I64(key)));
@@ -491,7 +483,6 @@ fn an_asapv1_round_trip_preserves_every_answer() {
 
     assert_eq!(decoded.rows(), filter.rows());
     assert_eq!(decoded.cols(), filter.cols());
-    assert_eq!(decoded.inserted(), filter.inserted());
     assert_eq!(
         decoded.as_bits().count_ones(),
         filter.as_bits().count_ones()
@@ -627,7 +618,6 @@ fn a_fast_path_asapv1_round_trip_preserves_every_answer() {
         (decoded.rows(), decoded.cols()),
         (filter.rows(), filter.cols())
     );
-    assert_eq!(decoded.inserted(), filter.inserted());
     assert_eq!(all_bits(decoded.as_bits()), all_bits(filter.as_bits()));
     for key in probes().into_iter().take(20_000) {
         assert_eq!(
@@ -654,7 +644,6 @@ fn a_fast_path_union_equals_the_filter_of_the_concatenated_stream() {
     }
     left.merge(&right);
     assert_eq!(all_bits(left.as_bits()), all_bits(whole.as_bits()));
-    assert_eq!(left.inserted(), whole.inserted());
     for key in 0..10_000i64 {
         assert!(left.contains(&DataInput::I64(key)), "union lost key {key}");
     }
@@ -688,7 +677,6 @@ fn update_batch_matches_updating_one_at_a_time() {
     let mut bulk = Bloom::<RegularPath>::with_capacity(MEMBERS as usize, 0.01);
     bulk.update_batch(&batch);
     assert_eq!(all_bits(bulk.as_bits()), all_bits(one_by_one.as_bits()));
-    assert_eq!(bulk.inserted(), one_by_one.inserted());
 
     let mut fast_one_by_one = Bloom::<FastPath>::with_capacity(MEMBERS as usize, 0.01);
     for key in members() {
@@ -700,5 +688,4 @@ fn update_batch_matches_updating_one_at_a_time() {
         all_bits(fast_bulk.as_bits()),
         all_bits(fast_one_by_one.as_bits())
     );
-    assert_eq!(fast_bulk.inserted(), fast_one_by_one.inserted());
 }

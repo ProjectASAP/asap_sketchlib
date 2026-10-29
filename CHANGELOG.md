@@ -66,6 +66,15 @@ signals a backwards-compatible change.
   `0x05 0x80` still decode, with the scalars dropped, and are never encoded.
   The `sketchlib-golden-bytes` submodule gains the `ddsketch_buckets_*`
   fixtures.
+- **Breaking: `Bloom` no longer keeps an insert counter.** The state is the
+  bit grid alone, and `inserted()` is removed: no membership answer reads it
+  (`contains`, `fill_ratio` and `estimated_fpp` read the bits, and
+  `predicted_fpp` takes its distinct count from the caller). A caller that
+  needs the number of inserts keeps a separate exact count.
+- **ASAPv1: Bloom encodes as `0x17 0x01`.** The payload is `[words]`. The
+  retired `0x17 0x00`, whose payload also carried `inserted`, still decodes,
+  with the counter dropped, and is never encoded. The `sketchlib-golden-bytes`
+  submodule gains the `bloom_bits_*` fixtures.
 - **Count Sketch estimates no longer allocate.** The per-row estimates a
   median is taken over are collected on the stack instead of in a fresh
   `Vec`: up to 20 rows for `Vector2D` (the fast and regular paths),
