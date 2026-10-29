@@ -76,6 +76,15 @@ signals a backwards-compatible change.
   retired `0x17 0x00`, whose payload also carried `inserted`, still decodes,
   with the counter dropped, and is never encoded. The `sketchlib-golden-bytes`
   submodule gains the `bloom_bits_*` fixtures.
+- **Breaking: `SpaceSaving` no longer keeps a `total`.** `total()` is removed;
+  no Space-Saving readout read it, and after a merge it cannot be read off the
+  counts. A caller that needs the stream's total weight keeps a separate exact
+  count. The decode check that `total` covered the counted weight is gone.
+- **ASAPv1: Space-Saving encodes as `0x18 0x01`, CountMinSketchWithSpaceSaving
+  as `0x1e 0x01` and CountSketchWithSpaceSaving as `0x1f 0x01`.** Each payload
+  drops the summary's `total`. The retired `0x18 0x00` / `0x1e 0x00` /
+  `0x1f 0x00` still decode, with `total` dropped, and are never encoded. The
+  `sketchlib-golden-bytes` submodule gains the `*_nototal_*` fixtures.
 - **Count Sketch estimates no longer allocate.** The per-row estimates a
   median is taken over are collected on the stack instead of in a fresh
   `Vec`: up to 20 rows for `Vector2D` (the fast and regular paths),

@@ -69,10 +69,11 @@ fn to_asapv1(&self) -> Result<Vec<u8>, RmpEncodeError>
 fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError>
 ```
 
-The **ASAPv1** envelope, kind `0x1f 0x00` (spec §3.25), for
+The **ASAPv1** envelope, kind `0x1f 0x01` (spec §3.25), for
 `CountSketchWithSpaceSaving<Vector2D<T>, Mode, H>` with `T` `i32`, `i64` or `f64`, `Mode`
 `FastPath` or `RegularPath`, and `H: HashProfile`. Same layout as
-[CountMinSketchWithSpaceSaving](./api_count_min_sketch_with_space_saving.md). There is no delta kind.
+[CountMinSketchWithSpaceSaving](./api_count_min_sketch_with_space_saving.md); the retired `0x1f 0x00` still
+decodes, its `total` dropped, and is never encoded. There is no delta kind.
 
 ## Examples
 

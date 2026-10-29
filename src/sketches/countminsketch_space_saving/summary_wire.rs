@@ -1,6 +1,8 @@
-//! ASAPv1 metadata and payload shared by CountMinSketchWithSpaceSaving (`0x1e 0x00`) and
-//! CountSketchWithSpaceSaving (`0x1f 0x00`): `[counts, keys, summary_counts, errors, total,
-//! discarded_max]` (`docs/asapv1_wire_format.md` §3.24, §3.25).
+//! ASAPv1 metadata and payload shared by CountMinSketchWithSpaceSaving (`0x1e 0x01`) and
+//! CountSketchWithSpaceSaving (`0x1f 0x01`): `[counts, keys, summary_counts, errors,
+//! discarded_max]` (`docs/asapv1_wire_format.md` §3.24, §3.25). The retired `0x1e 0x00` /
+//! `0x1f 0x00` also carried the summary's `total` before `discarded_max`; they still
+//! decode, with `total` dropped, and are never encoded.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::de::DeserializeOwned;
@@ -61,10 +63,29 @@ pub(crate) fn summary_topk_metadata<H: HashProfile>(
     }
 }
 
-/// The positional payload `[counts, keys, summary_counts, errors, total,
+/// The positional payload `[counts, keys, summary_counts, errors,
 /// discarded_max]`.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct SummaryTopKPayload<C, K> {
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "C: Deserialize<'de>")
+    )]
+    pub(crate) counts: Vec<C>,
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "K: Deserialize<'de>")
+    )]
+    pub(crate) keys: Vec<K>,
+    pub(crate) summary_counts: Vec<u64>,
+    pub(crate) errors: Vec<u64>,
+    pub(crate) discarded_max: u64,
+}
+
+/// The retired payload `[counts, keys, summary_counts, errors, total,
+/// discarded_max]`: decoded only, and `total` is dropped.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct SummaryTopKPayloadWithTotal<C, K> {
     #[serde(
         deserialize_with = "exact_vec",
         bound(deserialize = "C: Deserialize<'de>")
@@ -81,6 +102,24 @@ pub(crate) struct SummaryTopKPayload<C, K> {
     pub(crate) discarded_max: u64,
 }
 
+/// Reads the current payload, or the retired one with `total` dropped.
+fn read_payload<C: DeserializeOwned, K: DeserializeOwned>(
+    payload: &[u8],
+    with_total: bool,
+) -> Result<SummaryTopKPayload<C, K>, RmpDecodeError> {
+    if !with_total {
+        return envelope::decode_block(payload);
+    }
+    let retired: SummaryTopKPayloadWithTotal<C, K> = envelope::decode_block(payload)?;
+    Ok(SummaryTopKPayload {
+        counts: retired.counts,
+        keys: retired.keys,
+        summary_counts: retired.summary_counts,
+        errors: retired.errors,
+        discarded_max: retired.discarded_max,
+    })
+}
+
 /// Packs the payload with `keys` typed by `key_type`; a key of another variant
 /// fails the encode.
 fn encode_payload<C: Serialize + Clone>(
@@ -88,7 +127,6 @@ fn encode_payload<C: Serialize + Clone>(
     key_type: &str,
     counts: &[C],
     entries: &[(&OwnedDataInput, u64, u64)],
-    total: u64,
     discarded_max: u64,
 ) -> Result<Vec<u8>, RmpEncodeError> {
     fn pack<C: Serialize + Clone, K: Serialize>(
@@ -96,7 +134,6 @@ fn encode_payload<C: Serialize + Clone>(
         key_type: &str,
         counts: &[C],
         entries: &[(&OwnedDataInput, u64, u64)],
-        total: u64,
         discarded_max: u64,
         wire: impl Fn(&OwnedDataInput) -> Option<K>,
     ) -> Result<Vec<u8>, RmpEncodeError> {
@@ -114,7 +151,6 @@ fn encode_payload<C: Serialize + Clone>(
             keys,
             summary_counts: entries.iter().map(|entry| entry.1).collect(),
             errors: entries.iter().map(|entry| entry.2).collect(),
-            total,
             discarded_max,
         })
     }
@@ -126,7 +162,6 @@ fn encode_payload<C: Serialize + Clone>(
                 key_type,
                 counts,
                 entries,
-                total,
                 discarded_max,
                 |key| match key {
                     OwnedDataInput::$variant($value) => Some($wire),
@@ -157,11 +192,14 @@ fn encode_payload<C: Serialize + Clone>(
     }
 }
 
-/// One kind's identity on the wire: its name in errors, its kind_id, and the
-/// `counter_type` and `mode` its target type pins.
+/// One kind's identity on the wire: its name in errors, its kind_id, the
+/// retired kind_id it still decodes, and the `counter_type` and `mode` its
+/// target type pins.
 pub(crate) struct SummaryKind {
     pub(crate) name: &'static str,
     pub(crate) kind_id: &'static [u8],
+    /// The retired id whose payload also carried the summary's `total`.
+    pub(crate) retired_kind_id_with_total: &'static [u8],
     pub(crate) counter_type: &'static str,
     pub(crate) mode: &'static str,
 }
@@ -208,14 +246,7 @@ pub(crate) fn encode<C: Serialize + Clone, H: SketchHasher + HashProfile>(
         capacity,
         key_type,
     ))?;
-    let payload = encode_payload(
-        sketch,
-        key_type,
-        counts,
-        &entries,
-        summary.total(),
-        summary.discarded_max(),
-    )?;
+    let payload = encode_payload(sketch, key_type, counts, &entries, summary.discarded_max())?;
     Ok(envelope::encode(kind.kind_id, &metadata, &payload))
 }
 
@@ -228,8 +259,9 @@ pub(crate) struct DecodedSummaryTopK<C, H: SketchHasher> {
     pub(crate) summary: SpaceSaving<H>,
 }
 
-/// Decodes a `kind` envelope under §3.24's decode rules. Neither the geometry
-/// nor `capacity` sizes an allocation.
+/// Decodes a `kind` envelope, or its retired id with `total` dropped, under
+/// §3.24's decode rules. Neither the geometry nor `capacity` sizes an
+/// allocation.
 pub(crate) fn decode<C: DeserializeOwned, H: SketchHasher + HashProfile>(
     kind: &SummaryKind,
     bytes: &[u8],
@@ -238,10 +270,11 @@ pub(crate) fn decode<C: DeserializeOwned, H: SketchHasher + HashProfile>(
     let complain = |e: String| RmpDecodeError::Uncategorized(format!("ASAPv1 {sketch}: {e}"));
     let (kind_id, metadata, payload) =
         envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-    if kind_id != kind.kind_id {
+    let with_total = kind_id == kind.retired_kind_id_with_total;
+    if kind_id != kind.kind_id && !with_total {
         return Err(complain(format!(
-            "kind_id mismatch: stored {kind_id:?}, expected {:?}",
-            kind.kind_id
+            "kind_id mismatch: stored {kind_id:?}, expected {:?} (or the retired {:?})",
+            kind.kind_id, kind.retired_kind_id_with_total
         )));
     }
     let meta: SummaryTopKMetadata = envelope::decode_block(metadata)?;
@@ -262,21 +295,13 @@ pub(crate) fn decode<C: DeserializeOwned, H: SketchHasher + HashProfile>(
 
     macro_rules! unpack {
         ($ty:ty, $into:expr) => {{
-            let p: SummaryTopKPayload<C, $ty> = envelope::decode_block(payload)?;
+            let p: SummaryTopKPayload<C, $ty> = read_payload(payload, with_total)?;
             let keys: Vec<OwnedDataInput> = p.keys.into_iter().map($into).collect();
-            (
-                p.counts,
-                keys,
-                p.summary_counts,
-                p.errors,
-                p.total,
-                p.discarded_max,
-            )
+            (p.counts, keys, p.summary_counts, p.errors, p.discarded_max)
         }};
     }
 
-    let (counts, keys, summary_counts, errors, total, discarded_max) = match meta.key_type.as_str()
-    {
+    let (counts, keys, summary_counts, errors, discarded_max) = match meta.key_type.as_str() {
         "i8" => unpack!(i8, OwnedDataInput::I8),
         "i16" => unpack!(i16, OwnedDataInput::I16),
         "i32" => unpack!(i32, OwnedDataInput::I32),
@@ -334,7 +359,7 @@ pub(crate) fn decode<C: DeserializeOwned, H: SketchHasher + HashProfile>(
         .zip(errors)
         .map(|((key, count), error)| (key, count, error))
         .collect();
-    let summary = SpaceSaving::from_parts(meta.capacity as usize, total, discarded_max, entries)
+    let summary = SpaceSaving::from_parts(meta.capacity as usize, discarded_max, entries)
         .map_err(complain)?;
     Ok(DecodedSummaryTopK {
         rows,
@@ -398,7 +423,6 @@ mod tests {
         keys: Vec<K>,
         summary_counts: Vec<u64>,
         errors: Vec<u64>,
-        total: u64,
         discarded_max: u64,
     }
 
@@ -412,7 +436,6 @@ mod tests {
             keys: vec![7, 8, 9],
             summary_counts: vec![9, 4, 4],
             errors: vec![0, 1, 0],
-            total: 16,
             discarded_max: 0,
         }
     }
@@ -433,7 +456,6 @@ mod tests {
                 keys: self.keys.iter().collect::<Vec<&K>>(),
                 summary_counts: self.summary_counts.clone(),
                 errors: self.errors.clone(),
-                total: self.total,
                 discarded_max: self.discarded_max,
             })
             .expect("payload");
@@ -446,7 +468,7 @@ mod tests {
         let sketch = populated();
         let encoded = sketch.to_asapv1().expect("serialize");
         assert!(encoded.starts_with(b"ASAPv1"));
-        assert_eq!(&encoded[7..10], &[2u8, 0x1e, 0x00]);
+        assert_eq!(&encoded[7..10], &[2u8, 0x1e, 0x01]);
 
         let meta = metadata_of(&encoded);
         assert_eq!(meta.metadata_version, 1);
@@ -470,7 +492,6 @@ mod tests {
                 (OwnedDataInput::U64(4), 7, 5),
             ]
         );
-        assert_eq!(decoded.space_saving().total(), 23);
         assert_eq!(decoded.space_saving().discarded_max(), 5);
         assert_eq!(decoded.capacity(), 3);
         assert_eq!(decoded.top_k(3), sketch.top_k(3));
@@ -698,7 +719,6 @@ mod tests {
             keys: Vec::new(),
             summary_counts: c.summary_counts,
             errors: c.errors,
-            total: c.total,
             discarded_max: c.discarded_max,
         }
     }
@@ -744,7 +764,6 @@ mod tests {
             keys: vec![f64::NAN, f64::NAN, 1.0],
             summary_counts: vec![9, 9, 4],
             errors: vec![0, 0, 0],
-            total: 22,
             ..craft_with_keys()
         };
         assert!(decode_error(&nan.bytes()).contains("twice"));
@@ -754,7 +773,6 @@ mod tests {
             keys: vec![0.0f64, -0.0, 1.0],
             summary_counts: vec![9, 9, 4],
             errors: vec![0, 0, 0],
-            total: 22,
             ..craft_with_keys()
         };
         assert!(Target::from_asapv1(&zeros.bytes()).is_ok());
@@ -777,16 +795,47 @@ mod tests {
         assert!(decode_error(&empty.bytes()).contains("ceiling of 1"));
     }
 
+    /// The retired `0x1e 0x00` decodes with its `total` dropped, whatever that
+    /// total was (`15` sits under the 16 the counters account for, which the
+    /// retired rule rejected), and re-encodes as `0x1e 0x01`. Each kind reads
+    /// only its own payload shape.
     #[test]
-    fn total_covers_the_recorded_weight_saturating() {
-        let mut c = craft();
-        c.total = 15;
-        assert!(decode_error(&c.bytes()).contains("total of 15"));
+    fn the_retired_kind_with_total_decodes_and_drops_it() {
+        let c = craft();
+        let retired = |kind_id: &[u8], total: u64| {
+            let metadata = rmp_serde::to_vec_named(&summary_topk_metadata::<DefaultXxHasher>(
+                c.rows, c.cols, "i64", "regular", c.capacity, c.key_type,
+            ))
+            .expect("metadata");
+            let payload = rmp_serde::to_vec(&SummaryTopKPayloadWithTotal {
+                counts: c.counts.clone(),
+                keys: c.keys.clone(),
+                summary_counts: c.summary_counts.clone(),
+                errors: c.errors.clone(),
+                total,
+                discarded_max: c.discarded_max,
+            })
+            .expect("payload");
+            envelope::encode(kind_id, &metadata, &payload)
+        };
+        for total in [16, 15, 0, u64::MAX] {
+            let decoded = Target::from_asapv1(&retired(
+                kind::COUNT_MIN_WITH_SPACE_SAVING_WITH_TOTAL,
+                total,
+            ))
+            .expect("retired decodes");
+            assert_eq!(decoded.to_asapv1().expect("re-encode"), c.bytes());
+        }
 
-        let mut c = craft();
-        c.summary_counts = vec![u64::MAX, u64::MAX, 4];
-        c.total = u64::MAX;
-        assert!(Target::from_asapv1(&c.bytes()).is_ok());
+        assert!(decode_error(&retired(kind::COUNT_MIN_WITH_SPACE_SAVING, 16)).contains("array"));
+        let current = c.bytes();
+        let (_, metadata, payload) = envelope::split(&current).expect("split");
+        let current_as_retired = envelope::encode(
+            kind::COUNT_MIN_WITH_SPACE_SAVING_WITH_TOTAL,
+            metadata,
+            payload,
+        );
+        assert!(Target::from_asapv1(&current_as_retired).is_err());
     }
 
     #[test]
@@ -872,7 +921,7 @@ mod tests {
 
         let huge = Target::from_parts(
             CountMinSketch::with_dimensions(2, 3),
-            SpaceSaving::from_parts(1 << 40, 3, 0, vec![(OwnedDataInput::U64(1), 3, 0)])
+            SpaceSaving::from_parts(1 << 40, 0, vec![(OwnedDataInput::U64(1), 3, 0)])
                 .expect("sparse"),
         );
         assert!(

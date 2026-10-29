@@ -215,7 +215,6 @@ fn an_arrival_displaces_the_minimum_and_inherits_its_count() {
     assert_eq!(summary.estimate(&DataInput::I64(3)), 3);
     assert_eq!(summary.error(&DataInput::I64(3)), 2);
     assert_eq!(summary.min_count(), 3);
-    assert_eq!(summary.total(), 6);
 }
 
 /// The bucket and counter lists stay well formed under sustained eviction:
@@ -291,7 +290,6 @@ fn a_weighted_arrival_matches_repeating_it() {
         weighted.update_weighted(&DataInput::I64(key), counts[&key]);
     }
 
-    assert_eq!(weighted.total(), singles.total());
     assert_eq!(weighted.len(), singles.len());
     for (key, count) in &counts {
         assert_eq!(
@@ -319,10 +317,10 @@ fn a_summary_larger_than_the_domain_is_exact() {
     }
 }
 
-/// Merging keeps the total, respects capacity, and never reports a shared key
-/// below what either side saw.
+/// Merging respects capacity and never reports a shared key below what either
+/// side saw.
 #[test]
-fn a_merge_keeps_the_total_and_never_reads_low() {
+fn a_merge_never_reads_low() {
     let stream = stream();
     let (left_stream, right_stream): (Vec<i64>, Vec<i64>) =
         stream.iter().partition(|key| *key % 2 == 0);
@@ -334,7 +332,6 @@ fn a_merge_keeps_the_total_and_never_reads_low() {
 
     left.merge(&right);
 
-    assert_eq!(left.total(), stream.len() as u64);
     assert!(left.len() <= left.capacity());
 
     let mut checked: HashSet<i64> = HashSet::new();
@@ -371,7 +368,6 @@ fn an_asapv1_round_trip_preserves_every_answer() {
 
     assert_eq!(decoded.len(), summary.len());
     assert_eq!(decoded.capacity(), summary.capacity());
-    assert_eq!(decoded.total(), summary.total());
     assert_eq!(decoded.min_count(), summary.min_count());
     for (key, _) in truth.pairs() {
         let probe = DataInput::I64(key);
@@ -394,7 +390,6 @@ fn an_empty_summary_answers() {
     assert!(summary.is_empty());
     assert_eq!(summary.len(), 0);
     assert_eq!(summary.min_count(), 0);
-    assert_eq!(summary.total(), 0);
     assert_eq!(summary.estimate(&DataInput::I64(1)), 0);
     assert_eq!(summary.upper_bound(&DataInput::I64(1)), 0);
     assert!(!summary.is_guaranteed(&DataInput::I64(1)));
@@ -424,7 +419,6 @@ fn a_weighted_arrival_matches_repeating_it_under_eviction() {
     }
 
     assert_eq!(weighted.len(), 64, "the run should have evicted heavily");
-    assert_eq!(weighted.total(), singles.total());
     assert_eq!(weighted.min_count(), singles.min_count());
 
     let mut left: Vec<(i64, u64, u64)> = weighted
@@ -452,13 +446,11 @@ fn update_batch_matches_repeated_updates_and_a_zero_weight_is_inert() {
     bulk.update_batch(&values);
     let one_at_a_time = filled(128, &stream);
 
-    assert_eq!(bulk.total(), one_at_a_time.total());
     assert_eq!(bulk.top_k(usize::MAX), one_at_a_time.top_k(usize::MAX));
 
     let before = bulk.top_k(usize::MAX);
     bulk.update_weighted(&DataInput::I64(stream[0]), 0);
     bulk.update_weighted(&DataInput::I64(i64::MIN), 0);
-    assert_eq!(bulk.total(), one_at_a_time.total());
     assert_eq!(bulk.len(), one_at_a_time.len());
     assert_eq!(bulk.top_k(usize::MAX), before);
 }
@@ -472,7 +464,6 @@ fn a_zero_capacity_summary_still_answers() {
         summary.update(&DataInput::I64(key));
     }
     assert_eq!(summary.len(), 1);
-    assert_eq!(summary.total(), 10);
     let held = summary.top_k(4);
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].1, 10);
@@ -522,7 +513,6 @@ fn a_merge_chain_stays_one_sided_against_the_truth() {
     merged.merge(&filled(512, &shards[1]));
     merged.merge(&filled(7, &shards[2]));
 
-    assert_eq!(merged.total(), stream.len() as u64);
     assert!(merged.len() <= merged.capacity());
 
     let mut dropped_max = 0;
@@ -614,7 +604,6 @@ fn a_round_trip_carries_the_merged_ceiling() {
     let decoded: SpaceSaving = SpaceSaving::from_asapv1(&bytes).expect("deserialize");
 
     assert_eq!(decoded.min_count(), merged.min_count());
-    assert_eq!(decoded.total(), merged.total());
     assert_eq!(decoded.len(), merged.len());
     for (key, count) in truth_of(&stream).pairs() {
         let probe = DataInput::I64(key);
@@ -642,7 +631,6 @@ fn the_default_summary_holds_the_default_capacity() {
     }
 
     assert_eq!(summary.len(), SPACE_SAVING_DEFAULT_CAPACITY);
-    assert_eq!(summary.total(), stream.len() as u64);
     assert_eq!(
         summary.top_k(usize::MAX).len(),
         SPACE_SAVING_DEFAULT_CAPACITY

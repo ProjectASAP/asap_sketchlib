@@ -77,7 +77,6 @@ pub struct SpaceSaving<H: SketchHasher = DefaultXxHasher> {
     bucket_head: usize,
     bucket_tail: usize,
     index: Index,
-    total: u64,
     /// Largest count known to have left the summary, so the ceiling on any key
     /// that is no longer monitored.
     discarded_max: u64,
@@ -102,7 +101,6 @@ impl<H: SketchHasher> SpaceSaving<H> {
             bucket_head: NIL,
             bucket_tail: NIL,
             index: Index::with_capacity_and_hasher(capacity, DigestBuildHasher::default()),
-            total: 0,
             discarded_max: 0,
             _hasher: PhantomData,
         }
@@ -124,12 +122,6 @@ impl<H: SketchHasher> SpaceSaving<H> {
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.monitored.is_empty()
-    }
-
-    /// Total weight recorded, monitored or displaced.
-    #[inline(always)]
-    pub fn total(&self) -> u64 {
-        self.total
     }
 
     /// The ceiling on the true count of any key the summary does not monitor.
@@ -156,7 +148,6 @@ impl<H: SketchHasher> SpaceSaving<H> {
         self.bucket_head = NIL;
         self.bucket_tail = NIL;
         self.index.clear();
-        self.total = 0;
         self.discarded_max = 0;
     }
 
@@ -176,7 +167,6 @@ impl<H: SketchHasher> SpaceSaving<H> {
         if weight == 0 {
             return;
         }
-        self.total = self.total.saturating_add(weight);
         let digest = H::hash64_seeded(0, value);
 
         if let Some(cid) = self.find(digest, value) {
@@ -303,8 +293,8 @@ impl<H: SketchHasher> SpaceSaving<H> {
     /// concatenated streams — a key evicted on both sides cannot be recovered.
     ///
     /// The `min_count` a one-sided key picks up is added weight that the stream
-    /// never carried, so the merged counts sum to more than [`Self::total`] and
-    /// an estimate divided by the total is no longer a frequency.
+    /// never carried, so the merged counts can sum to more than the weight both
+    /// streams recorded.
     pub fn merge(&mut self, other: &Self) {
         let mine_min = self.min_count();
         let theirs_min = other.min_count();
@@ -358,9 +348,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
             flat.truncate(self.capacity);
         }
 
-        let total = self.total.saturating_add(other.total);
         self.clear();
-        self.total = total;
         self.discarded_max = discarded_max;
         for entry in flat {
             self.seat(entry.digest, entry.key, entry.count, entry.error);
@@ -558,7 +546,6 @@ fn key_order(key: &OwnedDataInput) -> (u8, u128, &[u8]) {
 /// the key index all follow from them.
 struct SpaceSavingState {
     capacity: usize,
-    total: u64,
     discarded_max: u64,
     entries: Vec<(OwnedDataInput, u64, u64)>,
 }
@@ -569,7 +556,6 @@ impl<H: SketchHasher> SpaceSaving<H> {
     fn rebuilt(&self) -> Result<Self, String> {
         Self::rebuild(SpaceSavingState {
             capacity: self.capacity,
-            total: self.total,
             discarded_max: self.discarded_max,
             entries: self
                 .monitored
@@ -583,8 +569,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
 impl<H: SketchHasher> SpaceSaving<H> {
     /// Rebuilds a summary from decoded triples, rejecting any that no run of
     /// the algorithm could have produced: a duplicate or zero-count key, an
-    /// error above its count, a ceiling above the lowest count, or a total
-    /// under the weight the counters account for.
+    /// error above its count, or a ceiling above the lowest count.
     fn rebuild(state: SpaceSavingState) -> Result<Self, String> {
         if state.capacity == 0 {
             return Err("space-saving capacity is zero".to_string());
@@ -618,7 +603,6 @@ impl<H: SketchHasher> SpaceSaving<H> {
             bucket_head: NIL,
             bucket_tail: NIL,
             index: Index::with_capacity_and_hasher(entries.len(), DigestBuildHasher::default()),
-            total: state.total,
             discarded_max: state.discarded_max,
             _hasher: PhantomData,
         };
@@ -640,17 +624,6 @@ impl<H: SketchHasher> SpaceSaving<H> {
             return Err(format!(
                 "space-saving carries a ceiling of {} above its lowest count of {smallest}",
                 summary.discarded_max
-            ));
-        }
-        let recorded = summary
-            .monitored
-            .iter()
-            .map(|c| summary.buckets[c.bucket].count.saturating_sub(c.error))
-            .fold(0u64, u64::saturating_add);
-        if recorded > summary.total {
-            return Err(format!(
-                "space-saving carries a total of {} under the {recorded} its counters account for",
-                summary.total
             ));
         }
         Ok(summary)
@@ -938,7 +911,6 @@ mod tests {
         assert_eq!(summary.error(&DataInput::I64(3)), 2);
         assert_eq!(summary.estimate(&DataInput::I64(1)), 5);
         assert_eq!(summary.min_count(), 5);
-        assert_eq!(summary.total(), 11);
     }
 
     #[test]
@@ -972,7 +944,6 @@ mod tests {
         assert_eq!(summary.estimate(&DataInput::I64(1)), u64::MAX);
         assert_eq!(summary.estimate(&DataInput::I64(2)), u64::MAX);
         assert_eq!(summary.estimate(&DataInput::I64(3)), 7);
-        assert_eq!(summary.total(), u64::MAX);
         let walked = walk(&summary);
         assert_eq!(walked.len(), 3);
         for pair in walked.windows(2) {
@@ -1014,7 +985,6 @@ mod tests {
 
         left.validate().expect("after a saturating merge");
         assert_eq!(left.len(), 2);
-        assert_eq!(left.total(), u64::MAX);
         for (key, count) in walk(&left) {
             assert_eq!(count, u64::MAX, "key {key} wrapped past the ceiling");
         }
@@ -1225,8 +1195,8 @@ mod tests {
         assert!(summary.is_guaranteed(&DataInput::I64(1)));
     }
 
-    /// `clear` leaves a summary that answers like a fresh one, ceiling and
-    /// total included.
+    /// `clear` leaves a summary that answers like a fresh one, ceiling
+    /// included.
     #[test]
     fn clear_resets_every_answer() {
         let mut summary: SpaceSaving = SpaceSaving::with_capacity(2);
@@ -1238,7 +1208,6 @@ mod tests {
         }
         summary.update(&DataInput::I64(3));
         assert!(summary.min_count() > 0);
-        assert!(summary.total() > 0);
 
         summary.clear();
 
@@ -1246,7 +1215,6 @@ mod tests {
         assert!(summary.is_empty());
         assert_eq!(summary.len(), 0);
         assert_eq!(summary.capacity(), 2);
-        assert_eq!(summary.total(), 0, "clear left the recorded weight behind");
         assert_eq!(summary.min_count(), 0, "clear left the ceiling behind");
         assert_eq!(summary.upper_bound(&DataInput::I64(1)), 0);
         assert_eq!(summary.error(&DataInput::I64(1)), 0);
@@ -1256,7 +1224,6 @@ mod tests {
         summary.update(&DataInput::I64(4));
         summary.validate().expect("after refilling");
         assert_eq!(summary.estimate(&DataInput::I64(4)), 1);
-        assert_eq!(summary.total(), 1);
     }
 
     #[test]
@@ -1430,7 +1397,6 @@ mod tests {
             let (summary, truth) = fuzzed(capacity, 96, 4_000, seed);
             assert_sound_against(&summary, &truth);
             assert_eq!(summary.len(), capacity.min(truth.len()));
-            assert_eq!(summary.total(), truth.values().sum::<u64>());
             let walked = walk(&summary);
             assert_eq!(walked.len(), summary.len());
             for pair in walked.windows(2) {
@@ -1461,7 +1427,6 @@ mod tests {
                 *truth.entry(*key).or_default() += *count;
             }
             assert_sound_against(&left, &truth);
-            assert_eq!(left.total(), truth.values().sum::<u64>());
             assert!(left.len() <= left.capacity());
 
             let mut state = seed;
@@ -1484,7 +1449,6 @@ mod tests {
         decoded.validate().expect("decoded summary");
         assert_eq!(decoded.len(), summary.len());
         assert_eq!(decoded.min_count(), summary.min_count());
-        assert_eq!(decoded.total(), summary.total());
         assert_sound_against(&decoded, &truth);
 
         let mut walked = walk(&decoded);
@@ -1498,7 +1462,6 @@ mod tests {
     fn a_crafted_state_fails_closed() {
         let over_capacity = SpaceSavingState {
             capacity: 1,
-            total: 4,
             discarded_max: 0,
             entries: vec![
                 (OwnedDataInput::I64(1), 2, 0),
@@ -1509,7 +1472,6 @@ mod tests {
             (
                 SpaceSavingState {
                     capacity: 0,
-                    total: 0,
                     discarded_max: 0,
                     entries: Vec::new(),
                 },
@@ -1519,7 +1481,6 @@ mod tests {
             (
                 SpaceSavingState {
                     capacity: 4,
-                    total: 1,
                     discarded_max: 0,
                     entries: vec![(OwnedDataInput::I64(1), 0, 0)],
                 },
@@ -1528,7 +1489,6 @@ mod tests {
             (
                 SpaceSavingState {
                     capacity: 4,
-                    total: 1,
                     discarded_max: 0,
                     entries: vec![(OwnedDataInput::I64(1), 3, 4)],
                 },
@@ -1537,7 +1497,6 @@ mod tests {
             (
                 SpaceSavingState {
                     capacity: 4,
-                    total: 2,
                     discarded_max: 0,
                     entries: vec![
                         (OwnedDataInput::I64(1), 2, 0),
@@ -1549,20 +1508,10 @@ mod tests {
             (
                 SpaceSavingState {
                     capacity: 4,
-                    total: 3,
                     discarded_max: u64::MAX,
                     entries: vec![(OwnedDataInput::I64(1), 3, 0)],
                 },
                 "ceiling of 18446744073709551615 above its lowest count of 3",
-            ),
-            (
-                SpaceSavingState {
-                    capacity: 4,
-                    total: 0,
-                    discarded_max: 0,
-                    entries: vec![(OwnedDataInput::I64(1), 9, 0)],
-                },
-                "total of 0 under the 9",
             ),
         ];
         for (state, expected) in cases {
@@ -1579,7 +1528,6 @@ mod tests {
     fn a_declared_capacity_is_not_allocated_on_decode() {
         let state = SpaceSavingState {
             capacity: 1 << 40,
-            total: 3,
             discarded_max: 0,
             entries: vec![(OwnedDataInput::I64(1), 3, 0)],
         };
@@ -1706,7 +1654,6 @@ mod tests {
         assert_eq!(bytes_of(&decoded), bytes_of(&summary));
         assert_eq!(decoded.estimate(&DataInput::Bytes(RAW)), 9);
         assert_eq!(decoded.estimate(&DataInput::Bytes(&[0x00; 5])), 4);
-        assert_eq!(decoded.total(), summary.total());
     }
 }
 
@@ -1871,7 +1818,6 @@ mod collisions {
 
         let repeated = SpaceSavingState {
             capacity: 4,
-            total: 9,
             discarded_max: 0,
             entries: vec![
                 (OwnedDataInput::I64(10), 5, 0),

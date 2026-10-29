@@ -5,16 +5,18 @@
 //! constant, the `key_type` mapping, and the `to_asapv1` /
 //! `from_asapv1` impls) while the algorithm lives in the parent
 //! module file. Being a descendant module, it reads the summary's private
-//! `monitored` / `buckets` / `total` / `discarded_max` fields and reuses the private
+//! `monitored` / `buckets` / `discarded_max` fields and reuses the private
 //! `rebuild` entry point directly, without widening any field visibility. See
 //! `docs/asapv1_wire_format.md` §3.5.
 //!
-//! Space-Saving is one algorithm — a single kind_id `0x18 0x00`. Its structural
+//! Space-Saving is one algorithm — a single kind_id `0x18 0x01`. Its structural
 //! parameters are the counter `capacity` and the `key_type`, both in the
 //! metadata, so the payload is the answer triples split into parallel arrays
-//! plus the two running scalars: `[keys, counts, errors, total, discarded_max]`. The
-//! bucket list, the counter arena and the key index are all derived and are
-//! rebuilt on load, so no arena index reaches the wire.
+//! plus the ceiling: `[keys, counts, errors, discarded_max]`. The bucket list,
+//! the counter arena and the key index are all derived and are rebuilt on load,
+//! so no arena index reaches the wire. The retired `0x18 0x00` also carried a
+//! `total` before `discarded_max`; it still decodes, with `total` dropped, and
+//! is never encoded.
 //!
 //! ## `key_type` names the exact `OwnedDataInput` variant
 //!
@@ -44,11 +46,12 @@
 //! in, and re-serializing a decoded summary reproduces its bytes exactly.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
-use crate::asapv1::kind::SPACE_SAVING;
+use crate::asapv1::kind::{SPACE_SAVING, SPACE_SAVING_WITH_TOTAL};
 use crate::asapv1::wire_key::{WireBytes, WireString, exact_vec};
 use crate::{HashProfile, OwnedDataInput, SketchHasher};
 
@@ -119,10 +122,10 @@ fn space_saving_metadata<H: HashProfile>(capacity: u32, key_type: &str) -> Space
 }
 
 /// Space-Saving payload (ASAPv1 §3.5), a msgpack **array** (`to_vec`,
-/// positional): `[keys, counts, errors, total, discarded_max]`. The three arrays are
+/// positional): `[keys, counts, errors, discarded_max]`. The three arrays are
 /// parallel and equal-length; `keys`'s element type is fixed by the metadata
-/// `key_type`. `total` is the recorded weight, `discarded_max` the largest count known
-/// to have left the summary.
+/// `key_type`. `discarded_max` is the largest count known to have left the
+/// summary.
 #[derive(Debug, Serialize, Deserialize)]
 struct SpaceSavingPayload<K> {
     #[serde(
@@ -132,8 +135,39 @@ struct SpaceSavingPayload<K> {
     keys: Vec<K>,
     counts: Vec<u64>,
     errors: Vec<u64>,
+    discarded_max: u64,
+}
+
+/// The retired `0x18 0x00` payload, `[keys, counts, errors, total,
+/// discarded_max]`: decoded only, and `total` is dropped.
+#[derive(Debug, Serialize, Deserialize)]
+struct SpaceSavingPayloadWithTotal<K> {
+    #[serde(
+        deserialize_with = "exact_vec",
+        bound(deserialize = "K: Deserialize<'de>")
+    )]
+    keys: Vec<K>,
+    counts: Vec<u64>,
+    errors: Vec<u64>,
     total: u64,
     discarded_max: u64,
+}
+
+/// Reads the current payload, or the retired one with `total` dropped.
+fn read_payload<K: DeserializeOwned>(
+    payload: &[u8],
+    with_total: bool,
+) -> Result<SpaceSavingPayload<K>, RmpDecodeError> {
+    if !with_total {
+        return envelope::decode_block(payload);
+    }
+    let retired: SpaceSavingPayloadWithTotal<K> = envelope::decode_block(payload)?;
+    Ok(SpaceSavingPayload {
+        keys: retired.keys,
+        counts: retired.counts,
+        errors: retired.errors,
+        discarded_max: retired.discarded_max,
+    })
 }
 
 /// The `key_type` the payload will be written in, taken from the first key in
@@ -181,7 +215,6 @@ fn check_wire_entries<'a>(
 fn encode_payload(
     key_type: &str,
     entries: &[(&OwnedDataInput, u64, u64)],
-    total: u64,
     discarded_max: u64,
 ) -> Result<Vec<u8>, RmpEncodeError> {
     let counts: Vec<u64> = entries.iter().map(|entry| entry.1).collect();
@@ -200,7 +233,6 @@ fn encode_payload(
                 keys,
                 counts,
                 errors,
-                total,
                 discarded_max,
             })
         }};
@@ -231,7 +263,6 @@ fn encode_payload(
                 keys,
                 counts,
                 errors,
-                total,
                 discarded_max,
             })
         }
@@ -247,7 +278,6 @@ fn encode_payload(
                 keys,
                 counts,
                 errors,
-                total,
                 discarded_max,
             })
         }
@@ -257,18 +287,20 @@ fn encode_payload(
     }
 }
 
-/// Reads the payload with `keys` typed by the metadata `key_type` and assembles
-/// the state the in-memory rebuild consumes. Rejects an unknown `key_type` and
+/// Reads the payload (the retired one when `with_total`) with `keys` typed by
+/// the metadata `key_type` and assembles the state the in-memory rebuild
+/// consumes. Rejects an unknown `key_type` and
 /// parallel arrays of unequal length; a `keys` array whose msgpack types do not
 /// match `key_type` fails to decode.
 fn decode_payload(
     key_type: &str,
     capacity: usize,
     payload: &[u8],
+    with_total: bool,
 ) -> Result<SpaceSavingState, RmpDecodeError> {
     macro_rules! unpack {
         ($variant:ident, $ty:ty) => {{
-            let decoded: SpaceSavingPayload<$ty> = envelope::decode_block(payload)?;
+            let decoded: SpaceSavingPayload<$ty> = read_payload(payload, with_total)?;
             (
                 decoded
                     .keys
@@ -277,13 +309,12 @@ fn decode_payload(
                     .collect::<Vec<OwnedDataInput>>(),
                 decoded.counts,
                 decoded.errors,
-                decoded.total,
                 decoded.discarded_max,
             )
         }};
     }
 
-    let (keys, counts, errors, total, discarded_max) = match key_type {
+    let (keys, counts, errors, discarded_max) = match key_type {
         "i8" => unpack!(I8, i8),
         "i16" => unpack!(I16, i16),
         "i32" => unpack!(I32, i32),
@@ -297,7 +328,7 @@ fn decode_payload(
         "f32" => unpack!(F32, f32),
         "f64" => unpack!(F64, f64),
         "string" => {
-            let decoded: SpaceSavingPayload<WireString> = envelope::decode_block(payload)?;
+            let decoded: SpaceSavingPayload<WireString> = read_payload(payload, with_total)?;
             (
                 decoded
                     .keys
@@ -306,12 +337,11 @@ fn decode_payload(
                     .collect::<Vec<OwnedDataInput>>(),
                 decoded.counts,
                 decoded.errors,
-                decoded.total,
                 decoded.discarded_max,
             )
         }
         "bytes" => {
-            let decoded: SpaceSavingPayload<WireBytes> = envelope::decode_block(payload)?;
+            let decoded: SpaceSavingPayload<WireBytes> = read_payload(payload, with_total)?;
             (
                 decoded
                     .keys
@@ -320,7 +350,6 @@ fn decode_payload(
                     .collect::<Vec<OwnedDataInput>>(),
                 decoded.counts,
                 decoded.errors,
-                decoded.total,
                 decoded.discarded_max,
             )
         }
@@ -343,7 +372,6 @@ fn decode_payload(
 
     Ok(SpaceSavingState {
         capacity,
-        total,
         discarded_max,
         entries: keys
             .into_iter()
@@ -359,7 +387,7 @@ fn decode_payload(
 // directly.
 impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
     /// Serializes the summary into an ASAPv1 MessagePack envelope
-    /// (kind_id `0x18 0x00`). The metadata is derived from the hasher's
+    /// (kind_id `0x18 0x01`). The metadata is derived from the hasher's
     /// [`HashProfile`], so it truthfully describes how the keys were hashed.
     ///
     /// Fails when the monitored keys mix [`OwnedDataInput`] variants, when any of
@@ -377,11 +405,13 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
             .map_err(RmpEncodeError::Syntax)?;
         let key_type = wire_key_type(&entries)?;
         let metadata = rmp_serde::to_vec_named(&space_saving_metadata::<H>(capacity, key_type))?;
-        let payload = encode_payload(key_type, &entries, self.total, self.discarded_max)?;
+        let payload = encode_payload(key_type, &entries, self.discarded_max)?;
         Ok(envelope::encode(kind::SPACE_SAVING, &metadata, &payload))
     }
 
-    /// Deserializes a summary from an ASAPv1 MessagePack envelope. `capacity`
+    /// Deserializes a summary from an ASAPv1 MessagePack envelope: kind_id
+    /// `0x18 0x01`, or the retired `0x18 0x00` with its `total` read and
+    /// dropped. `capacity`
     /// and `key_type` are structural (they are properties of the stored
     /// summary, not of the target), so they are echoed back into the expected
     /// metadata; the hash spec is pinned against this target's profile.
@@ -392,9 +422,10 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
         let (kind_id, metadata, payload) =
             envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
-        if kind_id != kind::SPACE_SAVING {
+        let with_total = kind_id == kind::SPACE_SAVING_WITH_TOTAL;
+        if kind_id != kind::SPACE_SAVING && !with_total {
             return Err(RmpDecodeError::Uncategorized(format!(
-                "Space-Saving kind_id mismatch: stored {kind_id:?}, expected {SPACE_SAVING:?}"
+                "Space-Saving kind_id mismatch: stored {kind_id:?}, expected {SPACE_SAVING:?} (or the retired {SPACE_SAVING_WITH_TOTAL:?})"
             )));
         }
         let meta: SpaceSavingMetadata = envelope::decode_block(metadata)?;
@@ -403,7 +434,7 @@ impl<H: SketchHasher + HashProfile> SpaceSaving<H> {
                 "ASAPv1 Space-Saving envelope: metadata mismatch".to_string(),
             ));
         }
-        let state = decode_payload(&meta.key_type, meta.capacity as usize, payload)?;
+        let state = decode_payload(&meta.key_type, meta.capacity as usize, payload, with_total)?;
         check_wire_entries(state.entries.iter().map(|entry| (&entry.0, entry.1)))
             .map_err(RmpDecodeError::Uncategorized)?;
         Self::rebuild(state).map_err(RmpDecodeError::Uncategorized)
@@ -453,7 +484,7 @@ mod tests {
         assert!(bytes.starts_with(envelope::MAGIC));
         assert_eq!(bytes[6], envelope::VERSION);
         assert_eq!(bytes[7], 2, "kind_id_len");
-        assert_eq!(&bytes[8..10], &[0x18, 0x00], "Space-Saving kind_id");
+        assert_eq!(&bytes[8..10], &[0x18, 0x01], "Space-Saving kind_id");
 
         let meta = metadata_of(&bytes);
         assert_eq!(meta.metadata_version, 1);
@@ -463,7 +494,6 @@ mod tests {
         let (_, _, payload) = envelope::split(&bytes).expect("split");
         let emitted: SpaceSavingPayload<i64> = from_slice(payload).expect("payload");
         assert_eq!(emitted.counts.len(), summary.len());
-        assert_eq!(emitted.total, summary.total());
         for pair in emitted.counts.windows(2) {
             assert!(pair[0] >= pair[1], "the emitted counts are not descending");
         }
@@ -481,7 +511,6 @@ mod tests {
 
         assert_eq!(decoded.len(), summary.len());
         assert_eq!(decoded.capacity(), summary.capacity());
-        assert_eq!(decoded.total(), summary.total());
         assert_eq!(decoded.min_count(), summary.min_count());
 
         let mut monitored = 0;
@@ -556,7 +585,6 @@ mod tests {
         assert_eq!(decoded.len(), 0);
         assert_eq!(decoded.capacity(), 16);
         assert_eq!(decoded.min_count(), 0);
-        assert_eq!(decoded.total(), 0);
         assert_eq!(decoded.to_asapv1().expect("re-serialize"), bytes);
     }
 
@@ -702,14 +730,12 @@ mod tests {
 
         let seated = SpaceSaving::<DefaultXxHasher>::rebuild(SpaceSavingState {
             capacity: 4,
-            total: 28,
             discarded_max: 0,
             entries,
         })
         .expect("rebuild");
         let reseated = SpaceSaving::<DefaultXxHasher>::rebuild(SpaceSavingState {
             capacity: 4,
-            total: 28,
             discarded_max: 0,
             entries: reversed,
         })
@@ -908,7 +934,6 @@ mod tests {
         keys: Vec<u64>,
         counts: Vec<u64>,
         errors: Vec<u64>,
-        total: u64,
         discarded_max: u64,
     ) -> Vec<u8> {
         let metadata =
@@ -918,11 +943,59 @@ mod tests {
             keys,
             counts,
             errors,
-            total,
             discarded_max,
         })
         .expect("payload");
         envelope::encode(kind::SPACE_SAVING, &metadata, &payload)
+    }
+
+    /// The retired `0x18 0x00` decodes with its `total` dropped, whatever that
+    /// total was, and re-encodes as `0x18 0x01`. Each kind reads only its own
+    /// payload shape.
+    #[test]
+    fn space_saving_decodes_the_retired_kind_with_total() {
+        let metadata = rmp_serde::to_vec_named(&space_saving_metadata::<DefaultXxHasher>(4, "u64"))
+            .expect("metadata");
+        let retired_payload = |total: u64| {
+            rmp_serde::to_vec(&SpaceSavingPayloadWithTotal::<u64> {
+                keys: vec![7, 8],
+                counts: vec![9, 4],
+                errors: vec![0, 1],
+                total,
+                discarded_max: 0,
+            })
+            .expect("payload")
+        };
+        let current = crafted(4, vec![7, 8], vec![9, 4], vec![0, 1], 0);
+        // `0` sits under the 12 the counters account for, which the retired
+        // decode rule 10 rejected; there is no such rule now.
+        for total in [13, 0, u64::MAX] {
+            let retired = envelope::encode(
+                kind::SPACE_SAVING_WITH_TOTAL,
+                &metadata,
+                &retired_payload(total),
+            );
+            let decoded =
+                SpaceSaving::<DefaultXxHasher>::from_asapv1(&retired).expect("retired decodes");
+            assert_eq!(decoded.estimate(&DataInput::U64(7)), 9);
+            assert_eq!(decoded.error(&DataInput::U64(8)), 1);
+            assert_eq!(decoded.to_asapv1().expect("re-encode"), current);
+        }
+
+        let mislabelled = [
+            envelope::encode(kind::SPACE_SAVING, &metadata, &retired_payload(13)),
+            envelope::encode(
+                kind::SPACE_SAVING_WITH_TOTAL,
+                &metadata,
+                envelope::split(&current).expect("split").2,
+            ),
+        ];
+        for bytes in mislabelled {
+            assert!(
+                SpaceSaving::<DefaultXxHasher>::from_asapv1(&bytes).is_err(),
+                "a payload read under the other kind's shape must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -935,7 +1008,6 @@ mod tests {
                 keys: vec![1],
                 counts: vec![1],
                 errors: vec![0],
-                total: 1,
                 discarded_max: 0,
             })
             .expect("payload");
@@ -945,40 +1017,34 @@ mod tests {
         let (foreign_meta, foreign_payload) = relabelled("u64");
 
         let cases: Vec<(Vec<u8>, &str)> = vec![
+            (crafted(0, vec![1], vec![2], vec![0], 0), "capacity is zero"),
             (
-                crafted(0, vec![1], vec![2], vec![0], 2, 0),
-                "capacity is zero",
-            ),
-            (
-                crafted(1, vec![1, 2], vec![2, 2], vec![0, 0], 4, 0),
+                crafted(1, vec![1, 2], vec![2, 2], vec![0, 0], 0),
                 "over a capacity of 1",
             ),
             (
-                crafted(4, vec![1, 2], vec![2], vec![0, 0], 2, 0),
+                crafted(4, vec![1, 2], vec![2], vec![0, 0], 0),
                 "2 keys against 1 counts",
             ),
             (
-                crafted(4, vec![1, 2], vec![2, 2], vec![0], 4, 0),
+                crafted(4, vec![1, 2], vec![2, 2], vec![0], 0),
                 "2 counts and 1 errors",
             ),
+            (crafted(4, vec![1], vec![0], vec![0], 0), "counter at zero"),
             (
-                crafted(4, vec![1], vec![0], vec![0], 0, 0),
-                "counter at zero",
-            ),
-            (
-                crafted(4, vec![1], vec![3], vec![4], 3, 0),
+                crafted(4, vec![1], vec![3], vec![4], 0),
                 "error of 4 against a count of 3",
             ),
             (
-                crafted(4, vec![1, 1], vec![2, 1], vec![0, 0], 3, 0),
+                crafted(4, vec![1, 1], vec![2, 1], vec![0, 0], 0),
                 "the same key appears twice",
             ),
             (
-                crafted(4, vec![1, 2], vec![2, 3], vec![0, 0], 5, 0),
+                crafted(4, vec![1, 2], vec![2, 3], vec![0, 0], 0),
                 "not in descending count, ties by key",
             ),
             (
-                crafted(4, vec![2, 1], vec![2, 2], vec![0, 0], 4, 0),
+                crafted(4, vec![2, 1], vec![2, 2], vec![0, 0], 0),
                 "not in descending count, ties by key",
             ),
             (
@@ -986,12 +1052,8 @@ mod tests {
                 "is not an ASAPv1 wire key type",
             ),
             (
-                crafted(4, vec![1], vec![3], vec![0], 3, u64::MAX),
+                crafted(4, vec![1], vec![3], vec![0], u64::MAX),
                 "ceiling of 18446744073709551615 above its lowest count of 3",
-            ),
-            (
-                crafted(4, vec![1], vec![9], vec![0], 0, 0),
-                "total of 0 under the 9",
             ),
             (
                 envelope::encode(&[0x02, 0x00], &foreign_meta, &foreign_payload),
@@ -1019,12 +1081,10 @@ mod tests {
                 rmp_serde::to_vec_named(&space_saving_metadata::<DefaultXxHasher>(4, key_type))
                     .expect("metadata");
             let errors = vec![0; keys.len()];
-            let total = counts.iter().sum();
             let payload = rmp_serde::to_vec(&SpaceSavingPayload {
                 keys,
                 counts,
                 errors,
-                total,
                 discarded_max: 0,
             })
             .expect("payload");
@@ -1043,7 +1103,6 @@ mod tests {
         let nan = |count: u64| (OwnedDataInput::F64(f64::NAN), count, 0);
         let twice = SpaceSaving::<DefaultXxHasher>::rebuild(SpaceSavingState {
             capacity: 4,
-            total: 5,
             discarded_max: 0,
             entries: vec![nan(3), nan(2)],
         })
@@ -1060,7 +1119,6 @@ mod tests {
             keys: vec![f64::NAN, f64::NAN],
             counts: vec![3, 2],
             errors: vec![0, 0],
-            total: 5,
             discarded_max: 0,
         })
         .expect("payload");
@@ -1080,7 +1138,6 @@ mod tests {
     fn space_saving_refuses_a_capacity_the_metadata_cannot_carry() {
         let summary = SpaceSaving::<DefaultXxHasher>::rebuild(SpaceSavingState {
             capacity: 1 << 40,
-            total: 3,
             discarded_max: 0,
             entries: vec![(OwnedDataInput::U64(1), 3, 0)],
         })
@@ -1101,7 +1158,7 @@ mod tests {
     /// counters would be tens of gigabytes if it sized the arena.
     #[test]
     fn space_saving_does_not_allocate_a_declared_capacity() {
-        let bytes = crafted(u32::MAX, vec![7, 8], vec![9, 4], vec![0, 1], 13, 0);
+        let bytes = crafted(u32::MAX, vec![7, 8], vec![9, 4], vec![0, 1], 0);
         let decoded = SpaceSaving::<DefaultXxHasher>::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.capacity(), u32::MAX as usize);
         assert_eq!(decoded.len(), 2);
@@ -1120,12 +1177,11 @@ mod tests {
     fn known_state_matches_golden() {
         use crate::asapv1::envelope::hex;
 
-        let summary = |capacity, total, discarded_max, emitted: Vec<(OwnedDataInput, u64, u64)>| {
+        let summary = |capacity, discarded_max, emitted: Vec<(OwnedDataInput, u64, u64)>| {
             let mut entries = emitted;
             entries.reverse();
             SpaceSaving::<DefaultXxHasher>::rebuild(SpaceSavingState {
                 capacity,
-                total,
                 discarded_max,
                 entries,
             })
@@ -1142,20 +1198,20 @@ mod tests {
         ]
         .map(|(key, count, error)| (OwnedDataInput::I64(key), count, error));
         let golden = hex(include_str!(
-            "../../../asapv1_golden/space_saving_i64_c8.hex"
+            "../../../asapv1_golden/space_saving_nototal_i64_c8.hex"
         ));
         assert_eq!(
-            summary(8, 70030, 4, i64_keys.to_vec()).to_asapv1().unwrap(),
+            summary(8, 4, i64_keys.to_vec()).to_asapv1().unwrap(),
             golden
         );
 
         let byte_keys = [(&b"\xff\x00"[..], 9, 0), (b"", 4, 1), (b"ab", 4, 0)]
             .map(|(key, count, error)| (OwnedDataInput::Bytes(key.to_vec()), count, error));
         let golden = hex(include_str!(
-            "../../../asapv1_golden/space_saving_bytes_c3.hex"
+            "../../../asapv1_golden/space_saving_nototal_bytes_c3.hex"
         ));
         assert_eq!(
-            summary(3, 20, 3, byte_keys.to_vec()).to_asapv1().unwrap(),
+            summary(3, 3, byte_keys.to_vec()).to_asapv1().unwrap(),
             golden
         );
     }
