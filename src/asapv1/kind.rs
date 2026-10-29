@@ -3,7 +3,11 @@
 pub(crate) const HLL_FAMILY: u8 = 0x01;
 pub(crate) const HLL_CLASSIC: &[u8] = &[HLL_FAMILY, 0x01];
 pub(crate) const HLL_ERTL: &[u8] = &[HLL_FAMILY, 0x02];
-pub(crate) const HLL_HIP: &[u8] = &[HLL_FAMILY, 0x03];
+/// HLL HIP: the registers and the running estimate (spec §3.1).
+pub(crate) const HLL_HIP: &[u8] = &[HLL_FAMILY, 0x04];
+/// Retired HLL HIP kind that also carried `kxq0` / `kxq1`: decoded, with
+/// those two recomputed from the registers, and never encoded.
+pub(crate) const HLL_HIP_WITH_KXQ: &[u8] = &[HLL_FAMILY, 0x03];
 pub(crate) const HLL_CLASSIC_DELTA: &[u8] = &[HLL_FAMILY, 0x81];
 pub(crate) const HLL_ERTL_DELTA: &[u8] = &[HLL_FAMILY, 0x82];
 pub(crate) const COUNT_MIN: &[u8] = &[0x02, 0x00];

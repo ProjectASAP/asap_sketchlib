@@ -49,9 +49,20 @@ pub(crate) struct HllPayloadPlain {
     pub(crate) registers: Vec<u8>,
 }
 
-/// HIP payload: the register bin plus the three HIP running scalars.
+/// HIP payload (`01 04`): the register bin plus the running HIP estimate.
+/// `kxq0` / `kxq1` are derived from the registers and not carried.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct HllPayloadHip {
+    #[serde(with = "serde_bytes")]
+    pub(crate) registers: Vec<u8>,
+    #[serde(deserialize_with = "exact")]
+    pub(crate) hip_est: f64,
+}
+
+/// The retired HIP payload (`01 03`), decode-only: the register bin, then
+/// `kxq0`, `kxq1` and the estimate. The two sums are read and dropped.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct HllPayloadHipWithKxq {
     #[serde(with = "serde_bytes")]
     pub(crate) registers: Vec<u8>,
     #[serde(deserialize_with = "exact")]
@@ -253,27 +264,41 @@ impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
         let metadata = encode_metadata::<Registers, DefaultXxHasher>(self.admission_rate)?;
         let payload = rmp_serde::to_vec(&HllPayloadHip {
             registers,
-            hip_kxq0: self.kxq0,
-            hip_kxq1: self.kxq1,
             hip_est: self.est,
         })?;
         Ok(envelope::encode(kind::HLL_HIP, &metadata, &payload))
     }
 
-    /// Deserializes a sketch from an ASAPv1 MessagePack envelope.
+    /// Deserializes a sketch from an ASAPv1 MessagePack envelope: the current
+    /// `01 04`, or the retired `01 03`, whose `kxq0` / `kxq1` are dropped.
+    /// Both are recomputed from the registers either way.
     pub fn from_asapv1(bytes: &[u8]) -> Result<Self, RmpDecodeError> {
+        let (stored_kind, _, _) = envelope::split(bytes).map_err(RmpDecodeError::Uncategorized)?;
+        let retired = stored_kind == kind::HLL_HIP_WITH_KXQ;
+        let expected_kind = if retired {
+            kind::HLL_HIP_WITH_KXQ
+        } else {
+            kind::HLL_HIP
+        };
         let (payload, admission_rate) = validated_hll_payload::<DefaultXxHasher>(
             bytes,
-            kind::HLL_HIP,
+            expected_kind,
             Registers::PRECISION as u32,
         )?;
-        let payload: HllPayloadHip = envelope::decode_block(payload)?;
-        let registers = registers_from_bytes::<Registers>(&payload.registers)?;
+        let (registers, est) = if retired {
+            let payload: HllPayloadHipWithKxq = envelope::decode_block(payload)?;
+            (payload.registers, payload.hip_est)
+        } else {
+            let payload: HllPayloadHip = envelope::decode_block(payload)?;
+            (payload.registers, payload.hip_est)
+        };
+        let registers = registers_from_bytes::<Registers>(&registers)?;
+        let (kxq0, kxq1) = super::hip_kxq(registers.as_slice());
         Ok(Self {
             registers,
-            kxq0: payload.hip_kxq0,
-            kxq1: payload.hip_kxq1,
-            est: payload.hip_est,
+            kxq0,
+            kxq1,
+            est,
             admission_rate,
         })
     }
@@ -456,14 +481,11 @@ mod tests {
                 admission_rate: 1.0,
             }
         }
-        fn hip<R: HllRegisterStorage>(
-            regs: &[u8],
-            kxq0: f64,
-            kxq1: f64,
-            est: f64,
-        ) -> HyperLogLogHipImpl<R> {
+        fn hip<R: HllRegisterStorage>(regs: &[u8], est: f64) -> HyperLogLogHipImpl<R> {
+            let registers: R = registers_from_bytes(regs).expect("registers");
+            let (kxq0, kxq1) = super::super::hip_kxq(registers.as_slice());
             HyperLogLogHipImpl {
-                registers: registers_from_bytes(regs).expect("registers"),
+                registers,
                 kxq0,
                 kxq1,
                 est,
@@ -492,41 +514,49 @@ mod tests {
         let decoded = HyperLogLogImpl::<Ertl, HllRegistersP12>::from_asapv1(&ertl).unwrap();
         assert_eq!(decoded.registers.as_slice(), p12.as_slice());
 
-        for (golden, regs, state) in [
-            (
-                hex(include_str!("../../../asapv1_golden/hll_hip_p12.hex")),
-                &p12,
-                (1.5, 2.5, 3.0),
-            ),
-            (
-                hex(include_str!("../../../asapv1_golden/hll_hip_p14.hex")),
-                &p14,
-                (16380.5, 0.25, 4.125),
-            ),
-        ] {
-            let (kxq0, kxq1, est) = state;
-            let encoded = if regs.len() == 4096 {
-                hip::<HllRegistersP12>(regs, kxq0, kxq1, est)
-                    .to_asapv1()
-                    .unwrap()
-            } else {
-                hip::<HllRegistersP14>(regs, kxq0, kxq1, est)
-                    .to_asapv1()
-                    .unwrap()
-            };
-            assert_eq!(encoded, golden);
-        }
-        let hip_p14 = hex(include_str!("../../../asapv1_golden/hll_hip_p14.hex"));
+        // The current `01 04` fixtures: the registers and the estimate.
+        let hip_p12 = hex(include_str!("../../../asapv1_golden/hll_hip_est_p12.hex"));
+        let hip_p14 = hex(include_str!("../../../asapv1_golden/hll_hip_est_p14.hex"));
+        assert_eq!(
+            hip::<HllRegistersP12>(&p12, 3.0).to_asapv1().unwrap(),
+            hip_p12
+        );
+        assert_eq!(
+            hip::<HllRegistersP14>(&p14, 4.125).to_asapv1().unwrap(),
+            hip_p14
+        );
+        let decoded = HyperLogLogHipImpl::<HllRegistersP12>::from_asapv1(&hip_p12).unwrap();
+        assert_eq!(decoded.registers.as_slice(), p12.as_slice());
+        assert_eq!(decoded.est, 3.0);
         let decoded = HyperLogLogHipImpl::<HllRegistersP14>::from_asapv1(&hip_p14).unwrap();
+        assert_eq!(decoded.registers.as_slice(), p14.as_slice());
+        assert_eq!(decoded.est, 4.125);
+
+        // The retired `01 03` fixtures carry `kxq0` / `kxq1` values no
+        // register state produces; decoding drops them for the sums over the
+        // registers and keeps the estimate.
+        let retired = hex(include_str!("../../../asapv1_golden/hll_hip_p12.hex"));
+        let decoded = HyperLogLogHipImpl::<HllRegistersP12>::from_asapv1(&retired).unwrap();
+        assert_eq!(decoded.registers.as_slice(), p12.as_slice());
+        assert_eq!(
+            (decoded.kxq0, decoded.kxq1, decoded.est),
+            (
+                4092.0 + 0.5 + 2f64.powi(-7) + 2f64.powi(-3),
+                2f64.powi(-42),
+                3.0
+            )
+        );
+        let retired = hex(include_str!("../../../asapv1_golden/hll_hip_p14.hex"));
+        let decoded = HyperLogLogHipImpl::<HllRegistersP14>::from_asapv1(&retired).unwrap();
         assert_eq!(decoded.registers.as_slice(), p14.as_slice());
         assert_eq!(
             (decoded.kxq0, decoded.kxq1, decoded.est),
-            (16380.5, 0.25, 4.125)
+            (
+                16380.0 + 0.5 + 2f64.powi(-7),
+                2f64.powi(-42) + 2f64.powi(-51),
+                4.125
+            )
         );
-        let hip_p12 = hex(include_str!("../../../asapv1_golden/hll_hip_p12.hex"));
-        let decoded = HyperLogLogHipImpl::<HllRegistersP12>::from_asapv1(&hip_p12).unwrap();
-        assert_eq!(decoded.registers.as_slice(), p12.as_slice());
-        assert_eq!((decoded.kxq0, decoded.kxq1, decoded.est), (1.5, 2.5, 3.0));
     }
 
     #[test]
@@ -563,9 +593,9 @@ mod tests {
 
         let decoded = HyperLogLogHip::from_asapv1(&bytes).expect("decode");
         assert_eq!(decoded.registers.as_slice(), sketch.registers.as_slice());
-        assert_eq!(decoded.kxq0, sketch.kxq0);
-        assert_eq!(decoded.kxq1, sketch.kxq1);
-        assert_eq!(decoded.est, sketch.est);
+        assert_eq!(decoded.kxq0.to_bits(), sketch.kxq0.to_bits());
+        assert_eq!(decoded.kxq1.to_bits(), sketch.kxq1.to_bits());
+        assert_eq!(decoded.est.to_bits(), sketch.est.to_bits());
     }
 
     // A test-only custom hasher: it hashes exactly like `DefaultXxHasher`
@@ -758,21 +788,28 @@ mod tests {
 
         // The HIP payload carries the same bin and is held to the same bound.
         let metadata = rmp_serde::to_vec_named(&standard_hll_metadata(14)).expect("meta");
-        let payload = rmp_serde::to_vec(&HllPayloadHip {
+        let current = rmp_serde::to_vec(&HllPayloadHip {
+            registers: bin(p14, P14_MAX + 1),
+            hip_est: 0.0,
+        })
+        .expect("payload");
+        let retired = rmp_serde::to_vec(&HllPayloadHipWithKxq {
             registers: bin(p14, P14_MAX + 1),
             hip_kxq0: p14 as f64,
             hip_kxq1: 0.0,
             hip_est: 0.0,
         })
         .expect("payload");
-        let over = envelope::encode(kind::HLL_HIP, &metadata, &payload);
-        let problem = HyperLogLogHip::from_asapv1(&over)
-            .expect_err("a register past the maximum rank must be rejected")
-            .to_string();
-        assert!(
-            problem.contains("exceeds the maximum rank 51"),
-            "got {problem}"
-        );
+        for (kind_id, payload) in [(kind::HLL_HIP, current), (kind::HLL_HIP_WITH_KXQ, retired)] {
+            let over = envelope::encode(kind_id, &metadata, &payload);
+            let problem = HyperLogLogHip::from_asapv1(&over)
+                .expect_err("a register past the maximum rank must be rejected")
+                .to_string();
+            assert!(
+                problem.contains("exceeds the maximum rank 51"),
+                "got {problem}"
+            );
+        }
     }
 
     /// The encode path holds the same bound: `apply_delta` takes an arbitrary
@@ -854,5 +891,152 @@ mod tests {
             HyperLogLog::<Classic>::from_asapv1(&bytes).is_err(),
             "HIP bytes must be rejected by a Classic decoder"
         );
+    }
+
+    /// `(kxq0, kxq1)` summed from scratch over `registers`: `2^-r` for each
+    /// register `r`, split at `r < 32` exactly as `update_with_hash` splits it.
+    fn summed_kxq(registers: &[u8]) -> (f64, f64) {
+        let low: f64 = registers
+            .iter()
+            .filter(|&&r| r < 32)
+            .map(|&r| 1.0 / ((1_u64 << r) as f64))
+            .sum();
+        let high: f64 = registers
+            .iter()
+            .filter(|&&r| r >= 32)
+            .map(|&r| 1.0 / ((1_u64 << r) as f64))
+            .sum();
+        (low, high)
+    }
+
+    /// The HIP payload: the register bin, then the running estimate, and
+    /// nothing else. `kxq0` / `kxq1` are derived from the registers and are
+    /// not carried.
+    #[test]
+    fn hip_encodes_registers_and_estimate_only() {
+        let mut sketch = HyperLogLogHipP12::new();
+        for value in 0..500 {
+            sketch.update(&DataInput::U64(value));
+        }
+        let bytes = sketch.to_asapv1().expect("serialize");
+        let (kind_id, _, payload) = envelope::split(&bytes).expect("split");
+        assert_eq!(kind_id, [0x01, 0x04]);
+        let (registers, est): (serde_bytes::ByteBuf, f64) =
+            rmp_serde::from_slice(payload).expect("two-field payload");
+        assert_eq!(registers.as_slice(), sketch.registers.as_slice());
+        assert_eq!(est.to_bits(), sketch.est.to_bits());
+    }
+
+    /// The retired `01 03` payload still decodes: its `kxq0` / `kxq1` are read
+    /// and dropped, recomputed from the registers, and the result re-encodes
+    /// under the current kind. The golden carries `kxq0 = 1.5, kxq1 = 2.5`,
+    /// which no register state produces, so a kept value would show.
+    #[test]
+    fn retired_hip_kind_decodes_with_kxq_recomputed() {
+        let retired = envelope::hex(include_str!("../../../asapv1_golden/hll_hip_p12.hex"));
+        assert_eq!(&retired[8..10], [0x01, 0x03]);
+        let decoded = HyperLogLogHipP12::from_asapv1(&retired).expect("decode retired");
+        let (kxq0, kxq1) = summed_kxq(decoded.registers.as_slice());
+        assert_eq!(decoded.kxq0.to_bits(), kxq0.to_bits());
+        assert_eq!(decoded.kxq1.to_bits(), kxq1.to_bits());
+        assert_eq!(decoded.est, 3.0);
+        let reencoded = decoded.to_asapv1().expect("re-encode");
+        assert_eq!(&reencoded[8..10], [0x01, 0x04]);
+    }
+
+    /// Each kind id fixes its payload length: the two-field `01 04` payload
+    /// under the retired id, or the four-field `01 03` payload under the
+    /// current one, is rejected.
+    #[test]
+    fn hip_payload_must_match_its_kind_field_count() {
+        let current = envelope::hex(include_str!("../../../asapv1_golden/hll_hip_est_p12.hex"));
+        let retired = envelope::hex(include_str!("../../../asapv1_golden/hll_hip_p12.hex"));
+        let (_, current_metadata, current_payload) = envelope::split(&current).expect("split");
+        let (_, retired_metadata, retired_payload) = envelope::split(&retired).expect("split");
+        let two_fields_as_retired =
+            envelope::encode(kind::HLL_HIP_WITH_KXQ, current_metadata, current_payload);
+        let four_fields_as_current =
+            envelope::encode(kind::HLL_HIP, retired_metadata, retired_payload);
+        assert!(HyperLogLogHipP12::from_asapv1(&two_fields_as_retired).is_err());
+        assert!(HyperLogLogHipP12::from_asapv1(&four_fields_as_current).is_err());
+    }
+
+    /// The hash that raises register `bucket` to rank `rank` (`1..=R + 1`,
+    /// `R` the rank hash bits).
+    fn hash_placing<Registers: HllRegisterStorage>(bucket: usize, rank: u8) -> u64 {
+        let rank_bits = Registers::RANK_HASH_BITS as u32;
+        let rank_part = if u32::from(rank) > rank_bits {
+            0
+        } else {
+            1u64 << (rank_bits - u32::from(rank))
+        };
+        ((bucket as u64) << rank_bits) | rank_part
+    }
+
+    /// The hashes a test stream feeds: a SplitMix64 run, so most ranks are
+    /// small, with every 7th hash placed at a rank of 32 or more so the
+    /// `kxq1` side fills too.
+    fn hip_stream<Registers: HllRegisterStorage>(len: usize, seed: u64) -> Vec<u64> {
+        let max_rank = (Registers::RANK_HASH_BITS + 1) as u64;
+        let mut state = seed;
+        (0..len)
+            .map(|i| {
+                state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                let mut z = state;
+                z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+                z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+                z ^= z >> 31;
+                if i % 7 == 0 {
+                    let bucket = (z as usize) % Registers::NUM_REGISTERS;
+                    let rank = 32 + (z >> 40) % (max_rank - 31);
+                    hash_placing::<Registers>(bucket, rank as u8)
+                } else {
+                    z
+                }
+            })
+            .collect()
+    }
+
+    /// Decoding recomputes `kxq0` / `kxq1` bit for bit, so a decoded sketch
+    /// that keeps updating holds the same `est` as one that never went
+    /// through the wire. Every term is a power of two between `2^-65` and
+    /// `2^0`, and each side's sum stays within 53 bits of its smallest term,
+    /// so the incremental and the summed values are the same `f64`.
+    fn assert_decode_then_continue_is_exact<Registers: HllRegisterStorage>() {
+        for (seed, before, after) in [(1, 0, 3_000), (2, 1_000, 3_000), (3, 40_000, 40_000)] {
+            let stream = hip_stream::<Registers>(before + after, seed);
+            let mut kept = HyperLogLogHipImpl::<Registers>::new();
+            kept.update_batch_with_hashes(&stream[..before]);
+            let bytes = kept.to_asapv1().expect("serialize");
+            let mut restored =
+                HyperLogLogHipImpl::<Registers>::from_asapv1(&bytes).expect("decode");
+            assert_eq!(restored.kxq0.to_bits(), kept.kxq0.to_bits());
+            assert_eq!(restored.kxq1.to_bits(), kept.kxq1.to_bits());
+            kept.update_batch_with_hashes(&stream[before..]);
+            restored.update_batch_with_hashes(&stream[before..]);
+            assert!(kept.kxq1 > 0.0, "the stream reaches ranks of 32 or more");
+            assert_eq!(restored.registers.as_slice(), kept.registers.as_slice());
+            assert_eq!(restored.kxq0.to_bits(), kept.kxq0.to_bits());
+            assert_eq!(restored.kxq1.to_bits(), kept.kxq1.to_bits());
+            assert_eq!(
+                restored.est.to_bits(),
+                kept.est.to_bits(),
+                "p = {}, {before} then {after} updates",
+                Registers::PRECISION
+            );
+            let (kxq0, kxq1) = summed_kxq(kept.registers.as_slice());
+            assert_eq!(
+                (kept.kxq0.to_bits(), kept.kxq1.to_bits()),
+                (kxq0.to_bits(), kxq1.to_bits())
+            );
+        }
+    }
+
+    #[test]
+    fn hip_decode_then_continue_matches_an_unserialized_sketch() {
+        use crate::structures::fixed_structure::HllRegistersP16;
+        assert_decode_then_continue_is_exact::<HllRegistersP12>();
+        assert_decode_then_continue_is_exact::<HllRegistersP14>();
+        assert_decode_then_continue_is_exact::<HllRegistersP16>();
     }
 }

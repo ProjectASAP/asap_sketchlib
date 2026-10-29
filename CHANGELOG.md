@@ -104,6 +104,13 @@ signals a backwards-compatible change.
   dropped, and are never encoded; `EhBucketSketch` and `ExponentialHistogram`
   buckets nested under the retired ids decode too. The
   `sketchlib-golden-bytes` submodule gains the `*_no_l2` fixtures.
+- **ASAPv1: HLL HIP encodes as `0x01 0x04`.** The payload is the registers
+  and `hip_est`; `hip_kxq0` / `hip_kxq1`, sums of `2^-register` over the
+  registers, are no longer carried and are recomputed on decode, bit for bit,
+  so a decoded sketch keeps counting exactly as the encoded one would. The
+  retired `0x01 0x03` still decodes, with the two sums dropped, and is never
+  encoded. The `sketchlib-golden-bytes` submodule gains the `hll_hip_est_*`
+  fixtures.
 - **Count Sketch estimates no longer allocate.** The per-row estimates a
   median is taken over are collected on the stack instead of in a fresh
   `Vec`: up to 20 rows for `Vector2D` (the fast and regular paths),

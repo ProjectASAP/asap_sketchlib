@@ -73,7 +73,7 @@ erDiagram
     SerializedSketch ||--|| METADATA : carries-one
     SerializedSketch ||--|| PAYLOAD : carries-one
     PAYLOAD ||--o| HLL_PAYLOAD : example-kind-0x0101-0x0102
-    PAYLOAD ||--o| HLL_HIP_PAYLOAD : example-kind-0x0103
+    PAYLOAD ||--o| HLL_HIP_PAYLOAD : example-kind-0x0104
     PAYLOAD ||--o| COUNTMIN_PAYLOAD : example-kind-0x0200
     PAYLOAD ||--o| KLL_PAYLOAD : example-kind-0x0600-0x0601
     ENVELOPE {
@@ -102,8 +102,6 @@ erDiagram
     }
     HLL_HIP_PAYLOAD {
         bin registers
-        f64 hip_kxq0
-        f64 hip_kxq1
         f64 hip_est
     }
     COUNTMIN_PAYLOAD {
@@ -185,7 +183,8 @@ This registry is the master list of algorithms still to design payloads for, and
 | `0x01 0x00` | HLL | Unspecified | - | reserved |
 | `0x01 0x01` | HLL | Classic ("Regular") | Section 3.1 | implemented |
 | `0x01 0x02` | HLL | Ertl-MLE ("Datafusion") | Section 3.1 | implemented |
-| `0x01 0x03` | HLL | HIP | Section 3.1 | implemented |
+| `0x01 0x03` | HLL | HIP with `hip_kxq0` / `hip_kxq1` | Section 3.1 | retired: decoded (`hip_kxq0` / `hip_kxq1` dropped), never encoded |
+| `0x01 0x04` | HLL | HIP | Section 3.1 | implemented |
 | `0x01 0x81` | HLL | Classic delta | Section 3.23 | implemented |
 | `0x01 0x82` | HLL | Ertl-MLE delta | Section 3.23 | implemented |
 | `0x02 0x00` | Count-Min | Count-Min | Section 3.2 | implemented |
@@ -441,9 +440,9 @@ Per sketch. **Raw state only**, a **positional msgpack array** in the order its 
 - No field derivable from another (no HLL `precision`; no CMS `l1`/`l2`, which are `sum(count)` / `sum(count^2)` and are recomputed on decode; no CountSketchWithL2Norm or UnivMon-layer `l2`, which is each row's `sum(counts[row]^2)` saturated at `i64::MAX` and is recomputed on decode, §3.19). Nothing derivable rides the wire.
 - msgpack array (positional), never a keyed map. The exact msgpack types are in "Wire encoding rules".
 
-### 3.1: HLL payload (`0x01 0x01` / `0x01 0x02` / `0x01 0x03`)
+### 3.1: HLL payload (`0x01 0x01` / `0x01 0x02` / `0x01 0x04`)
 
-The variant is in `kind_id`, precision is in the metadata (and equals `log2(register count)`), so the only real state is the register bytes (plus three running scalars for HIP).
+The variant is in `kind_id`, precision is in the metadata (and equals `log2(register count)`), so the only real state is the register bytes (plus the running estimate for HIP).
 
 **Classic / Ertl-MLE** (`0x01 0x01`, `0x01 0x02`), identical layout:
 
@@ -451,18 +450,20 @@ The variant is in `kind_id`, precision is in the metadata (and equals `log2(regi
 | ----- | ------- | ------ | ------- |
 | 0 | `registers` | bin | one byte per register; length is `2^precision` |
 
-**HIP** (`0x01 0x03`):
+**HIP** (`0x01 0x04`):
 
 | Pos | Field | Type | Notes |
 | ----- | ------- | ------ | ------- |
 | 0 | `registers` | bin | one byte per register |
-| 1 | `hip_kxq0` | f64 | HIP running estimate state |
-| 2 | `hip_kxq1` | f64 | |
-| 3 | `hip_est` | f64 | |
+| 1 | `hip_est` | f64 | the running HIP estimate |
+
+**`hip_est` is carried, `kxq0` / `kxq1` are not.** HIP adds `2^precision / (kxq0 + kxq1)` to `hip_est` each time an insert raises a register, so the estimate depends on the order the registers rose in and no walk of the registers reproduces it. `kxq0` and `kxq1` are the sums of `2^-r` over the registers `r` below 32 and over those of 32 or more; a decoder recomputes them from the registers. Every term is a power of two, so every partial sum is a multiple of the smallest term: `kxq0` is exact for precision up to 22 and `kxq1` at every precision. Within that bound the recomputed values equal the ones the encoder kept incrementally, bit for bit, and a decoded sketch that keeps inserting reaches the same `hip_est` as one that never left memory.
+
+**The retired `0x01 0x03`.** It carried `hip_kxq0` and `hip_kxq1` as two f64 fields between `registers` and `hip_est` (four fields in all). A decoder still accepts it, reads the two sums as float64 (Section 4) and drops them for the recomputed ones, and the result re-encodes as `0x01 0x04`. Nothing encodes `0x01 0x03`; per Q-VER the id is never reused. HIP has no delta kind.
 
 **Decode rules** (all fail closed, per Section 1's decoder rules):
 
-1. `kind_id` is the variant's own — `0x01 0x01` Classic, `0x01 0x02` Ertl-MLE, `0x01 0x03` HIP. Each decoder owns exactly one id and rejects its two siblings.
+1. `kind_id` is the variant's own — `0x01 0x01` Classic, `0x01 0x02` Ertl-MLE, `0x01 0x04` HIP (or the retired `0x01 0x03` with its four-field payload). Each decoder owns its own ids and rejects its siblings'.
 2. The metadata map must equal the target type's own, `precision` included. Precision is a type parameter of the register storage rather than a property of the stored sketch, so it is **pinned**, not echoed back: p12 bytes do not decode into a p14 sketch.
 3. `len(registers) == 2^precision` exactly.
 4. No register byte exceeds `RANK_HASH_BITS + 1`, which is `65 - precision` — **53** at p12, **51** at p14, **49** at p16. An insert writes `leading_zeros((hash << precision) + INDEX_MASK) + 1`: the shift shoves the `precision` bucket-index bits off the top and the `+ INDEX_MASK` refills them, so the run being counted is only the `RANK_HASH_BITS = 64 - precision` bits the index leaves, and the largest rank reachable is one past that. A higher byte names a rank no hash could have produced, and it would inflate every estimate the sketch reports.
@@ -1192,7 +1193,7 @@ The `kind_id` is carried rather than a name, because Section 1's registry is alr
 
 The retired `0x10 0x00` and `0x19 0x00` (§3.15, §3.19), which also carried `l2`, still decode into the `UnivMon` and `CountSketchWithL2Norm` arms through those variants' own decoders, `l2` dropped and recomputed; the encoder writes only `0x10 0x01` and `0x19 0x01`. They are the same arms, not further entries among the ten.
 
-**Each id names one algorithm, and its siblings are not it.** `0x01 0x01`, `0x01 0x03` and `0x06 0x01` are rejected as unknown here: the arms hold `HyperLogLog<Ertl>` and the compact `Kll` and nothing else. `CountMinSketch` and `CountSketch` both hold `Vector2D<i32>` on the `FastPath`, so their descriptors carry `counter_type = "i32"` and `mode = "fast"`; `i32` is never widened, since a nested sketch must decode back into the arm it was stored as (Q-CS).
+**Each id names one algorithm, and its siblings are not it.** `0x01 0x01`, `0x01 0x03`, `0x01 0x04` and `0x06 0x01` are rejected as unknown here: the arms hold `HyperLogLog<Ertl>` and the compact `Kll` and nothing else. `CountMinSketch` and `CountSketch` both hold `Vector2D<i32>` on the `FastPath`, so their descriptors carry `counter_type = "i32"` and `mode = "fast"`; `i32` is never widened, since a nested sketch must decode back into the arm it was stored as (Q-CS).
 
 **Feature-gating contract (cross-language; Go must honour it).**
 
@@ -1517,7 +1518,7 @@ Golden byte-vectors lock it.
 **Float fields.** Every float field is msgpack **float64** (`0xcb`). A decoder rejects an integer or a float32 in a float field, and a float in an integer field. The float fields are:
 
 - metadata: `alpha` (§3.8), `sample_rate` (§3.13), `admission_rate` (Section 2);
-- HLL HIP's `hip_kxq0` / `hip_kxq1` / `hip_est` (§3.1) and the retired DDSketch `0x05 0x00`'s `sum` / `min` / `max` (§3.8);
+- HLL HIP's `hip_est` and the retired `0x01 0x03`'s `hip_kxq0` / `hip_kxq1` (§3.1) and the retired DDSketch `0x05 0x00`'s `sum` / `min` / `max` (§3.8);
 - `counts`, `heap_counts` and `deltas` elements where `counter_type` reads `"f64"` (§3.2, §3.6, §3.7, §3.10, §3.23, §3.24, §3.25);
 - `items` / `values` elements where `item_type` or `cell_item_type` reads `"f64"` (§3.3, §3.9, §3.13);
 - `keys` elements where `key_type` or `cell_key_type` reads `"f64"` (§3.5, §3.7, §3.9, §3.10, §3.15, §3.16, §3.23, §3.24, §3.25).
@@ -1635,7 +1636,7 @@ Go MUST validate the profile it reads (same fail-closed intent as Rust): a sketc
 - **Q-ORDER**: a payload whose in-memory container order does not survive a rebuild **pins an emitted order**, as a cross-language contract. Heaps, arenas and hash maps all have this property, so the rule reaches Space-Saving's triples (§3.5, §3.24, §3.25), the top-k heap entries (§3.7), KMV's digests (§3.14), UniformSampling's entries (§3.13), UnivMon-Q's candidates and occurrences (§3.20), and every layer- and bucket-indexed array. Two sketches holding the same state then emit the same bytes whatever order they were built in, and a decoded sketch re-serializes byte-identically. The heap key comparator is the same everywhere: descending count, ties by heap key order (§3.5).
 - **Q-CAP**: **a declared capacity never sizes an allocation.** Every structure is built from the run the payload actually carries, and the declared bound is checked against that run first; a payload naming a capacity of `2^32 - 1` with two entries costs two entries. This holds for every `capacity` (§3.5, §3.24, §3.25), every `heap_size`, KMV's `k`, UniformSampling's `total_seen`, UnivMon-Q's `ordered_samples`, and Hydra's grid and counter dimensions.
 - **Q-KEYTYPE**: `key_type` names the **exact `OwnedDataInput` variant** and is never widened, wherever heap keys reach the wire — Space-Saving (§3.5), CountMinSketchWithHeap and CountSketchWithHeap (§3.7, §3.10), CountMinSketchWithSpaceSaving and CountSketchWithSpaceSaving (§3.24, §3.25), the UnivMon family (§3.15, §3.16) and Hydra's UnivMon counter (§3.9). A container whose keys mix variants has no single name and **fails to serialize**; `OwnedDataInput::I128` / `U128` have no msgpack integer form and are not wire types. An empty container emits `"u64"`, and a decoder rejects an empty container under any other name, so its `key_type` has one value rather than one per producer. That canonicalizes the key naming and nothing else: a Two-tier UnivMon pyramid still has more than one encoding per state, since layouts differing only in an `elephant_layers` at or above `layers` build identical layers, and an all-elephant pyramid carries its unused mouse dimensions on the wire regardless (§3.16). What holds everywhere is the round trip: a decoded container re-serializes byte-identically.
-- **Q-DERIVED**: state a decoder can recompute exactly is **not carried**, and state it cannot is. Recomputed: DDSketch's `count` from its stores and `zero_count` (§3.8), CountSketchWithL2Norm's and every UnivMon layer's `l2` from its counters (§3.19; the retired `0x19 0x00`, `0x10 0x00`, `0x11 0x00` and `0x07 0x04` carried it), `ExponentialHistogram`'s `l2_mass` and `merge_norm` (§3.17), Elastic's `heavy_buckets` from the declared bucket count (§3.11), every heap's digest index and array order, and every summary a sketch answers from its own state. Carried: Elastic's `stale_copies`, UnivMon's `update_mode`, `candidate_complete` and `bucket_size`, UnivMon-Q's `ever_evicted`, `source_id` and `next_sequence`, and UniformSampling's `priorities`, `total_seen` and `rng_state`. Where a cached derived field exists in memory, the encoder rejects a value that disagrees with what the decoder would recompute. State the sketch's own readouts do not need is not carried either: DDSketch's `sum` / `min` / `max` were (`0x05 0x00`) and are now a separate exact aggregate, since nothing a DDSketch answers reads them (§3.8), and so was Bloom's `inserted` counter (`0x17 0x00`), now a separate exact count, since no membership answer reads it (§3.4). Space-Saving's `total` was carried too (`0x18 0x00`, and inside `0x1e 0x00` / `0x1f 0x00`); no Space-Saving readout reads it, so it is no longer sketch state, and a caller that needs it keeps a separate exact count (§3.5).
+- **Q-DERIVED**: state a decoder can recompute exactly is **not carried**, and state it cannot is. Recomputed: DDSketch's `count` from its stores and `zero_count` (§3.8), HLL HIP's `kxq0` / `kxq1` from its registers (§3.1), CountSketchWithL2Norm's and every UnivMon layer's `l2` from its counters (§3.19; the retired `0x19 0x00`, `0x10 0x00`, `0x11 0x00` and `0x07 0x04` carried it), `ExponentialHistogram`'s `l2_mass` and `merge_norm` (§3.17), Elastic's `heavy_buckets` from the declared bucket count (§3.11), every heap's digest index and array order, and every summary a sketch answers from its own state. Carried: Elastic's `stale_copies`, UnivMon's `update_mode`, `candidate_complete` and `bucket_size`, UnivMon-Q's `ever_evicted`, `source_id` and `next_sequence`, and UniformSampling's `priorities`, `total_seen` and `rng_state`. Where a cached derived field exists in memory and an API can set it, the encoder rejects a value that disagrees with what the decoder would recompute; HIP's `kxq0` / `kxq1` are private, kept only by `update_with_hash`, and exact by construction (§3.1), so there is nothing to reject. State the sketch's own readouts do not need is not carried either: DDSketch's `sum` / `min` / `max` were (`0x05 0x00`) and are now a separate exact aggregate, since nothing a DDSketch answers reads them (§3.8), and so was Bloom's `inserted` counter (`0x17 0x00`), now a separate exact count, since no membership answer reads it (§3.4). Space-Saving's `total` was carried too (`0x18 0x00`, and inside `0x1e 0x00` / `0x1f 0x00`); no Space-Saving readout reads it, so it is no longer sketch state, and a caller that needs it keeps a separate exact count (§3.5).
 - **Q-NIL**: an absent slot is msgpack **nil** (`0xc0`), never a sentinel value. An empty string is a reachable key in Coco (§3.12) and a reachable flow id in Elastic (§3.11), so `""` cannot double as "free"; UnivMon-Q's absent extrema are nil for the same reason (§3.20). Go must model these as nullable, never as a zero value standing in for absent.
 - **Q-RNG**: RNG state is carried **resumable** when the generator is cheap to reproduce in another language, and opaque otherwise. UniformSampling's `rng_state` is one SplitMix64 word with published constants, so a decoded sampler continues the same draw sequence (§3.13); KLL's `coin` carries the compaction RNG's position and its `compaction_seed` is opaque state Go preserves without interpreting (Q-KLL-SEED).
 - **Q-UNIVMON-SCOPE**: every layer of `0x10 0x01` and `0x11 0x01` (and of the retired `0x10 0x00` / `0x11 0x00`) is a CountSketchWithL2Norm with no tag, and another per-layer counter needs a new structural param or a new id. `UnivMonPool` is a `Vec<UnivMon>` free list of scratch `UnivMon`s — not of pyramids — with nothing an observer could query, so it is not a wire kind and holds no id.

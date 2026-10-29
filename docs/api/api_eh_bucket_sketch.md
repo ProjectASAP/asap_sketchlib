@@ -83,10 +83,10 @@ The ten encoded nested kind_ids. The retired `0x05 0x00`, `0x10 0x00` and
 | `UnivMon` | `0x10 0x01` (retired `0x10 0x00` decodes) | UnivMon | default |
 
 Each id is pinned to one algorithm: `Hll` is Ertl-MLE, so `0x01 0x01` (Classic)
-and `0x01 0x03` (HIP) are rejected, and `Kll` is compact, so `0x06 0x01`
-(dynamic) is rejected. The dispatch is the same in every build: a decoder built
-without `experimental` rejects `0x0d 0x00` with an error naming the variant and
-the feature, and its encoder can never emit it.
+and `0x01 0x04` (HIP), with the retired `0x01 0x03`, are rejected, and `Kll` is
+compact, so `0x06 0x01` (dynamic) is rejected. The dispatch is the same in every
+build: a decoder built without `experimental` rejects `0x0d 0x00` with an error
+naming the variant and the feature, and its encoder can never emit it.
 An unrecognized kind_id is rejected.
 
 ## Examples

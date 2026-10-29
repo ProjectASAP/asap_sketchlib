@@ -209,7 +209,8 @@ mod tests {
         type HllClassic = HyperLogLogP12<Classic>;
 
         let classic = hex(include_str!("../../asapv1_golden/hll_classic_p12.hex"));
-        let hip = hex(include_str!("../../asapv1_golden/hll_hip_p12.hex"));
+        let hip = hex(include_str!("../../asapv1_golden/hll_hip_est_p12.hex"));
+        let hip_with_kxq = hex(include_str!("../../asapv1_golden/hll_hip_p12.hex"));
         let classic_delta = hex(include_str!(
             "../../asapv1_golden/hll_classic_p14_delta.hex"
         ));
@@ -302,6 +303,7 @@ mod tests {
         let cases: Vec<Case> = vec![
             case!("HLL classic", classic, HllClassic),
             case!("HLL HIP", hip, HyperLogLogHipP12),
+            case!("HLL HIP retired 01 03", hip_with_kxq, HyperLogLogHipP12),
             case!("HLL classic delta", classic_delta, HyperLogLogDelta<Classic, HllRegistersP14>),
             case!("CMS", cms, Cms),
             case!("CMS delta", cms_delta, CountMinSketchDelta<i64, RegularPath>),

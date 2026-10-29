@@ -95,6 +95,14 @@ pub(crate) fn classic_estimate(registers: &[u8]) -> f64 {
     est
 }
 
+/// `2^-exponent`, built from its bits so it is exact by construction: biased
+/// exponent `1023 - exponent`, zero mantissa. A register holds at most
+/// `65 - p` (at most 64), well inside the normal range.
+#[inline]
+fn inverse_power_of_two(exponent: u8) -> f64 {
+    f64::from_bits((1023 - u64::from(exponent)) << 52)
+}
+
 /// Marker type selecting the classic HyperLogLog estimation algorithm.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Classic;
@@ -106,10 +114,39 @@ pub struct Ertl;
 #[derive(Clone, Debug)]
 pub struct HyperLogLogHipImpl<Registers: HllRegisterStorage> {
     registers: Registers,
+    /// `sum(2^-r)` over the registers `r` below 32. Derived from the
+    /// registers ([`hip_kxq`]) and kept so an update costs O(1).
     kxq0: f64,
+    /// `sum(2^-r)` over the registers `r` of 32 or more; see `kxq0`.
     kxq1: f64,
+    /// The running HIP estimate. It depends on the arrival order, so it is
+    /// state, not derivable from the registers.
     est: f64,
     admission_rate: f64,
+}
+
+/// `(kxq0, kxq1)` for a register slice: the sums of `2^-r` over the registers
+/// `r` below 32 and over those of 32 or more, the split
+/// `HyperLogLogHipImpl::update_with_hash` keeps them in.
+///
+/// Every term is a power of two, so every partial sum, and every step of the
+/// incremental subtract-then-add, is a multiple of the smallest term. `kxq0`
+/// (terms `2^0..2^-31`, sum at most `2^p`) is then exact for `p <= 22`, and
+/// `kxq1` (terms `2^-32..2^-(65 - p)`, sum at most `2^(p - 32)`) at every
+/// precision. Within that bound this equals the incrementally kept values bit
+/// for bit, whatever the order.
+fn hip_kxq(registers: &[u8]) -> (f64, f64) {
+    let mut kxq0 = 0.0;
+    let mut kxq1 = 0.0;
+    for &register in registers {
+        let term = inverse_power_of_two(register);
+        if register < 32 {
+            kxq0 += term;
+        } else {
+            kxq1 += term;
+        }
+    }
+    (kxq0, kxq1)
 }
 
 /// HyperLogLog with 12-bit precision.
@@ -411,14 +448,14 @@ impl<Registers: HllRegisterStorage> HyperLogLogHipImpl<Registers> {
             registers[bucket_num] = leading_zero;
             self.est += Registers::NUM_REGISTERS as f64 / (self.kxq0 + self.kxq1);
             if old_value < 32 {
-                self.kxq0 -= 1.0 / ((1_u64 << old_value) as f64);
+                self.kxq0 -= inverse_power_of_two(old_value);
             } else {
-                self.kxq1 -= 1.0 / ((1_u64 << old_value) as f64);
+                self.kxq1 -= inverse_power_of_two(old_value);
             }
             if new_value < 32 {
-                self.kxq0 += 1.0 / ((1_u64 << new_value) as f64);
+                self.kxq0 += inverse_power_of_two(new_value);
             } else {
-                self.kxq1 += 1.0 / ((1_u64 << new_value) as f64);
+                self.kxq1 += inverse_power_of_two(new_value);
             }
         }
     }

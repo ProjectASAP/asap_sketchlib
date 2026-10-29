@@ -551,7 +551,7 @@ pub(crate) mod tests {
     #[test]
     fn eh_bucket_sketch_rejects_sibling_algorithm_kind_ids() {
         let hll = EhBucketSketch::Hll(HyperLogLog::<Ertl>::default());
-        for sibling in [[0x01u8, 0x01], [0x01, 0x03]] {
+        for sibling in [[0x01u8, 0x01], [0x01, 0x03], [0x01, 0x04]] {
             let triple = relabelled(&hll, &sibling);
             assert!(
                 EhBucketSketch::from_asapv1(&envelope_for(&triple)).is_err(),
