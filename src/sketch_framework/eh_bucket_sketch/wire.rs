@@ -23,12 +23,15 @@
 //!
 //! ## The kind_id namespace is fixed in every build
 //!
-//! All eleven ids (ten encoded, plus the retired `0x05 0x00`) dispatch
-//! whatever features are on. A decoder built without
+//! All thirteen ids (ten encoded, plus the retired `0x05 0x00`, `0x10 0x00`
+//! and `0x19 0x00`) dispatch whatever features are on. A decoder built without
 //! `experimental` rejects `0x0d 0x00` by name with the feature named, and its
 //! encoder can never emit it. A DDSketch bucket encodes as `0x05 0x01`; the
 //! retired `0x05 0x00` still decodes into the same variant, its `sum` / `min` /
 //! `max` dropped.
+//! A CountSketchWithL2Norm bucket encodes as `0x19 0x01` and a UnivMon bucket
+//! as `0x10 0x01`; the retired `0x19 0x00` and `0x10 0x00`, which also carried
+//! `l2`, still decode into the same variants, their `l2` dropped and recomputed.
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
@@ -46,14 +49,16 @@ pub(crate) fn variant_name(kind_id: &[u8]) -> Option<&'static str> {
     match kind_id {
         kind::COUNT_MIN => Some("CountMinSketch"),
         kind::COCO => Some("Coco"),
-        kind::COUNT_SKETCH_WITH_L2_NORM => Some("CountSketchWithL2Norm"),
+        kind::COUNT_SKETCH_WITH_L2_NORM | kind::COUNT_SKETCH_WITH_L2_NORM_CARRYING_L2 => {
+            Some("CountSketchWithL2Norm")
+        }
         kind::COUNT_SKETCH => Some("CountSketch"),
         kind::DDSKETCH | kind::DDSKETCH_WITH_SCALARS => Some("DDSketch"),
         kind::ELASTIC => Some("Elastic"),
         kind::HLL_ERTL => Some("HLL"),
         kind::KLL => Some("KLL"),
         kind::UNIFORM_SAMPLING => Some("UniformSampling"),
-        kind::UNIVMON => Some("UnivMon"),
+        kind::UNIVMON | kind::UNIVMON_CARRYING_L2 => Some("UnivMon"),
         _ => None,
     }
 }
@@ -87,8 +92,8 @@ pub(crate) struct SketchState {
     pub(crate) state: Vec<u8>,
 }
 
-/// Rejects a kind_id outside the eleven (ten encoded, plus the retired
-/// `0x05 0x00`).
+/// Rejects a kind_id outside the thirteen (ten encoded, plus the retired
+/// `0x05 0x00`, `0x10 0x00` and `0x19 0x00`).
 pub(crate) fn unknown_variant(kind_id: &[u8]) -> RmpDecodeError {
     RmpDecodeError::Uncategorized(format!(
         "ASAPv1 EhBucketSketch: kind_id {kind_id:02x?} is not a wire variant"
@@ -186,9 +191,11 @@ fn rebuild_variant(triple: &SketchState) -> Result<EhBucketSketch, RmpDecodeErro
         kind::COCO => Ok(EhBucketSketch::CocoSketch(crate::CocoSketch::from_asapv1(
             &bytes,
         )?)),
-        kind::COUNT_SKETCH_WITH_L2_NORM => Ok(EhBucketSketch::CountSketchWithL2Norm(
-            crate::CountSketchWithL2Norm::from_asapv1(&bytes)?,
-        )),
+        kind::COUNT_SKETCH_WITH_L2_NORM | kind::COUNT_SKETCH_WITH_L2_NORM_CARRYING_L2 => {
+            Ok(EhBucketSketch::CountSketchWithL2Norm(
+                crate::CountSketchWithL2Norm::from_asapv1(&bytes)?,
+            ))
+        }
         kind::COUNT_SKETCH => Ok(EhBucketSketch::CountSketch(
             crate::CountSketch::from_asapv1(&bytes)?,
         )),
@@ -206,9 +213,9 @@ fn rebuild_variant(triple: &SketchState) -> Result<EhBucketSketch, RmpDecodeErro
         kind::UNIFORM_SAMPLING => Ok(EhBucketSketch::Uniform(
             crate::UniformSampling::from_asapv1(&bytes)?,
         )),
-        kind::UNIVMON => Ok(EhBucketSketch::UnivMon(crate::UnivMon::from_asapv1(
-            &bytes,
-        )?)),
+        kind::UNIVMON | kind::UNIVMON_CARRYING_L2 => Ok(EhBucketSketch::UnivMon(
+            crate::UnivMon::from_asapv1(&bytes)?,
+        )),
         other => Err(unknown_variant(other)),
     }
 }
@@ -447,6 +454,46 @@ pub(crate) mod tests {
                 .expect("variant in table")
                 .0;
             assert_eq!(emitted, expected, "{}", sketch.sketch_type());
+        }
+    }
+
+    /// A bucket nested under the retired `0x19 0x00` or `0x10 0x00`, which
+    /// carried `l2`, decodes into the same variant and re-encodes under the
+    /// current `0x19 0x01` / `0x10 0x01`.
+    #[test]
+    fn eh_bucket_sketch_decodes_retired_l2_carrying_kind_ids() {
+        use crate::asapv1::envelope::hex;
+        let retired = [
+            (
+                kind::COUNT_SKETCH_WITH_L2_NORM_CARRYING_L2,
+                kind::COUNT_SKETCH_WITH_L2_NORM,
+                hex(include_str!(
+                    "../../../asapv1_golden/count_l2hh_2x4_seed7.hex"
+                )),
+            ),
+            (
+                kind::UNIVMON_CARRYING_L2,
+                kind::UNIVMON,
+                hex(include_str!(
+                    "../../../asapv1_golden/univmon_str_l3_2x4_h5.hex"
+                )),
+            ),
+        ];
+        for (retired_id, current_id, bytes) in retired {
+            assert_eq!(variant_name(retired_id), variant_name(current_id));
+            let (kind_id, descriptor, state) = envelope::split(&bytes).expect("split");
+            assert_eq!(kind_id, retired_id);
+            let triple = SketchState {
+                kind_id: kind_id.to_vec(),
+                descriptor: descriptor.to_vec(),
+                state: state.to_vec(),
+            };
+            let decoded = EhBucketSketch::from_asapv1(&envelope_for(&triple)).expect("decode");
+            assert_eq!(
+                sketch_state(&decoded).expect("state").kind_id,
+                current_id,
+                "{retired_id:02x?}"
+            );
         }
     }
 

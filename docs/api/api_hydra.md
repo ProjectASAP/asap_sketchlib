@@ -78,8 +78,10 @@ fn from_asapv1(bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error>
 
 ASAPv1 MessagePack, one kind_id per counter variant: `0x07 0x00` KLL,
 `0x07 0x01` Count-Min, `0x07 0x02` Count Sketch, `0x07 0x03` HyperLogLog,
-`0x07 0x04` UnivMon. `from_asapv1` routes on the kind_id and rejects
-any other one.
+`0x07 0x05` UnivMon. `from_asapv1` routes on the kind_id and rejects
+any other one, except the retired UnivMon counter `0x07 0x04`, whose cells also
+carried each layer's `l2`: it still decodes, `l2` dropped and recomputed, and
+is never written.
 
 The metadata carries the hash spec (Hydra hashes its subkeys, so it is present
 even for the KLL counter), the grid `rows` / `cols`, the key-column `schema`,

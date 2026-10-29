@@ -2,6 +2,11 @@
 //!
 //! [`CountSketchWithL2Norm`] is the per-layer sketch of `UnivMon` and
 //! `UnivMonTwoTier`; its L2 norm sets their terminal-mode heavy-hitter threshold.
+//!
+//! Each row's L2 accumulator is a cache of its counters: read through
+//! [`clamp_to_i64`] it always equals the row's sum of squared counters,
+//! saturated at `i64::MAX`, so the ASAPv1 payload does not carry it and the
+//! decoder recomputes it.
 
 use crate::common::structures::matrix_storage::RowEstimates;
 use std::marker::PhantomData;
@@ -20,11 +25,43 @@ use crate::common::structures::fixed_structure::{DEFAULT_COLS, DEFAULT_ROWS};
 #[derive(Clone, Debug)]
 pub struct CountSketchWithL2Norm<H: SketchHasher = DefaultXxHasher> {
     counts: Vector2D<i64>,
-    row_l2_squared: Vector1D<i64>,
+    /// Per row, [`row_capped_square_sum`] of its counters, kept exact by every
+    /// write in O(1) so `l2` reads it in O(rows). Read it through
+    /// [`clamp_to_i64`].
+    row_l2_squared: Vector1D<i128>,
     rows: usize,
     cols: usize,
     seed_index: usize,
     _hasher: PhantomData<H>,
+}
+
+/// The cap on one counter's contribution to its row's accumulator: `2^63`,
+/// one past `i64::MAX`.
+const SQUARE_CAP: i128 = 1 << 63;
+
+/// One counter's contribution to its row's accumulator: its square, capped at
+/// [`SQUARE_CAP`]. The square fits an `i128` (`i64::MIN^2 = 2^126`).
+#[inline(always)]
+fn capped_square(counter: i64) -> i128 {
+    let counter = i128::from(counter);
+    (counter * counter).min(SQUARE_CAP)
+}
+
+/// The sum of a row's [`capped_square`]s: what a row's accumulator holds.
+/// Each term is at most `2^63`, so the sum of fewer than `2^64` terms fits an
+/// `i128` and adding or removing one term is exact. Capping a term changes
+/// nothing once clamped: a capped term alone already reaches `i64::MAX`, so
+/// `clamp_to_i64` of this sum is `min(sum(counts[row]^2), i64::MAX)`.
+fn row_capped_square_sum(row: &[i64]) -> i128 {
+    row.iter().fold(0_i128, |sum, &counter| {
+        sum.saturating_add(capped_square(counter))
+    })
+}
+
+/// An accumulator as the value it stands for, saturated at `i64::MAX`.
+#[inline(always)]
+fn clamp_to_i64(accumulator: i128) -> i64 {
+    accumulator.clamp(0, i128::from(i64::MAX)) as i64
 }
 
 impl CountSketchWithL2Norm {
@@ -33,8 +70,8 @@ impl CountSketchWithL2Norm {
     pub fn estimated_memory_bytes(rows: usize, cols: usize) -> usize {
         size_of::<Self>().saturating_add(
             rows.saturating_mul(cols)
-                .saturating_add(rows)
-                .saturating_mul(size_of::<i64>()),
+                .saturating_mul(size_of::<i64>())
+                .saturating_add(rows.saturating_mul(size_of::<i128>())),
         )
     }
 
@@ -121,17 +158,13 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     /// per-row sums of squares.
     pub fn memory_bytes(&self) -> usize {
         size_of::<Self>()
-            + (self.rows * self.cols + self.row_l2_squared.capacity()) * size_of::<i64>()
+            + self.rows * self.cols * size_of::<i64>()
+            + self.row_l2_squared.capacity() * size_of::<i128>()
     }
 
     /// Exposes the backing matrix for inspection/testing.
     pub fn as_storage(&self) -> &Vector2D<i64> {
         &self.counts
-    }
-
-    /// Mutable access used internally for testing scenarios.
-    pub fn as_storage_mut(&mut self) -> &mut Vector2D<i64> {
-        &mut self.counts
     }
 
     /// Merges another sketch while asserting compatible dimensions.
@@ -147,13 +180,10 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
         );
 
         for i in 0..self.rows {
-            let mut row_l2 = 0_i128;
             for j in 0..self.cols {
                 self.counts[i][j] += other.counts[i][j];
-                let counter = self.counts[i][j] as i128;
-                row_l2 = row_l2.saturating_add(counter.saturating_mul(counter));
             }
-            self.row_l2_squared[i] = row_l2.min(i64::MAX as i128) as i64;
+            self.row_l2_squared[i] = row_capped_square_sum(self.counts.row_slice(i));
         }
     }
 
@@ -181,20 +211,15 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
         }
     }
 
-    /// Writes one counter and carries the row's L2 accumulator with it.
-    ///
-    /// Saturating i128 intermediate so extreme counts degrade gracefully
-    /// instead of wrapping (matches merge-path semantics, which also clamps to
-    /// [0, i64::MAX]: L2^2 can never go negative, even when a decrement follows
-    /// prior saturation).
+    /// Writes one counter and carries the row's accumulator with it in O(1):
+    /// the old counter's [`capped_square`] leaves the sum and the new one's
+    /// enters, exactly, so the accumulator stays [`row_capped_square_sum`] of
+    /// the row through saturation and back.
     #[inline(always)]
     fn write_counter(&mut self, row: usize, col: usize, new_value: i64) {
         let old_value = self.counts.query_one_counter(row, col);
         self.counts[row][col] = new_value;
-        let old_l2 = self.row_l2_squared.as_slice()[row] as i128;
-        let new_l2 = old_l2 + (new_value as i128) * (new_value as i128)
-            - (old_value as i128) * (old_value as i128);
-        self.row_l2_squared[row] = new_l2.clamp(0, i64::MAX as i128) as i64;
+        self.row_l2_squared[row] += capped_square(new_value) - capped_square(old_value);
     }
 
     /// Seed offset this sketch hashes with; UnivMon gives each layer its own.
@@ -217,26 +242,6 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
         self.write_counter(row, col, new_value);
     }
 
-    /// Inserts without L2 update using precomputed hash value.
-    pub fn update_weighted_with_hash_without_l2(&mut self, hashed_val: u128, weight: i64) {
-        let mask_bits = self.counts.mask_bits() as usize;
-        let mask = (1u128 << mask_bits) - 1;
-        let mut shift_amount = 0;
-        let mut sign_bit_pos = 127;
-
-        for i in 0..self.rows {
-            let hashed = (hashed_val >> shift_amount) & mask;
-            let idx = (hashed as usize) % self.cols;
-            let bit = ((hashed_val >> sign_bit_pos) & 1) as i64;
-            let sign_bit = -(1 - 2 * bit);
-
-            self.counts[i][idx] += sign_bit * weight;
-
-            shift_amount += mask_bits;
-            sign_bit_pos -= 1;
-        }
-    }
-
     /// Update and estimate with hash optimization.
     /// due to the limitation of seeds, use fast_insert only
     pub fn update_weighted_and_estimate(&mut self, val: &DataInput, weight: i64) -> f64 {
@@ -249,7 +254,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     pub fn l2_squared(&self) -> f64 {
         let mut values: RowEstimates = self.row_l2_squared.as_slice()[..self.rows]
             .iter()
-            .map(|&v| v as f64)
+            .map(|&v| clamp_to_i64(v) as f64)
             .collect();
         compute_median_inline_f64(&mut values)
     }
