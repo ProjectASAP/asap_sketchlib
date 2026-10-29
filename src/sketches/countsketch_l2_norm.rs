@@ -179,6 +179,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
             "seed mismatch while merging CountSketchWithL2Norm sketches"
         );
 
+        crate::analytics::ops::add(self.rows * (3 * self.cols + 1));
         for i in 0..self.rows {
             for j in 0..self.cols {
                 self.counts[i][j] += other.counts[i][j];
@@ -218,6 +219,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
     #[inline(always)]
     fn write_counter(&mut self, row: usize, col: usize, new_value: i64) {
         let old_value = self.counts.query_one_counter(row, col);
+        crate::analytics::ops::add(1);
         self.counts[row][col] = new_value;
         self.row_l2_squared[row] += capped_square(new_value) - capped_square(old_value);
     }
@@ -252,6 +254,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
 
     /// Returns the median estimate of the squared L2 norm across rows.
     pub fn l2_squared(&self) -> f64 {
+        crate::analytics::ops::add(2 * self.rows);
         let mut values: RowEstimates = self.row_l2_squared.as_slice()[..self.rows]
             .iter()
             .map(|&v| clamp_to_i64(v) as f64)
@@ -292,6 +295,7 @@ impl<H: SketchHasher> CountSketchWithL2Norm<H> {
             shift_amount += mask_bits;
             sign_bit_pos -= 1;
         }
+        crate::analytics::ops::add(self.rows);
         compute_median_inline_f64(&mut lst[..])
     }
 }

@@ -5,9 +5,28 @@
 //! calls its functions directly, and a caller with a target `(ε, δ)` first
 //! calls [`SketchAnalytics::params_for`].
 
+pub mod count_matrix;
 pub mod ops;
 
 pub use crate::capability::StatisticKind;
+pub use count_matrix::MatrixParams;
+#[cfg(feature = "experimental")]
+pub use count_matrix::{CountMinHllParams, MicroCmData, MicroCmParams};
+
+use crate::{FastPath, RegularPath};
+
+/// Whether a matrix sketch's hash path is `FastPath`.
+pub trait HashPath {
+    const FAST: bool;
+}
+
+impl HashPath for RegularPath {
+    const FAST: bool = false;
+}
+
+impl HashPath for FastPath {
+    const FAST: bool = true;
+}
 
 /// The `δ` a contract whose `δ` the caller chooses uses when
 /// [`SketchAnalytics::theoretical_error`] gets `delta = None`.

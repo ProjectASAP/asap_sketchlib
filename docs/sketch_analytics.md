@@ -97,10 +97,10 @@ Query is the sketch's main readout, and each row's symbols are defined in that s
 | Sketch | Main error | Memory | Update | Query | Merge | Hashes |
 |---|---|---|---|---|---|---|
 | CountMinSketch | `ε = e/w`, `δ = e^−d`, `Absolute(L1)` | `O(dw)` | `O(d)` | `O(d)` | `O(dw)` | `d`, or 1 |
-| CountSketch | `ε = √(3/w)`, `δ = P_med(d, q·w/3)`, `Absolute(L2)` | `O(dw)` | `O(d)` | `O(d log d)` | `O(dw)` | `d`, or 1 |
+| CountSketch | `ε = √(q/β)`, `δ` chosen, `Absolute(L2)` | `O(dw)` | `O(d)` | `O(d log d)` | `O(dw)` | `d`, or 1 |
 | CountSketchWithL2Norm | as CountSketch | `O(dw)` | `O(d)` | `O(d log d)` | `O(dw)` | 1 |
 | CountMinHll | none | `O(dw·2^p)` | `O(d)` | `O(d·2^p)` | `O(dw·2^p)` | 2 |
-| MicroCm | none | `O(dwT)` | `O(d + dwT/I)` average | `O(dT)` | `O(dwT)` | 1 |
+| MicroCm | none | `O(dwT)` | `O(d + dw/I)` average | `O(dT)` | `O(dwT)` | 1 |
 | SpaceSaving | `ε = 1/m`, `δ = 0`, `Absolute(L1)` | `O(m)` | `O(1)` | `O(1)` | `O(m log m)` | 1 |
 | ElasticSketch | `ε = e/w`, `δ = e^−d`, `Absolute(L1)` | `O(H + dw)` | `O(d)` | `O(d)` | `O(Hd + dw)` | `1 + d` |
 | CocoSketch | none | `O(dw)` | `O(d)` | `O(d)` | `O(d²w)` | `d` |
@@ -155,15 +155,16 @@ Data inputs: none.
 
 | Item | Big O | Formula |
 |---|---|---|
-| ItemFrequency error | | `Absolute(L2)`, `ε = √(3/w)`, `δ = P_med(d, q·w/3)` fixed; contract `count_sketch_l2_median_binomial_v1` |
-| ItemFrequency sizing | | `w = ⌈3/ε²⌉`, `d` the smallest odd depth with `P_med(d, q·w/3) ≤ δ` |
+| ItemFrequency error | | `Absolute(L2)`, `ε = √(q/β)`, `δ` chosen, with `β` the largest per-row rate with `P_med(d, β) ≤ δ`; contract `count_sketch_l2_median_chosen_row_rate_v1` |
+| ItemFrequency sizing | | the odd `d ≤ 19` and width with `q ≤ β·ε²` that minimize `d·w`; on `FastPath`, `w` a power of two |
 | Memory | `O(dw)` | `theoretical_memory_bytes(rows, cols)` |
 | Update | `O(d)` | `d` |
 | Query ItemFrequency | `O(d log d)` | `2d + d·lg d` |
 | Merge | `O(dw)` | `2dw` |
 
 - A row is off by more than `ε·‖f‖₂` with probability at most `q/ε²` (Charikar, Chen and Farach-Colton 2002, Section 3).
-  At `ε = √(3/w)` that is `q·w/3`, at most `1/3 + w/(3·2^32)` on `RegularPath` and `3/8` on `FastPath`.
+  Setting that to `β` gives `ε = √(q/β)`, and the median is wrong only when `⌈d/2⌉` rows are.
+- At `δ = 0.01` the sizing takes `d = 5` and `w ≈ 9.5/ε²`.
 - An update adds the weight with a random sign to one counter per row, and a query copies those counters into a buffer and takes their median.
 
 ### CountSketchWithL2Norm
@@ -216,13 +217,13 @@ Data inputs: `I`, the updates per sub-window, the code's `items_per_sub_window` 
 |---|---|---|
 | ItemFrequency error | | none |
 | Memory | `O(dwT)` | `size_of::<Self>() + 4d·w·⌈(T + 7)/4⌉` |
-| Update | `O(d + dwT/I)` average | `6d + 4`, plus `T + 2` per row that zooms out |
-| Query ItemFrequency | `O(dT)` | `d(2T + 3) + 2` |
+| Update | `O(d + dw/I)` average | `5d + 5dw/I` while no cell has zoomed, with `I = 1` when unknown |
+| Query ItemFrequency | `O(dT)` | `d(2T + 3)` |
 | Merge | `O(dwT)` | `dw·(10(T + 2) + 7)` for `c = 2`, `dw·(8(T + 2) + 7)` otherwise |
 
-- A cell holds `T + 2` one-byte pixels, a zoom byte and a 4-byte shutter.
-- An update reads each row's shutter and zoom, adds to one pixel, and advances the clock.
-- At each sub-window boundary every cell is rewritten: usually 4 ops, and at most `2T + 10 + Z·(2T + 6)` when it zooms in `Z` times, with `Z` at most `⌊log_c(2^32 − 1)⌋`.
+- A cell holds `T + 2` one-byte pixels, a zoom byte and a 4-byte shutter, each one op.
+- An update reads each row's shutter and zoom twice, adds to one pixel and writes the shutter, and a row that zooms out also rewrites its `T + 2` pixels and zoom.
+- At each sub-window boundary every cell is rewritten: 5 ops while it has not zoomed, and more when it carries a shutter or zooms in.
 - Zoom-out rounding goes both ways by an amount that depends on the data, so the estimate is neither an upper nor a lower bound.
 - Merge also requires both states at the same sub-window.
 
@@ -836,5 +837,3 @@ A change to an implementation updates its formulas in the same pull request and 
 
 - Kll `rank()` returns a count, and at `k = 200`, `n = 10^6` it measures at 1.02 times the Quantile fit.
   Should the Rank contract use a fit measured on asap_sketchlib, or the Quantile fit times 1.1?
-- ASAPPlanner sizes CountSketch so each row is wrong with probability `1/3`, which gives `d = 47` at `δ = 0.01`, and ASAPv1 encodes at most 20 rows.
-  Should `params_for` choose the per-row probability that minimizes `d·w` with `d ≤ 20`, which gives `d = 5` and `w ≈ 9.5/ε²` at `δ = 0.01`?

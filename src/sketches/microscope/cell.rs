@@ -214,6 +214,7 @@ impl MicroLayout {
 /// A cell's zoom exponent.
 #[inline(always)]
 pub fn zoom(cell: &[u8], layout: &MicroLayout) -> u8 {
+    crate::analytics::ops::add(1);
     cell[layout.zoom_at]
 }
 
@@ -223,12 +224,14 @@ pub fn zoom(cell: &[u8], layout: &MicroLayout) -> u8 {
 /// so the record needs no alignment guarantee beyond being a byte slice.
 #[inline(always)]
 pub fn shutter(cell: &[u8], layout: &MicroLayout) -> u32 {
+    crate::analytics::ops::add(1);
     let at = layout.shutter_at;
     u32::from_le_bytes([cell[at], cell[at + 1], cell[at + 2], cell[at + 3]])
 }
 
 #[inline(always)]
 fn set_shutter(cell: &mut [u8], layout: &MicroLayout, value: u32) {
+    crate::analytics::ops::add(1);
     let at = layout.shutter_at;
     cell[at..at + 4].copy_from_slice(&value.to_le_bytes());
 }
@@ -237,6 +240,7 @@ fn set_shutter(cell: &mut [u8], layout: &MicroLayout, value: u32) {
 /// units — that is, the pixel scaled by `c^Z`.
 #[inline(always)]
 pub fn scaled_pixel(cell: &[u8], layout: &MicroLayout, n: u64) -> f64 {
+    crate::analytics::ops::add(2);
     let unit = (layout.params.c as f64).powi(cell[layout.zoom_at] as i32);
     cell[layout.pixel_at(n)] as f64 * unit
 }
@@ -329,14 +333,16 @@ pub fn unbiased_div_u64(value: u64, divisor: u64, rounding: &Rounding) -> u64 {
 /// At the zoom cap the pixel saturates rather than wrapping, and the unit is
 /// left alone.
 fn credit_pixel(cell: &mut [u8], layout: &MicroLayout, at: usize, rounding: &Rounding) {
+    crate::analytics::ops::add(1);
     if cell[at] < PIXEL_MAX {
         cell[at] += 1;
         return;
     }
-    let z = cell[layout.zoom_at];
+    let z = zoom(cell, layout);
     if z >= layout.max_zoom() {
         return;
     }
+    crate::analytics::ops::add(1 + layout.pixels);
     cell[layout.zoom_at] = z + 1;
     let c = layout.params.c;
     for (index, slot) in cell.iter_mut().take(layout.pixels).enumerate() {
@@ -366,7 +372,7 @@ pub fn insert(cell: &mut [u8], layout: &MicroLayout, n: u64, rounding: &Rounding
     let c = layout.params.c as u64;
     let mut pending = shutter(cell, layout) as u64 + 1;
     loop {
-        let unit = c.pow(cell[layout.zoom_at] as u32);
+        let unit = c.pow(zoom(cell, layout) as u32);
         if pending < unit {
             break;
         }
@@ -410,6 +416,7 @@ pub fn enter_sub_window(
         return;
     }
     if crossed >= layout.pixels as u64 {
+        crate::analytics::ops::add(layout.pixels);
         for slot in cell.iter_mut().take(layout.pixels) {
             *slot = 0;
         }
@@ -417,7 +424,7 @@ pub fn enter_sub_window(
     } else {
         // 1. Close out the shutter into the sub-window that just ended.
         let ended = new_n - crossed;
-        let unit = (layout.params.c as u64).pow(cell[layout.zoom_at] as u32);
+        let unit = (layout.params.c as u64).pow(zoom(cell, layout) as u32);
         let pending = shutter(cell, layout) as u64;
         set_shutter(cell, layout, 0);
         if pending > 0 {
@@ -429,6 +436,7 @@ pub fn enter_sub_window(
         }
 
         // 2. Clear each slot entered on the way, oldest of them first.
+        crate::analytics::ops::add(crossed as usize);
         for step in (0..crossed).rev() {
             cell[layout.pixel_at(new_n - step)] = 0;
         }
@@ -450,7 +458,7 @@ pub fn enter_sub_window(
 /// or above the new unit, and the next insert would then credit a whole
 /// pixel for less than a unit of pending items.
 pub fn try_zoom_in(cell: &mut [u8], layout: &MicroLayout) -> bool {
-    let z = cell[layout.zoom_at];
+    let z = zoom(cell, layout);
     if z == 0 {
         return false;
     }
@@ -459,9 +467,13 @@ pub fn try_zoom_in(cell: &mut [u8], layout: &MicroLayout) -> bool {
     // to zero, which would have made the test vacuously true for every cell
     // and left a zoomed-out cell unable to ever zoom back in.
     let ceiling = layout.zoom_in_ceiling;
-    if cell.iter().take(layout.pixels).any(|&p| p as u32 > ceiling) {
+    if cell.iter().take(layout.pixels).any(|&p| {
+        crate::analytics::ops::add(1);
+        p as u32 > ceiling
+    }) {
         return false;
     }
+    crate::analytics::ops::add(layout.pixels + 1);
     let c = layout.params.c;
     for slot in cell.iter_mut().take(layout.pixels) {
         *slot = (*slot as u32 * c) as u8;
@@ -504,6 +516,7 @@ pub fn merge_cells(dst: &mut [u8], src: &[u8], layout: &MicroLayout, n: u64, rou
     let z_src = zoom(src, layout);
     let mut target = z_dst.max(z_src);
 
+    crate::analytics::ops::add(3 * layout.pixels + 1);
     let mut sums: Vec<u32> = (0..layout.pixels)
         .map(|i| {
             scale_down(dst[i] as u32, target - z_dst, c, rounding)
@@ -519,7 +532,11 @@ pub fn merge_cells(dst: &mut [u8], src: &[u8], layout: &MicroLayout, n: u64, rou
     let remainder = combined % unit;
 
     let cap = layout.max_zoom();
-    while sums.iter().any(|&v| v > PIXEL_MAX as u32) {
+    while sums.iter().any(|&v| {
+        crate::analytics::ops::add(1);
+        v > PIXEL_MAX as u32
+    }) {
+        crate::analytics::ops::add(layout.pixels);
         if target >= cap {
             for value in sums.iter_mut() {
                 *value = (*value).min(PIXEL_MAX as u32);
@@ -534,6 +551,7 @@ pub fn merge_cells(dst: &mut [u8], src: &[u8], layout: &MicroLayout, n: u64, rou
         // too and needs no adjustment.
     }
 
+    crate::analytics::ops::add(2 * layout.pixels + 1);
     for (slot, value) in dst.iter_mut().take(layout.pixels).zip(sums) {
         *slot = value as u8;
     }

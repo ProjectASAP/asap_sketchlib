@@ -412,6 +412,8 @@ where
         if estimates.is_empty() {
             return 0.0;
         }
+        crate::analytics::ops::add(rows);
+        crate::analytics::ops::add_sort(rows);
         estimates.sort_unstable_by(f64::total_cmp);
         let mid = estimates.len() / 2;
         if estimates.len() % 2 == 1 {
