@@ -561,8 +561,8 @@ mod tests {
     }
 
     /// Mouse layers much narrower than the elephant ones: the joint bound
-    /// `P(error > eps F0 AND complete) <= 2/(k eps^2)`, and the ideal estimator
-    /// (exact top count restored) has mean `F0` and variance at most `2 F0^2/k`.
+    /// `P(error > eps F0 AND complete) <= 1.35/(k eps^2)`, and the ideal estimator
+    /// (exact top count restored) has mean `F0` and variance at most `1.35 F0^2/k`.
     fn check_cardinality(trials: usize) {
         const HEAP: usize = 32;
         const KEYS: usize = 2000;
@@ -598,15 +598,15 @@ mod tests {
             "top layer incomplete in {incomplete}/{trials} trials"
         );
         let n = trials as f64;
-        let delta = 2.0 / (HEAP as f64 * EPS * EPS);
+        let delta = 1.35 / (HEAP as f64 * EPS * EPS);
         assert!(
             failures as f64 <= allowed_failures(trials, delta),
             "{failures}/{trials} joint misses beyond eps={EPS}"
         );
         let variance = sum_sq / n;
         assert!(
-            variance <= 2.0 * f0 * f0 / HEAP as f64,
-            "variance {:.3} F0^2/k above 2",
+            variance <= 1.35 * f0 * f0 / HEAP as f64,
+            "variance {:.3} F0^2/k above 1.35",
             variance / (f0 * f0 / HEAP as f64)
         );
         assert!(

@@ -123,6 +123,9 @@ signals a backwards-compatible change.
 
 ### Docs
 
+- **UnivMon's distinct-count bound is `1.35/(kε²)`**, the variance the
+  proof derives, in place of the looser `2/(kε²)`, in the UnivMon and
+  UnivMonTwoTier API pages; the tests check the tighter bound.
 - **A receiver of `f64` deltas matches the producer only up to rounding.**
   For Count-Min, Count Sketch and the two heap kinds, the wire format
   (§3.23), the `DeltaCounter` docs and the API pages now state the bound;

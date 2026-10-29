@@ -1407,7 +1407,7 @@ mod tests {
             const EPS: f64 = 0.5;
             // L >= ceil(log2(F0 / k)) + 2.
             let layers = (KEYS as f64 / HEAP as f64).log2().ceil() as usize + 2;
-            let chebyshev = 2.0 / (HEAP as f64 * EPS * EPS);
+            let chebyshev = 1.35 / (HEAP as f64 * EPS * EPS);
             let mut rng = StdRng::seed_from_u64(0x5EED_00F0);
             let f0 = KEYS as f64;
             for shape in SHAPES {

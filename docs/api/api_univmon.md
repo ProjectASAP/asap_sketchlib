@@ -191,13 +191,13 @@ so the layer increments form a martingale difference sequence: unconditionally
 expectation by `F0 / 2^j` on low layers, and on high layers by
 `(F0 / 2^j)^3 / (5 k^2)`, using `(x-k)^+ <= x(x-1)(x-2)/(5 k^2)` for `k >= 8`.
 Splitting at `2^j` in `[0.45, 0.9) * F0/k` gives
-`Var[Y*_0] <= 1.35 F0^2/k <= 2 F0^2/k`.
+`Var[Y*_0] <= 1.35 F0^2/k`.
 
 Let `C` be the event that the top heap is complete (`top_layer_complete()`),
 and `Y = estimate_cardinality()`. On `C`, `Y = Y*_0`, so Chebyshev gives the
 **joint** bound
 
-`P(|Y - F0| > epsilon F0 AND C) <= d`, where `d = min(1, 2/(k epsilon^2))`.
+`P(|Y - F0| > epsilon F0 AND C) <= d`, where `d = min(1, 1.35/(k epsilon^2))`.
 
 Completeness does not imply conditional unbiasedness. With `F0 = 9`, `k = 8`,
 `L = 2`, any layer-0 heap misses one key. Of 512 equally likely next-bit
