@@ -119,6 +119,16 @@ pub(crate) fn count_sketch_params_for(
     delta: f64,
     fast_path: bool,
 ) -> Option<MatrixParams> {
+    count_sketch_params_fitting(epsilon, delta, fast_path, |_| true)
+}
+
+/// [`count_sketch_params_for`] over the shapes `fits` accepts.
+fn count_sketch_params_fitting(
+    epsilon: f64,
+    delta: f64,
+    fast_path: bool,
+    fits: impl Fn(MatrixParams) -> bool,
+) -> Option<MatrixParams> {
     if !is_positive(epsilon) || !is_positive(delta) {
         return None;
     }
@@ -135,10 +145,11 @@ pub(crate) fn count_sketch_params_for(
             if !is_positive(room) || 1.0 / room > u32::MAX as f64 {
                 continue;
             }
-            (1.0 / room).ceil() as usize
+            (1.0 / room).ceil().max(1.0) as usize
         };
-        if best.is_none_or(|b| rows * cols < b.rows * b.cols) {
-            best = Some(MatrixParams { rows, cols });
+        let shape = MatrixParams { rows, cols };
+        if fits(shape) && best.is_none_or(|b| rows * cols < b.rows * b.cols) {
+            best = Some(shape);
         }
     }
     best
@@ -360,14 +371,17 @@ impl<H: SketchHasher> SketchAnalytics for CountSketchWithL2Norm<H> {
         delta: f64,
         _: &(),
     ) -> Option<MatrixParams> {
+        let fits = |p: MatrixParams| {
+            CountSketchWithL2Norm::<crate::DefaultXxHasher>::check_hash_bits(p.rows, p.cols).is_ok()
+        };
         let params = match statistic {
-            StatisticKind::ItemFrequency => count_sketch_params_for(epsilon, delta, true)?,
+            StatisticKind::ItemFrequency => {
+                count_sketch_params_fitting(epsilon, delta, true, fits)?
+            }
             StatisticKind::FrequencyL2 => l2_norm_params_for(epsilon, delta)?,
             _ => return None,
         };
-        CountSketchWithL2Norm::<crate::DefaultXxHasher>::check_hash_bits(params.rows, params.cols)
-            .ok()
-            .map(|()| params)
+        fits(params).then_some(params)
     }
 }
 

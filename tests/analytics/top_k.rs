@@ -553,6 +553,23 @@ fn count_min_sizing_meets_the_target_and_one_step_smaller_does_not() {
     );
 }
 
+/// `F = min(3, log2 W)`, so `new` accepts every sized shape.
+#[test]
+fn fold_sizing_returns_parameters_new_accepts() {
+    let none = FoldData::default();
+    for epsilon in [0.01, 0.5, 1.0, 3.0, 1e6, 1e200, f64::INFINITY] {
+        for p in [
+            CmFold::params_for(StatisticKind::ItemFrequency, epsilon, 0.01, &none),
+            CsFold::params_for(StatisticKind::ItemFrequency, epsilon, 0.01, &none),
+        ] {
+            let p = p.unwrap_or_else(|| panic!("{epsilon}"));
+            assert_eq!(p.fold_level, p.full_cols.trailing_zeros().min(3), "{p:?}");
+            CmFold::new(p.rows, p.full_cols, p.fold_level, p.heap_size);
+            CsFold::new(p.rows, p.full_cols, p.fold_level, p.heap_size);
+        }
+    }
+}
+
 #[test]
 fn count_sketch_sizing_meets_the_target() {
     let none = FlowData::default();

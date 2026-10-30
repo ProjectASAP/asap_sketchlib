@@ -77,14 +77,14 @@ impl TwoTierParams {
 }
 
 /// The data inputs of UnivMonQ.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct UnivMonQData {
     /// `n`, the updates.
     pub n: Option<u64>,
-    /// Whether the ordered readouts' heavy set is empty, as
-    /// [`UnivMonQOrderedQueryDiagnostics::heavy`](crate::UnivMonQOrderedQueryDiagnostics)
-    /// reports it. The Quantile and Rank bounds need it `true`.
-    pub heavy_set_empty: Option<bool>,
+    /// `F̂₂`, an upper bound on the state's
+    /// [`estimate_f2`](crate::UnivMonQ::estimate_f2). The ordered readouts'
+    /// heavy set is empty when `F̂₂·M < n²`.
+    pub f2_estimate: Option<f64>,
 }
 
 const TOTAL_CONTRACT: &str = "univmon_unit_update_total";
@@ -437,15 +437,22 @@ fn univmonq_collision_probability(config: &UnivMonQConfig) -> f64 {
         .fold(0.0, f64::max)
 }
 
-/// Quantile and Rank: `ε = √(ln(2/δ)/(2·min(M, n)))`, `δ` chosen, when the
-/// heavy set is empty.
+/// Whether `F̂₂·M < n²`, which empties the ordered readouts' heavy set.
+fn heavy_set_empty(samples: usize, data: &UnivMonQData) -> Option<bool> {
+    let n = data.n? as f64;
+    let f2 = data.f2_estimate?;
+    Some(f2 >= 0.0 && f2 * (samples as f64) < n * n)
+}
+
+/// Quantile and Rank: `ε = √(ln(2/δ)/(2·min(M, n)))`, `δ` chosen, when
+/// `F̂₂·M < n²`.
 fn sample_error(
     metric: ErrorMetric,
     config: &UnivMonQConfig,
     data: &UnivMonQData,
     delta: Option<f64>,
 ) -> Option<ErrorBound> {
-    (data.heavy_set_empty? && config.ordered_samples > 0).then_some(())?;
+    (config.ordered_samples > 0 && heavy_set_empty(config.ordered_samples, data)?).then_some(())?;
     let sampled = (config.ordered_samples as f64).min(data.n? as f64);
     let delta = delta.unwrap_or(DEFAULT_DELTA);
     (sampled > 0.0 && delta > 0.0 && delta <= 1.0).then(|| ErrorBound {
@@ -555,10 +562,7 @@ impl<H: SketchHasher> SketchAnalytics for UnivMonQ<H> {
         match statistic {
             StatisticKind::ItemFrequency => univmonq_item_params_for(epsilon, delta),
             StatisticKind::Quantile | StatisticKind::Rank => {
-                if !is_positive(epsilon)
-                    || !is_positive(delta)
-                    || data.heavy_set_empty == Some(false)
-                {
+                if !is_positive(epsilon) || !is_positive(delta) {
                     return None;
                 }
                 let samples = ((2.0 / delta).ln() / (2.0 * epsilon * epsilon)).ceil();
@@ -566,12 +570,12 @@ impl<H: SketchHasher> SketchAnalytics for UnivMonQ<H> {
                     return None;
                 }
                 let samples = (samples as usize).max(1);
-                data.n
-                    .is_none_or(|n| n >= samples as u64)
-                    .then(|| UnivMonQConfig {
+                (data.n? >= samples as u64 && heavy_set_empty(samples, data)?).then(|| {
+                    UnivMonQConfig {
                         ordered_samples: samples,
                         ..UnivMonQConfig::default()
-                    })
+                    }
+                })
             }
             _ => None,
         }

@@ -235,7 +235,10 @@ fn kll_bounds_follow_the_fits_and_need_m_at_least_8() {
         for m in [1, 2, 7] {
             assert_eq!(kll_bound(statistic, KllParams { k: 200, m }, 0.01), None);
         }
-        assert!(kll_bound(statistic, KllParams { k: 3, m: 9 }, 0.01).is_some());
+        assert_eq!(
+            kll_bound(statistic, KllParams { k: 3, m: 9 }, 0.01).is_some(),
+            statistic == StatisticKind::Quantile
+        );
         assert!(kll_bound(statistic, KllParams { k: 5, m: 40_000 }, 0.01).is_some());
         assert_eq!(kll_bound(statistic, p, 0.0), None);
     }
@@ -243,6 +246,15 @@ fn kll_bounds_follow_the_fits_and_need_m_at_least_8() {
         kll_bound(StatisticKind::Distinct, KllParams::default(), 0.01),
         None
     );
+    // The Rank fit was measured for k from 32.
+    assert_eq!(
+        kll_bound(StatisticKind::Rank, KllParams { k: 31, m: 8 }, 0.01),
+        None
+    );
+    assert!(kll_bound(StatisticKind::Rank, KllParams { k: 32, m: 8 }, 0.01).is_some());
+    // s(1e-20) = z(1 − 5e-21)/z(0.995), with z(1 − 5e-21) = 9.336045.
+    let s = asap_sketchlib::analytics::quantiles::kll_delta_scale(1e-20);
+    assert!((s - 9.336_045 / 2.575_829).abs() < 1e-5, "{s}");
 }
 
 #[test]
@@ -272,6 +284,14 @@ fn kll_sizing_meets_the_target_and_one_smaller_k_does_not() {
             None
         );
     }
+    let loose = <Kll as SketchAnalytics>::params_for(StatisticKind::Rank, 0.5, 0.01, &none);
+    assert_eq!(loose, Some(KllParams { k: 32, m: 8 }));
+    assert!(
+        kll_bound(StatisticKind::Rank, loose.unwrap(), 0.01)
+            .unwrap()
+            .epsilon
+            <= 0.5
+    );
 }
 
 /// `n` values with magnitudes log-uniform in `[10^lo, 10^hi)`, each negative
@@ -457,8 +477,17 @@ fn ddsketch_sizing_meets_the_target() {
             assert!(bound.epsilon >= epsilon * (1.0 - 1e-12));
         }
     }
+    for (statistic, epsilon, data) in [
+        (StatisticKind::Quantile, 1.0, DdData::default()),
+        (StatisticKind::QuantileInterpolated, 300.0, signed),
+    ] {
+        let p = DdSketch::params_for(statistic, epsilon, 0.0, &data);
+        assert_eq!(p, Some(DdParams { alpha: 0.5 }));
+        let bound = DdSketch::theoretical_error(statistic, &p.unwrap(), &data, None).unwrap();
+        assert!(bound.epsilon <= epsilon);
+    }
     assert_eq!(
-        DdSketch::params_for(StatisticKind::Quantile, 1.0, 0.0, &DdData::default()),
+        DdSketch::params_for(StatisticKind::Quantile, f64::NAN, 0.0, &DdData::default()),
         None
     );
     assert_eq!(
@@ -470,6 +499,56 @@ fn ddsketch_sizing_meets_the_target() {
         ),
         None
     );
+}
+
+/// At `α = 1e−9` the indexable magnitudes are about 0.0371 to 26.98.
+#[test]
+fn ddsketch_bounds_need_alpha_in_range_and_indexable_magnitudes() {
+    let magnitudes = |min_magnitude, max_magnitude| DdData {
+        min_magnitude,
+        max_magnitude,
+        ..DdData::default()
+    };
+    let fine = DdParams { alpha: 1e-9 };
+    let error = |p: &DdParams, data: &DdData| {
+        DdSketch::theoretical_error(StatisticKind::Quantile, p, data, None)
+    };
+    assert!(error(&fine, &magnitudes(Some(0.04), Some(26.0))).is_some());
+    for data in [
+        magnitudes(Some(0.03), Some(26.0)),
+        magnitudes(Some(0.04), Some(28.0)),
+        magnitudes(None, Some(-1.0)),
+        magnitudes(None, Some(f64::NAN)),
+        magnitudes(Some(f64::NAN), None),
+    ] {
+        assert_eq!(error(&fine, &data), None, "{data:?}");
+    }
+    assert!(
+        DdSketch::params_for(
+            StatisticKind::Quantile,
+            1e-9,
+            0.0,
+            &magnitudes(None, Some(26.0))
+        )
+        .is_some()
+    );
+    assert_eq!(
+        DdSketch::params_for(
+            StatisticKind::Quantile,
+            1e-9,
+            0.0,
+            &magnitudes(None, Some(28.0))
+        ),
+        None
+    );
+    for alpha in [0.0, 1.0, -0.5, f64::NAN] {
+        let p = DdParams { alpha };
+        assert_eq!(error(&p, &DdData::default()), None);
+        assert_eq!(
+            <DdSketch as SketchAnalytics>::theoretical_memory_bytes(&p, &DdData::default()),
+            None
+        );
+    }
 }
 
 #[test]

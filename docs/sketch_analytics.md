@@ -109,7 +109,7 @@ Query is the sketch's main readout, and each row's symbols are defined in that s
 | Count-Min or Count Sketch with heap | as the base sketch | `O(dw + k)` | `O(est(d) + log k)` | `O(est(d))` | `O(dw + k(est(d) + log k))` | `2d + 1`, or 3 |
 | Count-Min or Count Sketch with Space-Saving | as the base sketch | `O(dw + m)` | `O(d)` | `O(est(d))` | `O(dw + m log m)` | `d + 1`, or 2 |
 | Count-Min or Count Sketch fold | as the base sketch | `O(d(W/2^F + min(W, D)) + k)` | `O(dE + est(d) + log k)` | `O(dE + est(d))` | `O(d(W/2^F + min(W, D)·E) + k(dE + est(d) + log k))` | `2d + 1` |
-| HyperLogLog | `ε = 1.04/√m`, `Relative` | `O(m)` | `O(1)` | `O(m)` | `O(m)` | 1 |
+| HyperLogLog | `ε = β_m/√m`, `Relative` | `O(m)` | `O(1)` | `O(m)` | `O(m)` | 1 |
 | HyperLogLogHip | `ε = 0.833/√m`, `Relative` | `O(m)` | `O(1)` | `O(1)` | none | 1 |
 | Kmv | `δ = e^(−Θ(ε²k))`, `Relative` | `O(k)` | `O(k)` | `O(1)` | `O(k²)` | 1 |
 | SetAggregator | exact | `O(Dℓ)` | `O(ℓ)` | `O(1)` | `O(D)` | 1 |
@@ -158,7 +158,7 @@ Data inputs: none.
 | Item | Big O | Formula |
 |---|---|---|
 | ItemFrequency error | | `Absolute(L2)`, `ε = √(q/β)`, `δ` chosen, with `β` the largest per-row rate with `P_med(d, β) ≤ δ`; contract `count_sketch_l2_median_chosen_row_rate_v1` |
-| ItemFrequency sizing | | the odd `d ≤ 19` and width with `q ≤ β·ε²` that minimize `d·w`; on `FastPath`, `w` a power of two |
+| ItemFrequency sizing | | the odd `d ≤ 19` and width `w ≥ 1` with `q ≤ β·ε²` that minimize `d·w`; on `FastPath`, `w` a power of two |
 | Memory | `O(dw)` | `theoretical_memory_bytes(rows, cols)` |
 | Update | `O(d)` | `d` |
 | Query ItemFrequency | `O(d log d)` | `2d + d·lg d` |
@@ -178,6 +178,7 @@ Data inputs: none.
 | Item | Big O | Formula |
 |---|---|---|
 | ItemFrequency error | | as CountSketch, with the `FastPath` `q` |
+| ItemFrequency sizing | | as CountSketch on `FastPath`, over the shapes with `d·(lg w + 1) ≤ 128` |
 | FrequencyL2 error | | `Relative`, `ε = 1 − √(1 − √(20q))`, `δ = P_med(d, 0.1)` fixed, when `20q < 1`; contract `univmon_layer0_f2_median_chebyshev_binomial_v1` |
 | FrequencyL2 sizing | | `w` the smallest width with `20q ≤ (1 − (1 − ε)²)²`, `d` the smallest with `P_med(d, 0.1) ≤ δ`; `None` when `d > 19` or `d·(lg w + 1) > 128` |
 | Memory | `O(dw)` | `theoretical_memory_bytes(rows, cols)` |
@@ -379,7 +380,7 @@ Data inputs: `D`; `E`, the most entries one cell holds, at most `min(2^F, D)`; `
 | Item | Big O | Formula |
 |---|---|---|
 | ItemFrequency error | | as the base sketch on `RegularPath`, with `w = W` |
-| ItemFrequency sizing | | as the base sketch on `RegularPath`, with `W` rounded up to a power of two; `None` when `W > 65536`; `F` and `k` are not set by the bound |
+| ItemFrequency sizing | | as the base sketch on `RegularPath`, with `W` rounded up to a power of two; `None` when `W > 65536`; `F = min(3, log2 W)` and `k = 32` |
 | TopK error | | as the heap variant, for a state `merge_same_level` has not merged into |
 | TopK sizing | | as ItemFrequency at `δ/D` |
 | Memory | `O(d(W/2^F + min(W, D)) + k)` | `size_of::<Self>() − size_of::<TopKHeap>() + 24d·W/2^F + 32S + TopKHeap::theoretical_memory_bytes(k, key)` |
@@ -406,16 +407,17 @@ Data inputs: `max_distinct`, an upper bound on `D`.
 
 | Item | Big O | Formula |
 |---|---|---|
-| Distinct error | | `Relative`, `ε = 1.04/√m`, `δ` unknown; contract `generic_hll_rse_only_no_confidence_v1` |
-| Distinct error, `Classic` with `max_distinct` | | `Relative`, `δ` chosen, `ε` the smallest from `max_distinct/(2(m − max_distinct))` to 1 with `max over D ≤ max_distinct of λ^t/t! ≤ δ`, where `λ = D(D − 1)/(2m)` and `t = ⌊εD⌋ + 1`; contract `classic_hll_linear_counting_collision_bound_v1` |
-| Distinct sizing | | the smallest `p` meeting the second contract when it applies, otherwise `p = ⌈2·log2(1.04/ε)⌉` |
+| Distinct error | | `Relative`, `ε = β_m/√m`, `δ` unknown, none for `p < 4`; contract `generic_hll_rse_only_no_confidence_v1` |
+| Distinct error, `Classic` with `max_distinct` | | `Relative`, `δ` chosen, `ε` the smallest from `max_distinct/(2(m − max_distinct))` to 1 with `max over D ≤ max_distinct of λ^t/t! ≤ δ`, where `λ = D(D − 1)/(2m)` and `t = ⌊εD⌋ + 1`, when that `ε` is at most `β_m/√m`; contract `classic_hll_linear_counting_collision_bound_v1` |
+| Distinct sizing | | the smallest `p` whose error is the second contract meeting `(ε, δ)`, otherwise the smallest `p ≥ 4` with `β_m/√m ≤ ε` |
 | Memory | `O(m)` | `theoretical_memory_bytes(precision)` |
 | Update | `O(1)` | 1 |
 | Query Distinct | `O(m)` | `m` for `Classic`, `2m + 66 − p` for `Ertl` |
 | Merge | `O(m)` | `2m` |
 
-- `1.04/√m` is a standard error, not a bound with a probability (Flajolet et al. 2007, Theorem 1).
-- The second contract applies when `max_distinct ≤ m/2`, `max_distinct ≤ 2^17` and `p` is from 4 to 18, and its `ε` is at most 1.
+- `β_m/√m` is a standard error, not a bound with a probability (Flajolet et al. 2007, Theorem 1).
+  `β_m` is 1.106, 1.070, 1.054 and 1.046 for `m` = 16, 32, 64 and 128, and 1.04 above.
+- The second contract applies when `max_distinct ≤ m/2`, `max_distinct ≤ 2^17` and `p` is from 4 to 18, and its `ε` is at most 1 and at most `β_m/√m`.
   There `Classic` always uses linear counting, which overcounts by at most `max_distinct/(2(m − max_distinct))` of `D` and undercounts by more than `εD` only when `t` keys land on registers already taken, with probability at most `λ^t/t!`.
   `λ^t/t!` is not monotone in `D`, so the maximum is taken over every `D`.
 - `Ertl` does not use linear counting, so only the standard error applies to it.
@@ -450,7 +452,7 @@ Data inputs: `D`, unbounded when unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
-| Distinct error | | `Relative`; `ε = δ = 0` for a known `D < k`; otherwise `δ` chosen and `ε` the smallest with `exp(−ε²(k − 1)/((1 + ε)(2 + ε))) + exp(−ε²(k − 1)/(2(1 − ε))) ≤ δ`, the second term 0 for `ε ≥ 1`; contract `kmv_exact_below_k_chernoff_v1` |
+| Distinct error | | `Relative`; `ε = δ = 0` for a known `D < k`; otherwise `δ` chosen and `ε` the smallest with `exp(−ε²(k − 1)/((1 + ε)(2 + ε))) + exp(−ε²(k − 1)/(2(1 − ε))) ≤ δ`, the second term 0 for `ε ≥ 1`; `None` for a NaN or negative `δ`, and for `δ = 0` unless `D < k`; contract `kmv_exact_below_k_chernoff_v1` |
 | Distinct sizing | | the smallest `k` meeting `(ε, δ)`, such as 4323 at `ε = 0.05`, `δ = 0.01`, or `D + 1` for a known `D` when smaller |
 | Memory | `O(k)` | `theoretical_memory_bytes(k, D)` |
 | Update | `O(k)` | `k + 3 + 6·⌊log2 k⌋` |
@@ -528,9 +530,9 @@ In the formulas, `R` and `L` are a state's items and levels, and the trait puts 
 | Item | Big O | Formula |
 |---|---|---|
 | Quantile error | | `Rank`, `ε = 2.296·s(δ)/k^0.9723`, `δ` chosen; contract `kll_quantile_empirical_99_v1`, or `kll_quantile_empirical_99_delta_scaled_v1` for `δ < 0.01` |
-| Quantile sizing | | `k = ⌈(2.296·s(δ)/ε)^(1/0.9723)⌉`, `m = 8`, `None` when `k > 26602` |
-| Rank error | | `Absolute(L1)`, `ε = 2.07·s(δ)/k^0.9646`, `δ` chosen; contract `kll_rank_measured_99_v1`, or `kll_rank_measured_99_delta_scaled_v1` for `δ < 0.01` |
-| Rank sizing | | `k = ⌈(2.07·s(δ)/ε)^(1/0.9646)⌉`, `m = 8`, `None` when `k > 26602` |
+| Quantile sizing | | `k = max(8, ⌈(2.296·s(δ)/ε)^(1/0.9723)⌉)`, `m = 8`, `None` when `k > 26602` |
+| Rank error | | `Absolute(L1)`, `ε = 2.07·s(δ)/k^0.9646`, `δ` chosen, none for `k < 32`; contract `kll_rank_measured_99_v1`, or `kll_rank_measured_99_delta_scaled_v1` for `δ < 0.01` |
+| Rank sizing | | `k = max(32, ⌈(2.07·s(δ)/ε)^(1/0.9646)⌉)`, `m = 8`, `None` when `k > 26602` |
 | Memory | `O(k + m·log(n/k))` | `theoretical_memory_bytes(k, m, n)` |
 | Update | `O(log k)` average | `15 + lg(c_b + 1)` |
 | Query Quantile | `O(R log R)` | `3R + R·lg R + 2L + lg R + 2` |
@@ -577,14 +579,14 @@ Parameters, data inputs, clamping and shapes as Kll.
 
 `src/sketches/ddsketch.rs`.
 Parameter: `α` in (0, 1), the code's `alpha`, with `γ = (1 + α)/(1 − α)`.
-Data inputs: `n`, the smallest magnitude, the largest magnitude `A`, and whether negative values occur.
+Data inputs: `n`, the smallest nonzero magnitude, the largest magnitude `A`, and whether negative values occur.
 
 | Item | Big O | Formula |
 |---|---|---|
 | Quantile error | | `Relative`, `ε = α`, `δ = 0`; contract `ddsketch_relative_error_alpha_v1` |
-| Quantile sizing | | `α = ε` |
+| Quantile sizing | | `α = min(ε, 1/2)` |
 | QuantileInterpolated error | | `δ = 0`; `Relative`, `ε = α` when no value is negative, contract `ddsketch_interpolated_relative_alpha_v1`; otherwise `Absolute`, `ε = α·A`, contract `ddsketch_interpolated_absolute_alpha_v1` |
-| QuantileInterpolated sizing | | `α = ε`, or `α = ε/A` for the `Absolute` bound |
+| QuantileInterpolated sizing | | `α = min(ε, 1/2)`, or `α = min(ε/A, 1/2)` for the `Absolute` bound |
 | Memory | `O(log(max/min)/α)` per sign | `theoretical_memory_bytes(alpha, n, min_magnitude, max_magnitude, negatives)` |
 | Update | `O(1)` | 4 |
 | Query Quantile | `O(B)` | `B + 4` |
@@ -595,7 +597,9 @@ Data inputs: `n`, the smallest magnitude, the largest magnitude `A`, and whether
 - An interpolated quantile is within `α·((1 − f)·|lower| + f·|upper|)` of the true one, with `f` the fractional rank, which is `α` relative when both neighbours share a sign.
 - A value `x` goes to bucket `⌊log_γ x⌋`, whose representative is `γ^i·(1 + α)`.
   A store spans `s` buckets from the smallest to the largest magnitude and holds at most `2(s + 126)` slots, the 126 being growth headroom, and `B` is the slots of both signs' stores, which the trait takes from the memory formula.
-- Magnitudes below about `2e−308` read as 0, and magnitudes above the largest indexable value are dropped, so both are outside the bound.
+- Nonzero magnitudes below the smallest value `ddsketch_indexable_bounds(α)` returns read as 0, and magnitudes above the largest are dropped.
+  The bounds are about `2e−308` and `1e308`, and narrow for `α` below about `1.6e−7`.
+  Error and sizing return `None` when a known magnitude is outside them, negative or NaN, or `α` is outside (0, 1), and memory returns `None` for such an `α`.
 - Sum, Min and Max are not sketch readouts: the state is the two stores and the zero count.
 - An update adds to the count, reads the store's offset, and adds to one bucket, or to the zero count, and reads the offset once more after growing the store.
 - A quantile query reads the count, both offsets and the zero count, and walks the slots until the cumulative count passes the rank, and an interpolated one walks twice.
@@ -687,15 +691,15 @@ Parameters, all fields of `UnivMonQConfig`: `L` layers, top-layer width `W`, hal
 Layer `j` has width `w_j = max(W >> ⌊j/P⌋, min(k, W))`, or `W` when `P = 0`.
 `q` is the most collision probability over the layers: `1/w_j` for a power-of-two `w_j`, and `min(1/w_j + 2^(−lg W), 9/(8·w_j))` otherwise.
 Updates are unit-weight `f64` values, and each update goes to exactly one layer.
-Data inputs: `n`, and whether the ordered readouts' heavy set is empty.
+Data inputs: `n`, and `F̂₂`, an upper bound on the state's `estimate_f2()`.
 
 | Item | Big O | Formula |
 |---|---|---|
 | ItemFrequency error | | `Absolute(L2)`, `ε = √(q/β)` with `β` the largest per-row failure probability with `P_med(d, β) ≤ δ`, `δ` chosen; contract `univmonq_terminal_count_sketch_l2_median_chosen_row_rate_v1` |
 | ItemFrequency sizing | | the odd `d` and power-of-two `W`, with `P = 0`, that meet `(ε, δ)` with the fewest counters `d·W` and fit the 128-bit hash |
-| Quantile error | | `Rank`, `ε = √(ln(2/δ)/(2·min(M, n)))`, `δ` chosen, when the heavy set is empty; contract `univmonq_rank_diffuse_occurrence_hoeffding_v1`; `None` without `n` or without knowing the heavy set is empty |
+| Quantile error | | `Rank`, `ε = √(ln(2/δ)/(2·min(M, n)))`, `δ` chosen, when `F̂₂·M < n²`; contract `univmonq_rank_diffuse_occurrence_hoeffding_v1`; `None` without `n` or `F̂₂` |
 | Rank error | | `Absolute(L1)`, the same `ε`, condition and contract |
-| Quantile, Rank sizing | | `M = ⌈ln(2/δ)/(2ε²)⌉`; `None` when the heavy set is not empty or `n < M` |
+| Quantile, Rank sizing | | `M = ⌈ln(2/δ)/(2ε²)⌉`; `None` without `n` or `F̂₂`, or when `n < M` or `F̂₂·M ≥ n²` |
 | FrequencyL2, Distinct, GSum, FrequencyEntropy, TopK error | | none |
 | Memory | `O(d·Σw_j + Lk + M)` | `theoretical_memory_bytes(config)`: `size_of::<Self>() + L·size_of::<Layer>() + d·(b/8)·Σw_j + L·(T(k) + 16k) + 24M`, with `T(k)` the bytes of a churned hash table of `k` `(u64, u64)` entries |
 | Update | `O(d log d + k log k + log M)` | `18 + 3d + d·lg d + 7·⌊log2 k⌋ + k·(9 + 7·⌊log2 k⌋) + (8 + 7·⌊log2 M⌋ when M > 0)` |
@@ -707,7 +711,7 @@ Data inputs: `n`, and whether the ordered readouts' heavy set is empty.
 - ItemFrequency reads only the layer the key went to, whose columns are `lg W` hash bits modulo `w_j`.
 - Rank and Quantile read a uniform sample of `M` updates, so Hoeffding's inequality for sampling without replacement gives the bound.
   The heavy set is the frequent values the readout handles separately, and `ordered_query_diagnostics().heavy` reports it.
-  It is empty on a stream where no value is frequent, and when it is not empty the error depends on the data.
+  The readout leaves it empty when its F2 estimate is below `n²/M`, and when it is not empty the error depends on the data.
 - FrequencyL2, Distinct and GSum come from candidate keys cut off by a threshold, so UnivMon's bounds do not carry over.
 - A clone or decoded state reserves the candidate tables, candidate heaps and ordered sample a built one does.
 - A `BinaryHeap` push into a heap that then holds `n` entries counts `3 + 2·⌊log2 n⌋`, and a pop from `n` entries counts `4 + 5·⌊log2 n⌋`, the most std's sifts move.
@@ -745,15 +749,15 @@ A query takes the median over rows, which fails with probability `P_med(d, q·w/
 | Count Sketch ItemFrequency | `Absolute(L1)`, `ε = 4(2^a − 1)(1 + ε_in)/w + ε_in` | `P_med(d, q·w/4) + d·δ_in` | `hydra_cs_cell_markov_median_binomial_v1` |
 | Kll Quantile | `Rank`, `ε = 4N(2^a − 1)/(w·N_Q) + ε_in` | `P_med(d, q·w/4) + d·δ_in` | `hydra_kll_cell_mixture_rank_median_binomial_v1` |
 | Kll Rank, from `query_cdf` | `Absolute`, the same `ε` on the rank scaled to [0, 1] | `P_med(d, q·w/4) + d·δ_in` | `hydra_kll_cell_mixture_rank_median_binomial_v1` |
-| HyperLogLog Distinct | `Relative`, `ε = ε_in + (1 + ε_in)·4n(2^a − 1)/(w·D_Q)` | unknown | `hydra_hll_cell_collision_median_binomial_v1` |
 | UnivMon Total | `Absolute(L1)`, `ε = 4(2^a − 1)/w` | `P_med(d, q·w/4)` | `hydra_univmon_total_markov_median_binomial_v1` |
 | UnivMon FrequencyL2 | `Relative`, `ε = ε_in + (1 + ε_in)·4N(2^a − 1)/(w·‖f_Q‖₂)` | `P_med(d, q·w/4) + d·δ_in` | `hydra_univmon_l2_collision_median_binomial_v1` |
-| UnivMon Distinct | as HyperLogLog Distinct | `P_med(d, q·w/4) + d·δ_in` | `hydra_univmon_distinct_collision_median_binomial_v1` |
-| Kll group total, UnivMon FrequencyEntropy | none | | |
+| UnivMon Distinct | `Relative`, `ε = ε_in + (1 + ε_in)·4n(2^a − 1)/(w·D_Q)` | `P_med(d, q·w/4) + d·δ_in` | `hydra_univmon_distinct_collision_median_binomial_v1` |
+| HyperLogLog Distinct, Kll group total, UnivMon FrequencyEntropy | none | | |
 
-- A HyperLogLog cell counts colliding updates, not their weight, so its term uses `n`, and its `δ` is unknown because `Ertl` gives only a standard error.
+- A UnivMon Distinct cell counts colliding updates, not their weight, so its term uses `n`.
+- A HyperLogLog cell's `Ertl` bound is a standard error with no `δ`, and the collision term holds only with probability `1 − P_med(d, q·w/4)`, so no one `(ε, δ)` states both.
 - Hydra never merges its own cells, so Kll cells keep their bound.
-- `params_for` sizes ItemFrequency with Count-Min cells, Quantile and Rank with Kll, Distinct with HyperLogLog and FrequencyL2 with UnivMon, for the arity in `HydraData::arity`, 1 when unknown.
+- `params_for` sizes ItemFrequency with Count-Min cells, Quantile and Rank with Kll and FrequencyL2 with UnivMon, for the arity in `HydraData::arity`, 1 when unknown.
   It gives half of `ε` to collisions, `ε_in = (ε/2)/(1 + ε/2)` to the cells, and splits `δ` the same way.
   It sets `w` to the smallest power of two that keeps the collision term at most `ε/2`, `d` to the smallest odd depth with `P_med(d, 1/4) ≤ δ/2`, and the cells to the inner `params_for(ε_in, δ/(2d))`.
 - Memory: `size_of::<Hydra>() + d·w·size_of::<HydraCounter>() + (d·w + 1)·(mem_in − size_of::<Inner>()) + 2a·size_of::<String>() + 2·label bytes`, where the label bytes include escapes, exact for Count-Min cells when no label needs escaping.
@@ -833,7 +837,9 @@ Data inputs: `N`.
 
 `src/sketch_framework/octo.rs`, behind the `octo-runtime` feature.
 `K` workers keep 1-byte counters and send a cell's count to a parent sketch when it reaches a threshold, which adapts between `τ_min` and `τ_max ≤ 127`.
-`K` is the code's `num_workers` and the paper's `k`, the thresholds are `min_threshold` and `max_threshold`, or the fixed `threshold` without `adaptive`, and `K'` is 1 when `partition` splits keys by hash and `K` when it goes round robin.
+`K` is the code's `num_workers` and the paper's `k`, and `K'` is 1 when `partition` splits keys by hash and `K` when it goes round robin.
+`τ_min` is `min_threshold`, or the fixed `threshold` without `adaptive`.
+`τ_max` is the larger of the initial `threshold` and `max_threshold` raised to at least `min_threshold`, each within [1, 127], or the fixed `threshold` without `adaptive`.
 A runtime has no one sketch type, so its analytics are the functions `octo_error`, `octo_memory_bytes` and `octo_update_ops` in `analytics::frameworks`, over an `OctoConfig` and an `OctoParent`.
 The Count-Min and Count Sketch parents hash on `RegularPath`, and the HyperLogLog parent is `Classic`.
 

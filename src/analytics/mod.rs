@@ -256,6 +256,21 @@ pub fn normal_quantile(p: f64) -> f64 {
     0.5 * (lo + hi)
 }
 
+/// The `x` with `P(Z > x) = tail` for a standard normal `Z` and `tail` in
+/// (0, 1), solved on the upper tail so tails below `f64::EPSILON` resolve.
+pub fn normal_upper_quantile(tail: f64) -> f64 {
+    let (mut lo, mut hi) = (-40.0f64, 40.0f64);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if 0.5 * erfc(mid / std::f64::consts::SQRT_2) > tail {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    0.5 * (lo + hi)
+}
+
 fn normal_cdf(x: f64) -> f64 {
     0.5 * erfc(-x / std::f64::consts::SQRT_2)
 }
@@ -314,6 +329,8 @@ mod tests {
         assert!((normal_quantile(0.995) - 2.575_829).abs() < 1e-5);
         assert!((normal_quantile(0.975) - 1.959_964).abs() < 1e-5);
         assert!(normal_quantile(0.5).abs() < 1e-6);
+        assert!((normal_upper_quantile(0.005) - 2.575_829).abs() < 1e-5);
+        assert!((normal_upper_quantile(5e-21) - 9.336_045).abs() < 1e-5);
     }
 
     #[test]

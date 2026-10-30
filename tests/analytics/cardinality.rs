@@ -209,7 +209,7 @@ fn hll_standard_errors_match_the_measured_relative_rmse() {
 #[test]
 fn classic_linear_counting_is_within_epsilon_with_probability_one_minus_delta() {
     let p = HllParams { precision: 12 };
-    let max_distinct = 256u64;
+    let max_distinct = 16u64;
     let data = HllData {
         max_distinct: Some(max_distinct),
     };
@@ -243,6 +243,10 @@ fn classic_linear_counting_is_within_epsilon_with_probability_one_minus_delta() 
 fn hll_contracts_follow_the_variant_and_the_conditions() {
     let p = HllParams { precision: 12 };
     let small = HllData {
+        max_distinct: Some(8),
+    };
+    // At D = 256 the collision bound applies but its ε exceeds 1.04/64.
+    let medium = HllData {
         max_distinct: Some(256),
     };
     let large = HllData {
@@ -259,15 +263,17 @@ fn hll_contracts_follow_the_variant_and_the_conditions() {
         )),
         Some((generic, None))
     );
-    assert_eq!(
-        rse(ClassicP12::theoretical_error(
-            StatisticKind::Distinct,
-            &p,
-            &large,
-            None
-        )),
-        Some((generic, None))
-    );
+    for data in [&medium, &large] {
+        assert_eq!(
+            rse(ClassicP12::theoretical_error(
+                StatisticKind::Distinct,
+                &p,
+                data,
+                None
+            )),
+            Some((generic, None))
+        );
+    }
     assert_eq!(
         rse(ErtlP12::theoretical_error(
             StatisticKind::Distinct,
@@ -323,7 +329,7 @@ fn hll_standard_error_sizing_meets_the_target_and_one_step_smaller_does_not() {
 #[test]
 fn classic_collision_sizing_meets_the_target_and_one_step_smaller_does_not() {
     for (max_distinct, epsilon, delta) in
-        [(1000u64, 0.05, 0.01), (100, 0.1, 0.05), (5000, 0.05, 1e-3)]
+        [(100u64, 0.001, 0.05), (20, 0.001, 0.01), (9, 0.005, 0.01)]
     {
         let data = HllData {
             max_distinct: Some(max_distinct),
@@ -345,6 +351,60 @@ fn classic_collision_sizing_meets_the_target_and_one_step_smaller_does_not() {
             "{p:?} is larger than needed"
         );
     }
+}
+
+/// `params_for` returns a precision whose own bound meets `ε`, and `δ` when
+/// the bound has one.
+#[test]
+fn classic_sizing_meets_its_own_bound() {
+    for (max_distinct, epsilon, delta) in [
+        (1000u64, 0.01, 0.01),
+        (1000, 0.05, 0.01),
+        (256, 0.02, 0.01),
+        (100, 0.001, 0.05),
+        (5000, 0.05, 1e-3),
+    ] {
+        let data = HllData {
+            max_distinct: Some(max_distinct),
+        };
+        let p = ClassicP12::params_for(StatisticKind::Distinct, epsilon, delta, &data).unwrap();
+        let bound =
+            ClassicP12::theoretical_error(StatisticKind::Distinct, &p, &data, Some(delta)).unwrap();
+        assert!(
+            bound.epsilon <= epsilon && bound.delta.is_none_or(|d| d <= delta),
+            "D={max_distinct} ({epsilon}, {delta}): {p:?} gives {bound:?}"
+        );
+    }
+}
+
+#[test]
+fn hll_standard_error_uses_flajolet_constants_below_256_registers() {
+    let none = HllData::default();
+    let error = |precision| {
+        ErtlP12::theoretical_error(
+            StatisticKind::Distinct,
+            &HllParams { precision },
+            &none,
+            None,
+        )
+    };
+    assert_eq!(error(3), None);
+    for (precision, beta) in [(4, 1.106), (5, 1.070), (6, 1.054), (7, 1.046), (8, 1.04)] {
+        let m = (1u64 << precision) as f64;
+        assert!((error(precision).unwrap().epsilon - beta / m.sqrt()).abs() < 1e-12);
+    }
+    let sized = |epsilon| {
+        ErtlP12::params_for(StatisticKind::Distinct, epsilon, 0.01, &none)
+            .unwrap()
+            .precision
+    };
+    assert_eq!(sized(0.5), 4);
+    // 1.106/4 > 0.27 ≥ 1.04/4.
+    assert_eq!(sized(0.27), 5);
+    assert_eq!(
+        ClassicP12::params_for(StatisticKind::Distinct, 0.27, 0.01, &none),
+        Some(HllParams { precision: 5 })
+    );
 }
 
 #[test]
@@ -381,6 +441,22 @@ fn kmv_is_exact_below_k_and_within_epsilon_with_probability_one_minus_delta() {
         "{failures}/{trials} beyond eps={} at delta={delta}",
         bound.epsilon
     );
+}
+
+#[test]
+fn kmv_error_needs_a_valid_delta() {
+    let p = KmvParams { k: 256 };
+    let error = |data: &DistinctData, delta| {
+        KmvX::theoretical_error(StatisticKind::Distinct, &p, data, Some(delta))
+    };
+    for delta in [f64::NAN, -0.1, 0.0] {
+        assert_eq!(error(&distinct(5000), delta), None, "{delta}");
+    }
+    for delta in [f64::NAN, -0.1] {
+        assert_eq!(error(&distinct(200), delta), None, "{delta}");
+    }
+    assert_eq!(error(&distinct(200), 0.0).unwrap().epsilon, 0.0);
+    assert!(error(&distinct(5000), 0.01).is_some());
 }
 
 #[test]

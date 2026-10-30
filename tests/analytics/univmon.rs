@@ -569,14 +569,15 @@ const SAMPLE_CONFIG: UnivMonQConfig = UnivMonQConfig {
     seed_index: 5,
 };
 
-/// Distinct uniform values, so no value is frequent and the heavy set is
-/// empty.
+/// Distinct uniform values, so no value is frequent, `F̂₂ ≤ 2n` and the
+/// heavy set is empty.
 fn diffuse(rng: &mut StdRng, n: usize) -> (UnivMonQ, Vec<f64>) {
     let mut sketch = univmonq(SAMPLE_CONFIG, rng);
     let values: Vec<f64> = (0..n).map(|_| rng.random::<f64>()).collect();
     for value in &values {
         sketch.update(value);
     }
+    assert!(sketch.estimate_f2() <= 2.0 * n as f64);
     assert!(
         sketch
             .prepare_queries()
@@ -591,7 +592,7 @@ fn diffuse(rng: &mut StdRng, n: usize) -> (UnivMonQ, Vec<f64>) {
 fn sample_bound(statistic: StatisticKind, n: usize, delta: f64) -> ErrorBound {
     let data = UnivMonQData {
         n: Some(n as u64),
-        heavy_set_empty: Some(true),
+        f2_estimate: Some(2.0 * n as f64),
     };
     UnivMonQ::<asap_sketchlib::DefaultXxHasher>::theoretical_error(
         statistic,
@@ -656,14 +657,32 @@ fn univmonq_bounds_need_their_conditions() {
     let c = SAMPLE_CONFIG;
     let full = UnivMonQData {
         n: Some(10_000),
-        heavy_set_empty: Some(true),
+        f2_estimate: Some(10_000.0),
+    };
+    // `F̂₂·M < n²` holds at M = 256 and fails at M = 512.
+    let concentrated = UnivMonQData {
+        f2_estimate: Some(300_000.0),
+        ..full
+    };
+    let more_samples = UnivMonQConfig {
+        ordered_samples: 512,
+        ..c
     };
     for statistic in [StatisticKind::Quantile, StatisticKind::Rank] {
         assert!(Q::theoretical_error(statistic, &c, &full, None).is_some());
+        assert!(Q::theoretical_error(statistic, &c, &concentrated, None).is_some());
+        assert_eq!(
+            Q::theoretical_error(statistic, &more_samples, &concentrated, None),
+            None
+        );
         for data in [
             UnivMonQData::default(),
             UnivMonQData {
-                heavy_set_empty: Some(false),
+                f2_estimate: Some(1e8 / 256.0),
+                ..full
+            },
+            UnivMonQData {
+                f2_estimate: None,
                 ..full
             },
             UnivMonQData { n: None, ..full },
@@ -682,7 +701,7 @@ fn univmonq_bounds_need_their_conditions() {
     // min(M, n): fewer updates than samples widen the bound.
     let few = UnivMonQData {
         n: Some(64),
-        ..full
+        f2_estimate: Some(10.0),
     };
     assert!(
         Q::theoretical_error(StatisticKind::Rank, &c, &few, None)
@@ -723,11 +742,12 @@ fn univmonq_sizing_meets_the_target_and_one_step_smaller_does_not() {
         assert!(wider.epsilon > epsilon, "{c:?} is wider than needed");
 
         for statistic in [StatisticKind::Quantile, StatisticKind::Rank] {
-            let c = Q::params_for(statistic, epsilon, delta, &none).unwrap();
             let data = UnivMonQData {
                 n: Some(1 << 40),
-                heavy_set_empty: Some(true),
+                f2_estimate: Some((1u64 << 40) as f64),
             };
+            assert_eq!(Q::params_for(statistic, epsilon, delta, &none), None);
+            let c = Q::params_for(statistic, epsilon, delta, &data).unwrap();
             let bound = Q::theoretical_error(statistic, &c, &data, Some(delta)).unwrap();
             assert!(bound.epsilon <= epsilon);
             let fewer = UnivMonQConfig {
@@ -742,14 +762,18 @@ fn univmonq_sizing_meets_the_target_and_one_step_smaller_does_not() {
             );
         }
     }
-    let heavy = UnivMonQData {
-        heavy_set_empty: Some(false),
-        ..none
+    // M = 150 at (0.1, 0.1): `F̂₂·M < n² = 10^8` needs `F̂₂ < 666 667`.
+    let sized = |f2: f64| {
+        let data = UnivMonQData {
+            n: Some(10_000),
+            f2_estimate: Some(f2),
+        };
+        let c = Q::params_for(StatisticKind::Quantile, 0.1, 0.1, &data)?;
+        assert!(Q::theoretical_error(StatisticKind::Quantile, &c, &data, Some(0.1)).is_some());
+        Some(c.ordered_samples)
     };
-    assert_eq!(
-        Q::params_for(StatisticKind::Quantile, 0.1, 0.1, &heavy),
-        None
-    );
+    assert_eq!(sized(600_000.0), Some(150));
+    assert_eq!(sized(666_667.0), None);
 }
 
 const Q_SIZES: [UnivMonQConfig; 2] = [

@@ -692,7 +692,7 @@ mod octo {
         COUNT_MIN_CONTRACT, COUNT_SKETCH_CONTRACT, count_min_error, count_sketch_error,
     };
     use super::*;
-    use crate::{OctoConfig, OctoPartition, OctoPlan};
+    use crate::{OCTO_MAX_PROMOTION_THRESHOLD, OctoConfig, OctoPartition, OctoPlan};
 
     /// The parent sketch of an Octo runtime and its parameters; Count-Min and
     /// Count Sketch parents hash on `RegularPath`.
@@ -729,12 +729,20 @@ mod octo {
     const OCTO_CM_CONTRACT: &str = "octo_cm_residual_additive_v1";
     const OCTO_CS_CONTRACT: &str = "octo_cs_residual_additive_v1";
 
-    /// `τ_max`: the adaptive ceiling, or the fixed threshold.
+    /// `τ_max`: the largest threshold a worker holds, the initial one or the
+    /// adaptive ceiling after the controller clamps it into
+    /// `[max(min_threshold, 1), 127]`.
     pub fn octo_max_threshold(config: &OctoConfig) -> u32 {
-        config
-            .adaptive
-            .as_ref()
-            .map_or(config.threshold.get(), |adaptive| adaptive.max_threshold)
+        let initial = config.threshold.get();
+        config.adaptive.as_ref().map_or(initial, |adaptive| {
+            let floor = adaptive
+                .min_threshold
+                .clamp(1, OCTO_MAX_PROMOTION_THRESHOLD);
+            let ceiling = adaptive
+                .max_threshold
+                .clamp(floor, OCTO_MAX_PROMOTION_THRESHOLD);
+            initial.max(ceiling)
+        })
     }
 
     /// `K'`: 1 under `HashByKey`, `K` under `RoundRobin`.

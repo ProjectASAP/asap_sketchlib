@@ -183,7 +183,6 @@ fn hydra_sizing_meets_the_target_for_every_cell_kind() {
     for statistic in [
         StatisticKind::Quantile,
         StatisticKind::Rank,
-        StatisticKind::Distinct,
         StatisticKind::FrequencyL2,
     ] {
         for (epsilon, delta) in [(0.3, 0.1), (0.2, 0.05)] {
@@ -191,11 +190,34 @@ fn hydra_sizing_meets_the_target_for_every_cell_kind() {
                 .unwrap_or_else(|| panic!("{statistic:?} at ({epsilon}, {delta})"));
             let bound = Hydra::theoretical_error(statistic, &p, &data, Some(delta)).unwrap();
             assert!(
-                bound.epsilon <= epsilon && bound.delta.is_none_or(|d| d <= delta),
+                bound.epsilon <= epsilon && bound.delta.is_some_and(|d| d <= delta),
                 "{statistic:?}: {p:?} gives {bound:?} for ({epsilon}, {delta})"
             );
         }
     }
+}
+
+#[test]
+fn hydra_hll_distinct_has_no_bound() {
+    let data = HydraData {
+        n: Some(100_000),
+        group_distinct: Some(5_000),
+        ..HydraData::default()
+    };
+    let p = HydraParams {
+        rows: 5,
+        cols: 1 << 12,
+        arity: 1,
+        cell: HydraCell::Hll(HllParams::default()),
+    };
+    assert_eq!(
+        Hydra::theoretical_error(StatisticKind::Distinct, &p, &data, Some(0.1)),
+        None
+    );
+    assert_eq!(
+        Hydra::params_for(StatisticKind::Distinct, 0.3, 0.1, &data),
+        None
+    );
 }
 
 #[test]
@@ -207,8 +229,8 @@ fn hydra_kll_bounds_need_an_unmerged_hydra() {
         merged: Some(false),
         ..HydraData::default()
     };
-    let p = Hydra::params_for(StatisticKind::Quantile, 0.3, 0.1, &unmerged).unwrap();
     for statistic in [StatisticKind::Quantile, StatisticKind::Rank] {
+        let p = Hydra::params_for(statistic, 0.3, 0.1, &unmerged).unwrap();
         assert!(Hydra::theoretical_error(statistic, &p, &unmerged, Some(0.1)).is_some());
         for merged in [None, Some(true)] {
             let data = HydraData { merged, ..unmerged };
@@ -1090,6 +1112,36 @@ mod octo {
         assert!(
             failures <= allowed_failures(trials as usize, delta),
             "{failures}/{trials} beyond the residual bound at delta={delta}"
+        );
+    }
+
+    #[test]
+    fn octo_max_threshold_is_the_largest_a_worker_holds() {
+        let adaptive = |min_threshold, max_threshold| asap_sketchlib::OctoAdaptiveThreshold {
+            min_threshold,
+            max_threshold,
+            ..asap_sketchlib::OctoAdaptiveThreshold::default()
+        };
+        let with = |tau, band| OctoConfig {
+            adaptive: Some(band),
+            ..config(4, tau, OctoPartition::HashByKey)
+        };
+        assert_eq!(
+            frameworks::octo_max_threshold(&with(31, adaptive(1, 8))),
+            31
+        );
+        assert_eq!(frameworks::octo_max_threshold(&with(4, adaptive(1, 8))), 8);
+        assert_eq!(
+            frameworks::octo_max_threshold(&with(4, adaptive(20, 8))),
+            20
+        );
+        assert_eq!(
+            frameworks::octo_max_threshold(&with(4, adaptive(1, 500))),
+            127
+        );
+        assert_eq!(
+            frameworks::octo_max_threshold(&config(4, 31, OctoPartition::HashByKey)),
+            31
         );
     }
 

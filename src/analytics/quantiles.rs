@@ -2,10 +2,11 @@
 //! experimental UniformSampling.
 
 use super::{
-    DEFAULT_DELTA, ErrorBound, ErrorMetric, SketchAnalytics, StatisticKind, fixed_delta, lg,
-    normal_quantile,
+    DEFAULT_DELTA, ErrorBound, ErrorMetric, SketchAnalytics, StatisticKind, fixed_delta,
+    is_positive, lg, normal_upper_quantile,
 };
 use crate::common::numerical::NumericalValue;
+use crate::sketches::ddsketch::ddsketch_indexable_bounds;
 use crate::sketches::kll::{
     CAPACITY_CACHE_LEN, DEFAULT_K, DEFAULT_M, MAX_K, MAX_LEVELS, capacity_table, levels_after,
     normalized_k_m,
@@ -48,11 +49,12 @@ const KLL_RANK_SCALED_CONTRACT: &str = "kll_rank_measured_99_delta_scaled_v1";
 /// The smallest `m` the KLL fits were measured at.
 const KLL_FIT_MIN_M: usize = 8;
 
-/// `ε = c·s(δ)/k^p` of a KLL fit.
+/// `ε = c·s(δ)/k^p` of a KLL fit, for `k ≥ min_k`.
 #[derive(Clone, Copy)]
 struct KllFit {
     constant: f64,
     power: f64,
+    min_k: usize,
     contract: &'static str,
     scaled_contract: &'static str,
 }
@@ -60,13 +62,16 @@ struct KllFit {
 const KLL_QUANTILE_FIT: KllFit = KllFit {
     constant: 2.296,
     power: 0.9723,
+    min_k: DEFAULT_M,
     contract: KLL_QUANTILE_CONTRACT,
     scaled_contract: KLL_QUANTILE_SCALED_CONTRACT,
 };
 
+/// Measured for `k` from 32 to 4096.
 const KLL_RANK_FIT: KllFit = KllFit {
     constant: 2.07,
     power: 0.9646,
+    min_k: 32,
     contract: KLL_RANK_CONTRACT,
     scaled_contract: KLL_RANK_SCALED_CONTRACT,
 };
@@ -76,7 +81,7 @@ pub fn kll_delta_scale(delta: f64) -> f64 {
     if delta >= 0.01 {
         1.0
     } else {
-        normal_quantile(1.0 - delta / 2.0) / normal_quantile(1.0 - 0.005)
+        normal_upper_quantile(delta / 2.0) / normal_upper_quantile(0.005)
     }
 }
 
@@ -88,7 +93,7 @@ fn kll_error(
 ) -> Option<ErrorBound> {
     let (k, m) = normalized_k_m(params.k, params.m);
     let delta = delta.unwrap_or(DEFAULT_DELTA);
-    (m >= KLL_FIT_MIN_M && delta > 0.0 && delta < 1.0).then_some(())?;
+    (k >= fit.min_k && m >= KLL_FIT_MIN_M && delta > 0.0 && delta < 1.0).then_some(())?;
     Some(ErrorBound {
         metric,
         epsilon: fit.constant * kll_delta_scale(delta) / (k as f64).powf(fit.power),
@@ -107,7 +112,7 @@ fn kll_params_for(fit: KllFit, epsilon: f64, delta: f64) -> Option<KllParams> {
         .powf(1.0 / fit.power)
         .ceil();
     (k <= MAX_K as f64).then(|| KllParams {
-        k: (k as usize).max(DEFAULT_M),
+        k: (k as usize).max(fit.min_k),
         m: DEFAULT_M,
     })
 }
@@ -331,7 +336,7 @@ impl Default for DdParams {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct DdData {
     pub n: Option<u64>,
-    /// The smallest magnitude of the values.
+    /// The smallest nonzero magnitude of the values.
     pub min_magnitude: Option<f64>,
     /// `A`, the largest magnitude of the values.
     pub max_magnitude: Option<f64>,
@@ -342,6 +347,22 @@ pub struct DdData {
 const DD_QUANTILE_CONTRACT: &str = "ddsketch_relative_error_alpha_v1";
 const DD_INTERPOLATED_RELATIVE_CONTRACT: &str = "ddsketch_interpolated_relative_alpha_v1";
 const DD_INTERPOLATED_ABSOLUTE_CONTRACT: &str = "ddsketch_interpolated_absolute_alpha_v1";
+
+/// The largest `α` sizing returns.
+const DD_MAX_ALPHA: f64 = 0.5;
+
+/// Whether `α` is in (0, 1) and the known magnitudes are nonnegative and
+/// within `ddsketch_indexable_bounds(α)`.
+fn dd_valid(alpha: f64, data: &DdData) -> bool {
+    if !(alpha > 0.0 && alpha < 1.0) {
+        return false;
+    }
+    let (low, high) = ddsketch_indexable_bounds(alpha);
+    data.min_magnitude.is_none_or(|min| min >= low)
+        && data
+            .max_magnitude
+            .is_none_or(|max| max >= 0.0 && max <= high)
+}
 
 /// `B`, the most bucket slots both stores of one state hold.
 fn dd_slots(params: &DdParams, data: &DdData) -> f64 {
@@ -358,6 +379,7 @@ impl SketchAnalytics for DdSketch {
     type Data = DdData;
 
     fn theoretical_memory_bytes(params: &DdParams, data: &DdData) -> Option<usize> {
+        (params.alpha > 0.0 && params.alpha < 1.0).then_some(())?;
         Some(DdSketch::theoretical_memory_bytes(
             params.alpha,
             data.n
@@ -395,6 +417,7 @@ impl SketchAnalytics for DdSketch {
         data: &DdData,
         delta: Option<f64>,
     ) -> Option<ErrorBound> {
+        dd_valid(params.alpha, data).then_some(())?;
         let delta = Some(fixed_delta(0.0, delta)?);
         let relative = |contract| ErrorBound {
             metric: ErrorMetric::Relative,
@@ -423,13 +446,15 @@ impl SketchAnalytics for DdSketch {
         _: f64,
         data: &DdData,
     ) -> Option<DdParams> {
+        is_positive(epsilon).then_some(())?;
         let alpha = match statistic {
             StatisticKind::Quantile => epsilon,
             StatisticKind::QuantileInterpolated if data.negatives == Some(false) => epsilon,
             StatisticKind::QuantileInterpolated => epsilon / data.max_magnitude?,
             _ => return None,
         };
-        (alpha > 0.0 && alpha < 1.0).then_some(DdParams { alpha })
+        let alpha = alpha.min(DD_MAX_ALPHA);
+        dd_valid(alpha, data).then_some(DdParams { alpha })
     }
 }
 

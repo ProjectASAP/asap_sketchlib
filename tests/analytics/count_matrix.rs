@@ -272,6 +272,33 @@ fn l2_norm_sizing_meets_the_target_and_one_step_smaller_does_not() {
     }
 }
 
+/// At (0.02, 0.01) the fewest counters take 9 rows of 16384, 135 hash bits,
+/// and a shape with more counters fits the 128.
+#[test]
+fn l2_norm_item_sizing_takes_the_fewest_counters_that_fit_the_hash() {
+    let (epsilon, delta) = (0.02, 0.01);
+    let fewest = CsFast::params_for(StatisticKind::ItemFrequency, epsilon, delta, &()).unwrap();
+    assert!(
+        fewest.rows * (fewest.cols.ilog2() as usize + 1) > 128,
+        "{fewest:?}"
+    );
+    let p = CsL2::params_for(StatisticKind::ItemFrequency, epsilon, delta, &()).unwrap();
+    assert!(p.rows * (p.cols.ilog2() as usize + 1) <= 128, "{p:?}");
+    let bound =
+        CsL2::theoretical_error(StatisticKind::ItemFrequency, &p, &(), Some(delta)).unwrap();
+    assert!(bound.epsilon <= epsilon);
+}
+
+#[test]
+fn count_sketch_sizing_gives_a_column_for_huge_epsilon() {
+    for epsilon in [1e100, 1e200, f64::INFINITY] {
+        let p = CsRegular::params_for(StatisticKind::ItemFrequency, epsilon, 0.01, &()).unwrap();
+        assert!(p.cols >= 1, "{epsilon}: {p:?}");
+        let bound = CsRegular::theoretical_error(StatisticKind::ItemFrequency, &p, &(), Some(0.01));
+        assert!(bound.unwrap().epsilon <= epsilon);
+    }
+}
+
 #[test]
 fn total_is_exact_and_unanswered_statistics_have_no_bound() {
     let p = MatrixParams::default();

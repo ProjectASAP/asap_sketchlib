@@ -416,7 +416,7 @@ fn fold_shape(params: &FoldParams) -> MatrixParams {
 }
 
 /// Fold sizing: the base sketch's on `RegularPath` with `W` a power of two
-/// at most 65536.
+/// at most 65536, and the default fold level capped at `log2 W`.
 fn fold_params(
     base: Base,
     statistic: StatisticKind,
@@ -439,10 +439,12 @@ fn fold_params(
         }
         Base::CountSketch => fold_count_sketch_params_for(epsilon, delta)?,
     };
+    let sized = FoldParams::default();
     (shape.cols <= MAX_FULL_COLS).then_some(FoldParams {
         rows: shape.rows,
         full_cols: shape.cols,
-        ..FoldParams::default()
+        fold_level: sized.fold_level.min(shape.cols.trailing_zeros()),
+        ..sized
     })
 }
 

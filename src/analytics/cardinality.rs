@@ -47,6 +47,12 @@ const GENERIC_HLL_CONTRACT: &str = "generic_hll_rse_only_no_confidence_v1";
 const CLASSIC_COLLISION_CONTRACT: &str = "classic_hll_linear_counting_collision_bound_v1";
 const HIP_CONTRACT: &str = "hip_hll_rse_only_no_confidence_v1";
 
+/// The smallest precision Flajolet et al.'s standard error covers.
+const HLL_MIN_PRECISION: usize = 4;
+
+/// Flajolet et al.'s `β_m` for `m = 16, 32, 64, 128`.
+const HLL_SMALL_M_RSE: [f64; 4] = [1.106, 1.070, 1.054, 1.046];
+
 /// Precisions and `max_distinct` the linear-counting collision bound covers.
 const COLLISION_MIN_PRECISION: usize = 4;
 const COLLISION_MAX_PRECISION: usize = 18;
@@ -64,6 +70,38 @@ fn rse_error(constant: f64, precision: usize, contract: &'static str) -> ErrorBo
         delta: None,
         contract,
     }
+}
+
+/// `β_m` of HyperLogLog's standard error `β_m/√m`: the table for `p ≤ 7`,
+/// 1.04 above, and `None` for `p < 4`.
+fn hll_rse_constant(precision: usize) -> Option<f64> {
+    match precision {
+        p if p < HLL_MIN_PRECISION => None,
+        p if p < HLL_MIN_PRECISION + HLL_SMALL_M_RSE.len() => {
+            Some(HLL_SMALL_M_RSE[p - HLL_MIN_PRECISION])
+        }
+        _ => Some(HLL_RSE),
+    }
+}
+
+/// HyperLogLog's standard error `β_m/√m`; `None` for `p < 4`.
+fn hll_rse_error(precision: usize) -> Option<ErrorBound> {
+    Some(rse_error(
+        hll_rse_constant(precision)?,
+        precision,
+        GENERIC_HLL_CONTRACT,
+    ))
+}
+
+/// The smallest `p ≥ 4` with `β_m/√m ≤ ε`.
+fn hll_rse_params_for(epsilon: f64) -> Option<HllParams> {
+    let mut precision = rse_params_for(HLL_RSE, epsilon)?
+        .precision
+        .max(HLL_MIN_PRECISION);
+    while hll_rse_error(precision)?.epsilon > epsilon {
+        precision += 1;
+    }
+    Some(HllParams { precision })
 }
 
 /// `p = ⌈2·log2(constant/ε)⌉`, at least 1; `None` past 63.
@@ -142,6 +180,21 @@ fn classic_collision_error(
     })
 }
 
+/// Classic's bound: the collision bound when it applies and its `ε` is at
+/// most the standard error's, otherwise the standard error.
+fn classic_error(
+    precision: usize,
+    max_distinct: Option<u64>,
+    delta: Option<f64>,
+) -> Option<ErrorBound> {
+    let rse = hll_rse_error(precision)?;
+    Some(
+        classic_collision_error(precision, max_distinct, delta)
+            .filter(|bound| bound.epsilon <= rse.epsilon)
+            .unwrap_or(rse),
+    )
+}
+
 impl<R: HllRegisterStorage, H: SketchHasher> SketchAnalytics for HyperLogLogImpl<Classic, R, H> {
     type Params = HllParams;
     type Data = HllData;
@@ -173,11 +226,7 @@ impl<R: HllRegisterStorage, H: SketchHasher> SketchAnalytics for HyperLogLogImpl
         delta: Option<f64>,
     ) -> Option<ErrorBound> {
         (statistic == StatisticKind::Distinct).then_some(())?;
-        classic_collision_error(params.precision, data.max_distinct, delta).or(Some(rse_error(
-            HLL_RSE,
-            params.precision,
-            GENERIC_HLL_CONTRACT,
-        )))
+        classic_error(params.precision, data.max_distinct, delta)
     }
 
     fn params_for(
@@ -189,11 +238,12 @@ impl<R: HllRegisterStorage, H: SketchHasher> SketchAnalytics for HyperLogLogImpl
         (statistic == StatisticKind::Distinct).then_some(())?;
         (COLLISION_MIN_PRECISION..=COLLISION_MAX_PRECISION)
             .find(|&precision| {
-                classic_collision_error(precision, data.max_distinct, Some(delta))
-                    .is_some_and(|bound| bound.epsilon <= epsilon)
+                classic_error(precision, data.max_distinct, Some(delta)).is_some_and(|bound| {
+                    bound.contract == CLASSIC_COLLISION_CONTRACT && bound.epsilon <= epsilon
+                })
             })
             .map(|precision| HllParams { precision })
-            .or_else(|| rse_params_for(HLL_RSE, epsilon))
+            .or_else(|| hll_rse_params_for(epsilon))
     }
 }
 
@@ -228,8 +278,8 @@ impl<R: HllRegisterStorage, H: SketchHasher> SketchAnalytics for HyperLogLogImpl
         _: &HllData,
         _: Option<f64>,
     ) -> Option<ErrorBound> {
-        (statistic == StatisticKind::Distinct)
-            .then(|| rse_error(HLL_RSE, params.precision, GENERIC_HLL_CONTRACT))
+        (statistic == StatisticKind::Distinct).then_some(())?;
+        hll_rse_error(params.precision)
     }
 
     fn params_for(
@@ -239,7 +289,7 @@ impl<R: HllRegisterStorage, H: SketchHasher> SketchAnalytics for HyperLogLogImpl
         _: &HllData,
     ) -> Option<HllParams> {
         (statistic == StatisticKind::Distinct).then_some(())?;
-        rse_params_for(HLL_RSE, epsilon)
+        hll_rse_params_for(epsilon)
     }
 }
 
@@ -393,6 +443,9 @@ impl<H: SketchHasher> SketchAnalytics for Kmv<H> {
         delta: Option<f64>,
     ) -> Option<ErrorBound> {
         (statistic == StatisticKind::Distinct && params.k >= 2).then_some(())?;
+        if delta.is_some_and(|delta| delta.is_nan() || delta < 0.0) {
+            return None;
+        }
         if data.distinct.is_some_and(|d| d < params.k as u64) {
             return Some(ErrorBound {
                 metric: ErrorMetric::Relative,
@@ -402,6 +455,7 @@ impl<H: SketchHasher> SketchAnalytics for Kmv<H> {
             });
         }
         let delta = delta.unwrap_or(DEFAULT_DELTA);
+        (delta > 0.0).then_some(())?;
         Some(ErrorBound {
             metric: ErrorMetric::Relative,
             epsilon: kmv_epsilon(params.k, delta)?,

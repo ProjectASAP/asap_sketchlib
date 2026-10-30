@@ -84,7 +84,6 @@ const CM_CONTRACT: &str = "hydra_cm_cell_markov_median_binomial_v1";
 const CM_TOTAL_CONTRACT: &str = "hydra_cm_group_total_markov_min_v1";
 const CS_CONTRACT: &str = "hydra_cs_cell_markov_median_binomial_v1";
 const KLL_CONTRACT: &str = "hydra_kll_cell_mixture_rank_median_binomial_v1";
-const HLL_CONTRACT: &str = "hydra_hll_cell_collision_median_binomial_v1";
 const UM_TOTAL_CONTRACT: &str = "hydra_univmon_total_markov_median_binomial_v1";
 const UM_L2_CONTRACT: &str = "hydra_univmon_l2_collision_median_binomial_v1";
 const UM_DISTINCT_CONTRACT: &str = "hydra_univmon_distinct_collision_median_binomial_v1";
@@ -125,21 +124,6 @@ fn median_bound(
         epsilon: epsilon(bound.epsilon)?,
         delta: Some(total),
         contract,
-    })
-}
-
-/// The HyperLogLog Distinct bound, which has no `δ`.
-fn hll_distinct(params: &HydraParams, data: &HydraData) -> Option<ErrorBound> {
-    let inner = params
-        .cell
-        .cell()
-        .error(StatisticKind::Distinct, &data.cell, None)?;
-    let collided = collision_share(params) * data.n? as f64 / data.group_distinct?.max(1) as f64;
-    Some(ErrorBound {
-        metric: ErrorMetric::Relative,
-        epsilon: inner.epsilon + (1.0 + inner.epsilon) * collided,
-        delta: None,
-        contract: HLL_CONTRACT,
     })
 }
 
@@ -263,7 +247,6 @@ impl SketchAnalytics for Hydra {
                     |inner| Some(mixed + inner),
                 )
             }
-            (HydraCell::Hll(_), StatisticKind::Distinct) => hll_distinct(params, data),
             (HydraCell::UnivMon(_), StatisticKind::Total) => Some(ErrorBound {
                 metric: ErrorMetric::L1,
                 epsilon: share,
@@ -335,14 +318,6 @@ impl SketchAnalytics for Hydra {
                     &data.cell.stream,
                 )?)
             }
-            StatisticKind::Distinct => HydraCell::Hll(
-                <crate::HyperLogLog<crate::Ertl> as SketchAnalytics>::params_for(
-                    statistic,
-                    inner_epsilon,
-                    inner_delta,
-                    &data.cell.hll,
-                )?,
-            ),
             StatisticKind::FrequencyL2 => {
                 HydraCell::UnivMon(<crate::UnivMon as SketchAnalytics>::params_for(
                     statistic,
@@ -364,9 +339,6 @@ impl SketchAnalytics for Hydra {
                 StatisticKind::ItemFrequency => 1.0 + realized,
                 StatisticKind::Quantile | StatisticKind::Rank => {
                     data.total_weight? as f64 / data.group_weight?.max(1) as f64
-                }
-                StatisticKind::Distinct => {
-                    (1.0 + realized) * data.n? as f64 / data.group_distinct?.max(1) as f64
                 }
                 StatisticKind::FrequencyL2 => {
                     (1.0 + realized) * data.total_weight? as f64 / data.group_l2?
