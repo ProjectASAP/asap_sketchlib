@@ -472,6 +472,19 @@ impl HydraCounter {
         }
     }
 
+    /// Bytes this cell holds: the enum and the wrapped sketch's heap, as its
+    /// `memory_bytes` counts them.
+    pub fn memory_bytes(&self) -> usize {
+        let (bytes, inline) = match self {
+            HydraCounter::CountMinSketch(s) => (s.memory_bytes(), size_of_val(s)),
+            HydraCounter::Hll(s) => (s.memory_bytes(), size_of_val(s)),
+            HydraCounter::CountSketch(s) => (s.memory_bytes(), size_of_val(s)),
+            HydraCounter::Kll(s) => (s.memory_bytes(), size_of_val(s)),
+            HydraCounter::UnivMon(s) => (s.memory_bytes(), size_of_val(s)),
+        };
+        size_of::<Self>() + bytes - inline
+    }
+
     /// Mass inserted into this cell: a Count-Min cell's inner row sum (exact while
     /// each counter stays below 2^31), a KLL cell's retained weight (approximate).
     /// Count Sketch, HyperLogLog and UnivMon cells return an error.
@@ -482,6 +495,7 @@ impl HydraCounter {
                 if storage.rows() == 0 {
                     return Ok(0.0);
                 }
+                crate::analytics::ops::add(storage.cols());
                 let sum: i64 = storage.row_slice(0).iter().map(|&c| i64::from(c)).sum();
                 Ok(sum as f64)
             }

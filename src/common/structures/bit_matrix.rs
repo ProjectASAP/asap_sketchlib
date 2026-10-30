@@ -115,6 +115,7 @@ impl BitMatrix {
             (other.rows, other.cols),
             "bit matrices must have the same dimensions to be unioned"
         );
+        crate::analytics::ops::add(2 * self.words.len());
         for (dst, src) in self.words.iter_mut().zip(other.words.iter()) {
             *dst |= *src;
         }
@@ -148,6 +149,12 @@ impl BitMatrix {
     /// If `row >= rows` or `col >= cols`.
     #[inline(always)]
     pub fn get(&self, row: usize, col: usize) -> bool {
+        crate::analytics::ops::add(1);
+        self.read(row, col)
+    }
+
+    #[inline(always)]
+    fn read(&self, row: usize, col: usize) -> bool {
         self.check_bounds(row, col);
         let (idx, bit) = self.locate(row, col);
         self.words[idx] & bit != 0
@@ -159,6 +166,7 @@ impl BitMatrix {
     /// If `row >= rows` or `col >= cols`.
     #[inline(always)]
     pub fn set(&mut self, row: usize, col: usize) {
+        crate::analytics::ops::add(1);
         self.check_bounds(row, col);
         let (idx, bit) = self.locate(row, col);
         self.words[idx] |= bit;
@@ -170,6 +178,12 @@ impl BitMatrix {
     /// If `row >= rows` or `col >= cols`.
     #[inline(always)]
     pub fn put(&mut self, row: usize, col: usize, value: bool) {
+        crate::analytics::ops::add(1);
+        self.write(row, col, value);
+    }
+
+    #[inline(always)]
+    fn write(&mut self, row: usize, col: usize, value: bool) {
         self.check_bounds(row, col);
         let (idx, bit) = self.locate(row, col);
         if value {
@@ -204,9 +218,10 @@ impl MatrixStorage for BitMatrix {
     where
         F: Fn(&mut Self::Counter, V),
     {
-        let mut cell = self.get(row, col);
+        crate::analytics::ops::add(1);
+        let mut cell = self.read(row, col);
         op(&mut cell, value);
-        self.put(row, col, cell);
+        self.write(row, col, cell);
     }
 
     #[inline(always)]
@@ -223,11 +238,12 @@ impl MatrixStorage for BitMatrix {
         F: Fn(&mut Self::Counter, &V, usize),
         V: Clone,
     {
+        crate::analytics::ops::add(self.rows);
         for row in 0..self.rows {
             let col = self.col_for_row(hashed_val, row);
-            let mut cell = self.get(row, col);
+            let mut cell = self.read(row, col);
             op(&mut cell, &value, row);
-            self.put(row, col, cell);
+            self.write(row, col, cell);
         }
     }
 
@@ -256,6 +272,8 @@ impl MatrixStorage for BitMatrix {
         Hash: MatrixFastHash,
         F: Fn(&Self::Counter, usize, &Hash) -> f64,
     {
+        crate::analytics::ops::add(self.rows);
+        crate::analytics::ops::add_sort(self.rows);
         let mut values: crate::common::structures::matrix_storage::RowEstimates = (0..self.rows)
             .map(|row| {
                 let col = self.col_for_row(hashed_val, row);

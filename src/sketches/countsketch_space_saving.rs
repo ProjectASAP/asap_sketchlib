@@ -76,6 +76,14 @@ where
         self.summary.capacity()
     }
 
+    /// Bytes this sketch holds: [`CountSketch::memory_bytes`] and
+    /// [`SpaceSaving::memory_bytes`].
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() - size_of::<CountSketch<S, M, H>>() - size_of::<SpaceSaving<H>>()
+            + self.count_sketch.memory_bytes()
+            + self.summary.memory_bytes()
+    }
+
     /// Adds `other`'s matrix to this one and merges the summaries. Panics when
     /// the dimensions, the admission rates or the summary capacities differ.
     pub fn merge(&mut self, other: &Self) {

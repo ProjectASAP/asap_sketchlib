@@ -244,12 +244,14 @@ macro_rules! impl_fixed_matrix {
             where
                 F: Fn(&mut Self::Counter, V),
             {
+                $crate::analytics::ops::add(1);
                 let idx = row * $cols + col;
                 op(&mut self.data[idx], value);
             }
 
             #[inline(always)]
             fn increment_by_row(&mut self, row: usize, col: usize, value: Self::Counter) {
+                $crate::analytics::ops::add(1);
                 let idx = row * $cols + col;
                 self.data[idx] += value;
             }
@@ -261,6 +263,7 @@ macro_rules! impl_fixed_matrix {
                 F: Fn(&mut Self::Counter, &V, usize),
                 V: Clone,
             {
+                $crate::analytics::ops::add($rows);
                 for row in 0..$rows {
                     let col = hashed_val.col_for_row(row, $cols);
                     let idx = row * $cols + col;
@@ -275,6 +278,7 @@ macro_rules! impl_fixed_matrix {
                 F: Fn(&Self::Counter, usize, &Hash) -> R,
                 R: PartialOrd,
             {
+                $crate::analytics::ops::add($rows);
                 let col = hashed_val.col_for_row(0, $cols);
                 let mut min = op(&self.data[col], 0, hashed_val);
                 for row in 1..$rows {
@@ -294,6 +298,7 @@ macro_rules! impl_fixed_matrix {
                 Hash: $crate::MatrixFastHash,
                 F: Fn(&Self::Counter, usize, &Hash) -> f64,
             {
+                $crate::analytics::ops::add(2 * $rows);
                 let mut estimates = [0.0_f64; $rows];
                 for (row, estimate) in estimates.iter_mut().enumerate() {
                     let col = hashed_val.col_for_row(row, $cols);
@@ -305,6 +310,7 @@ macro_rules! impl_fixed_matrix {
 
             #[inline(always)]
             fn query_one_counter(&self, row: usize, col: usize) -> Self::Counter {
+                $crate::analytics::ops::add(1);
                 self.data[row * $cols + col]
             }
         }

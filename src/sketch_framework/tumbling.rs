@@ -41,6 +41,31 @@ pub trait TumblingWindowSketch: Clone + Sized {
 
     /// Reset to the empty state, preserving allocations where possible.
     fn tumbling_clear(&mut self);
+
+    /// Bytes this sketch holds, for [`TumblingWindow::memory_bytes`];
+    /// `size_of::<Self>()` unless overridden.
+    fn tumbling_memory_bytes(&self) -> usize {
+        size_of::<Self>()
+    }
+
+    /// Cells a clone or clear of this sketch touches, which the `op-count`
+    /// feature counts; 0 unless overridden.
+    fn tumbling_cells(&self) -> usize {
+        0
+    }
+}
+
+/// `C_in` of an in-crate tumbling sketch: heap bytes over cell bytes.
+fn inner_cells<S: crate::analytics::frameworks::InnerSketch>(
+    memory_bytes: usize,
+    params: &S::Params,
+) -> usize {
+    crate::analytics::frameworks::heap_cells(memory_bytes, size_of::<S>(), S::cell_bytes(params))
+}
+
+/// Bytes one closed-window slot holds.
+pub(crate) fn closed_window_bytes<S: TumblingWindowSketch>() -> usize {
+    size_of::<ClosedWindow<S>>()
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +141,14 @@ impl TumblingWindowSketch for CountMinSketchFold {
     fn tumbling_clear(&mut self) {
         self.clear();
     }
+
+    fn tumbling_memory_bytes(&self) -> usize {
+        self.memory_bytes()
+    }
+
+    fn tumbling_cells(&self) -> usize {
+        inner_cells::<Self>(self.memory_bytes(), &Default::default())
+    }
 }
 
 impl TumblingWindowSketch for CountSketchFold {
@@ -141,6 +174,14 @@ impl TumblingWindowSketch for CountSketchFold {
     fn tumbling_clear(&mut self) {
         self.clear();
     }
+
+    fn tumbling_memory_bytes(&self) -> usize {
+        self.memory_bytes()
+    }
+
+    fn tumbling_cells(&self) -> usize {
+        inner_cells::<Self>(self.memory_bytes(), &Default::default())
+    }
 }
 
 impl TumblingWindowSketch for Kll {
@@ -165,6 +206,14 @@ impl TumblingWindowSketch for Kll {
     fn tumbling_clear(&mut self) {
         self.clear();
     }
+
+    fn tumbling_memory_bytes(&self) -> usize {
+        self.memory_bytes()
+    }
+
+    fn tumbling_cells(&self) -> usize {
+        inner_cells::<Self>(self.memory_bytes(), &Default::default())
+    }
 }
 
 impl TumblingWindowSketch for UnivMonQ {
@@ -185,6 +234,14 @@ impl TumblingWindowSketch for UnivMonQ {
 
     fn tumbling_clear(&mut self) {
         self.clear();
+    }
+
+    fn tumbling_memory_bytes(&self) -> usize {
+        self.memory_bytes()
+    }
+
+    fn tumbling_cells(&self) -> usize {
+        inner_cells::<Self>(self.memory_bytes(), &self.config())
     }
 }
 
@@ -215,6 +272,7 @@ impl<S: TumblingWindowSketch> SketchPool<S> {
 
     /// Take a sketch from the free-list, or allocate a fresh one.
     pub fn take(&mut self) -> S {
+        crate::analytics::ops::add(1);
         if let Some(s) = self.free_list.pop() {
             s
         } else {
@@ -225,6 +283,8 @@ impl<S: TumblingWindowSketch> SketchPool<S> {
 
     /// Return a sketch to the pool after clearing it.
     pub fn put(&mut self, mut sketch: S) {
+        #[cfg(feature = "op-count")]
+        crate::analytics::ops::add(1 + sketch.tumbling_cells());
         sketch.tumbling_clear();
         self.free_list.push(sketch);
     }
@@ -329,6 +389,7 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
     /// Close the active window, push it to closed, evict if over limit.
     fn close_active(&mut self) {
         let old_active = std::mem::replace(&mut self.active, self.pool.take());
+        crate::analytics::ops::add(1);
         self.closed.push(ClosedWindow {
             sketch: old_active,
             _window_id: self.active_window_id,
@@ -338,6 +399,7 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
 
         // Evict oldest if over limit.
         while self.closed.len() > self.max_windows {
+            crate::analytics::ops::add(1 + 2 * (self.closed.len() - 1));
             let evicted = self.closed.remove(0);
             self.pool.put(evicted.sketch);
         }
@@ -345,8 +407,11 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
 
     /// Merge all closed windows + the active window into a single sketch.
     pub fn query_all(&self) -> S {
+        #[cfg(feature = "op-count")]
+        crate::analytics::ops::add(self.active.tumbling_cells());
         let mut merged = self.active.clone();
         for cw in &self.closed {
+            crate::analytics::ops::add(1);
             merged.tumbling_merge(&cw.sketch);
         }
         merged
@@ -356,12 +421,28 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
     ///
     /// If `n >= closed_count()`, this is equivalent to `query_all()`.
     pub fn query_recent(&self, n: usize) -> S {
+        #[cfg(feature = "op-count")]
+        crate::analytics::ops::add(self.active.tumbling_cells());
         let mut merged = self.active.clone();
         let start = self.closed.len().saturating_sub(n);
         for cw in &self.closed[start..] {
+            crate::analytics::ops::add(1);
             merged.tumbling_merge(&cw.sketch);
         }
         merged
+    }
+
+    /// Bytes this manager holds: the struct, its closed-window and pool
+    /// slots, and every sketch's heap as
+    /// [`TumblingWindowSketch::tumbling_memory_bytes`] counts it.
+    pub fn memory_bytes(&self) -> usize {
+        let heap = |s: &S| s.tumbling_memory_bytes() - size_of::<S>();
+        size_of::<Self>()
+            + self.closed.capacity() * size_of::<ClosedWindow<S>>()
+            + self.pool.free_list.capacity() * size_of::<S>()
+            + heap(&self.active)
+            + self.closed.iter().map(|w| heap(&w.sketch)).sum::<usize>()
+            + self.pool.free_list.iter().map(heap).sum::<usize>()
     }
 
     /// Reference to the active (currently open) sketch.

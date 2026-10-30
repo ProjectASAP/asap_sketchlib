@@ -12,6 +12,32 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **Sketch analytics** (`asap_sketchlib::analytics`): the
+  `SketchAnalytics` trait, with `ErrorBound`, `ErrorMetric` and `NormScale`
+  re-exported at the root, gives a sketch type's theoretical memory, update,
+  query and merge ops, error bound per statistic, and the parameters that
+  meet a target `(ε, δ)`, as `docs/sketch_analytics.md` defines them.
+- **`StatisticKind::QuantileInterpolated`**, answered by `DDSketch`.
+- **`memory_bytes()`** on `CountMinHll`, `MicroCm`, `SpaceSaving`,
+  `ElasticSketch`, `CocoSketch`, `CountMinSketchWithSpaceSaving`,
+  `CountSketchWithSpaceSaving`, `CountMinSketchFold`, `CountSketchFold`,
+  `SetAggregator`, `Bloom`, `UniformSampling`, `UnivMonTwoTier`, `Hydra`,
+  `HydraCounter`, `ExponentialHistogram`, `EhBucketSketch`,
+  `ExponentialHistogramUnivMon`, `UnivMonPool`, `NitroBatch` over a
+  Count-Min or Count Sketch, `TumblingWindow`, `HashSketchEnsemble` and
+  `EnsembleSketch`, and `SpaceSaving::theoretical_memory_bytes`,
+  `Bloom::theoretical_memory_bytes(rows, cols)`,
+  `UnivMonTwoTier::theoretical_memory_bytes` and
+  `UnivMonQ::theoretical_memory_bytes(config)`, which also bounds a cloned
+  or decoded `UnivMonQ`.
+- **`SetAggregator::contains`**: whether a key is in the set.
+- **`TumblingWindowSketch::tumbling_memory_bytes` and `tumbling_cells`**,
+  provided methods `TumblingWindow::memory_bytes` and the `op-count`
+  feature read; the built-in window sketches override both.
+- **`op-count` feature**: `analytics::ops::count(f)` returns the ops `f`
+  performed on this thread, one per counter, register, bucket or item read or
+  written, for testing the analytics op formulas. Off by default, and free
+  when off.
 - **Family-capability table** (`asap_sketchlib::capability`, re-exported at
   the root): `SketchAlgorithm::capability()` gives, for each public sketch
   family, the `StatisticKind`s one state answers, whether states merge and
@@ -31,20 +57,20 @@ signals a backwards-compatible change.
   outside `[0, 1]`. Within `alpha` relative when both neighbours are
   indexable and share a sign; an absolute bound across zero. The legacy
   portable `DdSketch` had it before 0.4.0.
-- **`estimated_memory_bytes(rows, cols)`** on `CountMinSketch` and
+- **`theoretical_memory_bytes(rows, cols)`** on `CountMinSketch` and
   `CountSketch`: the `memory_bytes` of a sketch with those dimensions, the
   counter width taken from the type.
-- **`Kll::estimated_memory_bytes(k, m, n)`**: an upper bound on the bytes a
+- **`Kll::theoretical_memory_bytes(k, m, n)`**: an upper bound on the bytes a
   sketch of `k` and `m` holds after `n` items, merges and a cached quantile.
-- **`DdSketch::memory_bytes`**, and **`DdSketch::estimated_memory_bytes(alpha,
+- **`DdSketch::memory_bytes`**, and **`DdSketch::theoretical_memory_bytes(alpha,
   n, min_magnitude, max_magnitude, negatives)`**: an upper bound on the bytes
   after `n` values in that magnitude range, in any order and through merges.
-- **`memory_bytes` and `estimated_memory_bytes(precision)`** on
+- **`memory_bytes` and `theoretical_memory_bytes(precision)`** on
   `HyperLogLogImpl` and `HyperLogLogHipImpl`: the struct plus `2^precision`
   register bytes, the precision taken at run time.
-- **`Kmv::estimated_memory_bytes(k, distinct)`**: the bytes a sketch of `k`
+- **`Kmv::theoretical_memory_bytes(k, distinct)`**: the bytes a sketch of `k`
   holds after `distinct` distinct inputs, an upper bound for fewer.
-- **`memory_bytes` and `estimated_memory_bytes`** on `CountSketchWithL2Norm`
+- **`memory_bytes` and `theoretical_memory_bytes`** on `CountSketchWithL2Norm`
   (`rows, cols`) and `UnivMon` (`heap_size, rows, cols, layers, key`): the
   pyramid's estimate is the steady state once every layer's heap has churned.
 - **`CountMinSketch::total()`**: the total admitted update weight, row 0's
@@ -53,6 +79,12 @@ signals a backwards-compatible change.
   estimates, by estimate descending, ties by flow id.
 ### Changed
 
+- **Breaking: `CountMinFastOps` and `CountSketchFastOps` require
+  `memory_bytes`**, which `HashSketchEnsemble::memory_bytes` reads.
+- **`estimated_memory_bytes` is renamed `theoretical_memory_bytes`** on
+  every sketch that has it (`CountMinSketch`, `CountSketch`,
+  `CountSketchWithL2Norm`, the WithHeap sketches, `TopKHeap`, `HyperLogLog`,
+  `HyperLogLogHip`, `Kmv`, `Kll`, `DdSketch`, `UnivMon`). Breaking.
 - **`Kmv` builds without the `experimental` feature**, with its ASAPv1 codec.
 - **Breaking: `DdSketch` no longer keeps `sum`, `min` or `max`.** The state is
   the two bucket stores and the zero count. `sum()`, `min()` and `max()` are
@@ -92,7 +124,7 @@ signals a backwards-compatible change.
   saturated and then decreased now reports its true `l2` instead of an
   understatement; `l2`, `l2_squared`, UnivMon's `estimate_l2` and its
   terminal-mode heavy-hitter threshold change only in that case. Each row's
-  accumulator is 8 bytes wider (`memory_bytes`, `estimated_memory_bytes`).
+  accumulator is 8 bytes wider (`memory_bytes`, `theoretical_memory_bytes`).
   `update_weighted_with_hash_without_l2` and `as_storage_mut`, the two ways
   to move counters without the accumulator, are removed; use
   `update_weighted_with_hash`.
@@ -123,6 +155,9 @@ signals a backwards-compatible change.
 
 ### Docs
 
+- **UnivMon's distinct-count bound is `1.35/(kε²)`**, the variance the
+  proof derives, in place of the looser `2/(kε²)`, in the UnivMon and
+  UnivMonTwoTier API pages; the tests check the tighter bound.
 - **A receiver of `f64` deltas matches the producer only up to rounding.**
   For Count-Min, Count Sketch and the two heap kinds, the wire format
   (§3.23), the `DeltaCounter` docs and the API pages now state the bound;
@@ -130,23 +165,35 @@ signals a backwards-compatible change.
 
 ### Fixed
 
+- **Breaking: `CountMinSketchFold::new` and `CountSketchFold::new` panic
+  for `full_cols` above 65536** (`MAX_FULL_COLS`). A full column is stored as
+  `u16`, and a wider sketch folded distinct columns together.
+- **`CountMinSketch` Total is `AsIfBuiltOverUnion` in the capability
+  table**, not `Exact`: with Nitro sampling enabled it is an unbiased
+  estimate.
+- **Breaking: `Bloom::dimensions_for` meets its target.** It returns
+  `Option<(usize, usize)>`, widens the slices until the exact rate
+  `(1 - (1 - 1/cols)^n)^rows` is at most the target, and returns `None` when
+  that needs more than `BLOOM_MAX_BITS`, where it used to return the widest
+  slices that fit. `with_capacity` panics there. `predicted_fpp` uses the
+  exact rate in place of `(1 - e^(-n/cols))^rows`.
 - **`Kll::update` regains most of its pre-0.4.0 speed.** With the lazily grown
   buffer, `compress_while_updating` was inlined into the insert path, which
   then no longer inlined into callers; a stream of updates ran about 10%
   slower. Compaction is kept out of line again: within 4% of 0.3.x on a
   loaded host, at parity on a quiet one.
-- **`TopKHeap::estimated_memory_bytes` and the WithHeap estimates saturate**
+- **`TopKHeap::theoretical_memory_bytes` and the WithHeap estimates saturate**
   at `usize::MAX` for shapes past the address space instead of overflowing.
 - **Decoded top-k heaps reserve as built ones do.** The ASAPv1 state
   decoders of `CountMinSketchWithHeap`, `CountSketchWithHeap`, `UnivMon`,
   `UnivMonTwoTier` and `Kmv` give the heap the slots a built heap with the
   same entries holds, so a decoded sketch grows within
-  `estimated_memory_bytes`. Delta decoders still reserve for their entries
+  `theoretical_memory_bytes`. Delta decoders still reserve for their entries
   alone.
 - **Clones and applied deltas keep the heap's capacity.** `CommonHeap` and
   `TopKHeap` clones keep their source's slots and index buckets, and
   `merge_delta` on the WithHeap sketches refills the sketch's own heap, so
-  both grow within `estimated_memory_bytes`.
+  both grow within `theoretical_memory_bytes`.
 ### Added
 
 - **Checked f64 updates and heap rescoring for the Count-Min and Count Sketch

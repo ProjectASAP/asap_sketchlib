@@ -20,6 +20,9 @@ use std::marker::PhantomData;
 
 const LOWER_32_MASK: u64 = (1u64 << 32) - 1;
 
+/// The widest `full_cols`, since a full column is stored as `u16`.
+pub const MAX_FULL_COLS: usize = 1 << 16;
+
 // ---------------------------------------------------------------------------
 // FoldEntry / FoldCell
 // ---------------------------------------------------------------------------
@@ -60,6 +63,7 @@ impl FoldCell {
     /// representation only when a genuine collision is detected.
     #[inline]
     pub fn add(&mut self, full_col: u16, delta: i64) {
+        crate::analytics::ops::add(1);
         match self {
             FoldCell::Empty => {
                 *self = FoldCell::Single {
@@ -75,6 +79,7 @@ impl FoldCell {
                     *count += delta;
                 } else {
                     // Real collision — upgrade to Collided.
+                    crate::analytics::ops::add(2);
                     let existing = FoldEntry {
                         full_col: *existing_col,
                         count: *count,
@@ -88,11 +93,13 @@ impl FoldCell {
             }
             FoldCell::Collided(entries) => {
                 for entry in entries.iter_mut() {
+                    crate::analytics::ops::add(1);
                     if entry.full_col == full_col {
                         entry.count += delta;
                         return;
                     }
                 }
+                crate::analytics::ops::add(1);
                 entries.push(FoldEntry {
                     full_col,
                     count: delta,
@@ -104,6 +111,7 @@ impl FoldCell {
     /// Look up the counter for a specific `full_col`. Returns 0 when absent.
     #[inline]
     pub fn get(&self, full_col: u16) -> i64 {
+        crate::analytics::ops::add(1);
         match self {
             FoldCell::Empty => 0,
             FoldCell::Single {
@@ -118,6 +126,7 @@ impl FoldCell {
             }
             FoldCell::Collided(entries) => {
                 for entry in entries {
+                    crate::analytics::ops::add(1);
                     if entry.full_col == full_col {
                         return entry.count;
                     }
@@ -129,6 +138,7 @@ impl FoldCell {
 
     /// Merge another cell's entries into this cell (same fold level).
     pub fn merge_from(&mut self, other: &FoldCell) {
+        crate::analytics::ops::add(1);
         match other {
             FoldCell::Empty => {}
             FoldCell::Single { full_col, count } => {
@@ -136,6 +146,7 @@ impl FoldCell {
             }
             FoldCell::Collided(entries) => {
                 for entry in entries {
+                    crate::analytics::ops::add(1);
                     self.add(entry.full_col, entry.count);
                 }
             }
@@ -154,6 +165,14 @@ impl FoldCell {
     /// Returns true if no entries are stored.
     pub fn is_empty(&self) -> bool {
         matches!(self, FoldCell::Empty)
+    }
+
+    /// Bytes this cell's entry list holds outside the cell.
+    pub(crate) fn list_bytes(&self) -> usize {
+        match self {
+            FoldCell::Collided(entries) => entries.capacity() * size_of::<FoldEntry>(),
+            _ => 0,
+        }
     }
 
     /// Iterate over all `(full_col, count)` pairs in this cell.
@@ -227,11 +246,16 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
     ///
     /// # Panics
     ///
-    /// Panics if `full_cols` is not a power of two or `fold_level` is too large.
+    /// Panics if `full_cols` is not a power of two, is above 65536, or
+    /// `fold_level` is too large.
     pub fn new(rows: usize, full_cols: usize, fold_level: u32, heap_size: usize) -> Self {
         assert!(
             full_cols.is_power_of_two(),
             "full_cols must be a power of two, got {full_cols}"
+        );
+        assert!(
+            full_cols <= MAX_FULL_COLS,
+            "full_cols must be at most {MAX_FULL_COLS}, got {full_cols}"
         );
         assert!(
             fold_level <= full_cols.trailing_zeros(),
@@ -303,6 +327,16 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
     #[inline(always)]
     pub fn cell(&self, row: usize, fold_col: usize) -> &FoldCell {
         &self.cells[row * self.fold_cols + fold_col]
+    }
+
+    /// Bytes this sketch holds: the struct, the allocated cells, the entry
+    /// lists of collided cells and [`TopKHeap::memory_bytes`].
+    pub fn memory_bytes(&self) -> usize {
+        let lists: usize = self.cells.iter().map(FoldCell::list_bytes).sum();
+        size_of::<Self>() - size_of::<TopKHeap>()
+            + self.cells.capacity() * size_of::<FoldCell>()
+            + lists
+            + self.heap.memory_bytes()
     }
 
     /// Total number of `(full_col, count)` entries across all cells.
@@ -405,6 +439,11 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
             let dst_row_off = r * target_fold_cols;
             for c in 0..self.fold_cols {
                 let cell = &self.cells[src_row_off + c];
+                let listed = match cell {
+                    FoldCell::Collided(entries) => entries.len(),
+                    _ => 0,
+                };
+                crate::analytics::ops::add(1 + listed);
                 for (full_col, count) in cell.iter() {
                     let new_fc = (full_col as usize) & (target_fold_cols - 1);
                     target.cells[dst_row_off + new_fc].add(full_col, count);
@@ -437,7 +476,10 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
             fold_cols: new_fold_cols,
             full_cols: a.full_cols,
             fold_level: new_level,
-            cells: vec![FoldCell::Empty; a.rows * new_fold_cols],
+            cells: {
+                crate::analytics::ops::add(a.rows * new_fold_cols);
+                vec![FoldCell::Empty; a.rows * new_fold_cols]
+            },
             heap: TopKHeap::new(heap_k),
             _hasher: PhantomData,
         };
@@ -487,7 +529,10 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
             fold_cols: new_fold_cols,
             full_cols: self.full_cols,
             fold_level: target_level,
-            cells: vec![FoldCell::Empty; self.rows * new_fold_cols],
+            cells: {
+                crate::analytics::ops::add(self.rows * new_fold_cols);
+                vec![FoldCell::Empty; self.rows * new_fold_cols]
+            },
             heap: TopKHeap::new(self.heap.capacity()),
             _hasher: PhantomData,
         };
@@ -526,7 +571,10 @@ impl<H: SketchHasher> CountMinSketchFold<H> {
             fold_cols: full_cols,
             full_cols,
             fold_level: 0,
-            cells: vec![FoldCell::Empty; rows * full_cols],
+            cells: {
+                crate::analytics::ops::add(rows * full_cols);
+                vec![FoldCell::Empty; rows * full_cols]
+            },
             heap: TopKHeap::new(heap_k),
             _hasher: PhantomData,
         };
@@ -749,6 +797,12 @@ mod tests {
     #[should_panic(expected = "full_cols must be a power of two")]
     fn count_min_sketch_fold_rejects_non_power_of_two() {
         let _: CountMinSketchFold = CountMinSketchFold::new(3, 1000, 0, 10);
+    }
+
+    #[test]
+    #[should_panic(expected = "full_cols must be at most 65536")]
+    fn count_min_sketch_fold_rejects_more_columns_than_u16_holds() {
+        let _: CountMinSketchFold = CountMinSketchFold::new(3, 1 << 17, 0, 10);
     }
 
     #[test]

@@ -60,6 +60,7 @@ impl EhBucket {
     /// cached mass are left as they were.
     pub fn merge(&mut self, other: EhBucket) -> Result<(), String> {
         self.bucket.merge(&other.bucket)?;
+        crate::analytics::ops::add(1);
         self.size += other.size;
         self.max_time = self.max_time.max(other.max_time);
         self.min_time = self.min_time.min(other.min_time);
@@ -103,11 +104,15 @@ impl ExponentialHistogram {
             .iter()
             .take_while(|b| b.max_time < time.saturating_sub(self.window))
             .count();
+        crate::analytics::ops::add((expired_count + 1).min(self.payload.len()));
 
         if expired_count > 0 {
+            crate::analytics::ops::add(2 * (self.payload.len() - expired_count));
             self.payload.drain(0..expired_count);
         }
 
+        #[cfg(feature = "op-count")]
+        crate::analytics::ops::add(self.prototype.cells());
         let mut sketch = self.prototype.clone();
         update_fn(&mut sketch);
         let new_eh_vol = EhBucket {
@@ -117,6 +122,7 @@ impl ExponentialHistogram {
             min_time: time,
             max_time: time,
         };
+        crate::analytics::ops::add(1);
         self.payload.push(new_eh_vol);
 
         // The public signature cannot carry the error out. A refused merge
@@ -142,6 +148,7 @@ impl ExponentialHistogram {
         let mut i = s_count - 2;
 
         loop {
+            crate::analytics::ops::add(2);
             if self.payload[i].size == self.payload[i + 1].size {
                 same_size_vol += 1;
             } else {
@@ -149,6 +156,9 @@ impl ExponentialHistogram {
                     self.merge_at_index(i + 1)?;
                 }
                 same_size_vol = 1;
+                if i + 1 < self.payload.len() && i > 0 {
+                    crate::analytics::ops::add(2);
+                }
                 if i + 1 < self.payload.len()
                     && i > 0
                     && self.payload[i + 1].size == self.payload[i].size
@@ -184,11 +194,13 @@ impl ExponentialHistogram {
 
         let mut sum_l22_newer = 0.0;
         for i in (0..(self.payload.len() - 1)).rev() {
+            crate::analytics::ops::add(2);
             let pair_l22 = self.payload[i].l2_mass + self.payload[i + 1].l2_mass;
             let threshold = sum_l22_newer / (self.k as f64);
             if pair_l22 <= threshold + MASS_EPSILON {
                 return Some(i);
             }
+            crate::analytics::ops::add(1);
             sum_l22_newer += self.payload[i + 1].l2_mass;
         }
 
@@ -202,8 +214,11 @@ impl ExponentialHistogram {
         if index + 1 >= self.payload.len() {
             return Ok(());
         }
+        #[cfg(feature = "op-count")]
+        crate::analytics::ops::add(1 + self.payload[index + 1].bucket.cells());
         let vol_to_merge = self.payload[index + 1].clone();
         self.payload[index].merge(vol_to_merge)?;
+        crate::analytics::ops::add(2 * (self.payload.len() - index - 2));
         self.payload.remove(index + 1);
         Ok(())
     }
@@ -246,6 +261,7 @@ impl ExponentialHistogram {
         let mut from_volume = 0;
         let mut to_volume = 0;
 
+        crate::analytics::ops::add(self.payload.len() + 4);
         for (i, vol) in self.payload.iter().enumerate() {
             if t1 >= vol.min_time && t1 <= vol.max_time {
                 from_volume = i;
@@ -269,9 +285,12 @@ impl ExponentialHistogram {
         if to_volume >= self.payload.len() {
             to_volume = self.payload.len() - 1;
         }
+        #[cfg(feature = "op-count")]
+        crate::analytics::ops::add(self.payload[from_volume].bucket.cells());
         if from_volume < to_volume {
             let mut merged = self.payload[from_volume].bucket.clone();
             for i in (from_volume + 1)..=to_volume {
+                crate::analytics::ops::add(1);
                 merged.merge(&self.payload[i].bucket).ok()?;
             }
             Some(merged)
@@ -291,6 +310,17 @@ impl ExponentialHistogram {
                 i, bucket.min_time, bucket.max_time, bucket.size, bucket.l2_mass
             );
         }
+    }
+
+    /// Bytes this histogram holds: the struct, its bucket slots and each
+    /// bucket's and the prototype's sketch heap
+    /// ([`EhBucketSketch::memory_bytes`]).
+    pub fn memory_bytes(&self) -> usize {
+        let heap = |sketch: &EhBucketSketch| sketch.memory_bytes() - size_of::<EhBucketSketch>();
+        size_of::<Self>()
+            + self.payload.capacity() * size_of::<EhBucket>()
+            + self.payload.iter().map(|b| heap(&b.bucket)).sum::<usize>()
+            + heap(&self.prototype)
     }
 
     /// Get memory statistics

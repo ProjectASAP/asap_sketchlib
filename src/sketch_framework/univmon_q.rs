@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 
 mod wire;
 
-use crate::common::heap::hash_map_bytes;
+use crate::common::heap::{hash_index_bytes, hash_map_bytes};
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::{DataInput, DefaultXxHasher, SketchHasher};
@@ -267,6 +267,7 @@ impl PackedCountSketch {
 
     #[inline(always)]
     fn update(&mut self, hash: u128, bucket_bits: u32) {
+        crate::analytics::ops::add(self.depth);
         match &mut self.counters {
             Counters::I32(counters) => {
                 update_rows(counters, self.width, self.depth, hash, bucket_bits)
@@ -297,6 +298,8 @@ impl PackedCountSketch {
                 &mut estimates,
             ),
         }
+        crate::analytics::ops::add(2 * self.depth);
+        crate::analytics::ops::add_sort(self.depth);
         estimates[..self.depth].sort_unstable();
         estimates[self.depth / 2].max(0)
     }
@@ -312,6 +315,7 @@ impl PackedCountSketch {
     }
 
     fn merge(&mut self, other: &Self) {
+        crate::analytics::ops::add(2 * self.width * self.depth);
         match (&mut self.counters, &other.counters) {
             (Counters::I32(left), Counters::I32(right)) => {
                 for (left, right) in left.iter_mut().zip(right) {
@@ -449,7 +453,14 @@ fn f2_rows<T: Counter>(counters: &[T], width: usize, depth: usize, rows: &mut Ve
     }
 }
 
-#[derive(Clone, Debug)]
+/// A clone of `heap` with the same capacity.
+fn clone_reserved<T: Clone + Ord>(heap: &BinaryHeap<T>) -> BinaryHeap<T> {
+    let mut clone = heap.clone();
+    clone.reserve_exact(heap.capacity() - clone.len());
+    clone
+}
+
+#[derive(Debug)]
 struct Layer {
     sketch: PackedCountSketch,
     candidate_scores: HashMap<u64, u64>,
@@ -458,6 +469,19 @@ struct Layer {
     /// Largest `candidate_scores.capacity()` seen, which gives its buckets.
     candidate_table_peak: usize,
     ever_evicted: bool,
+}
+
+impl Clone for Layer {
+    fn clone(&self) -> Self {
+        Self {
+            sketch: self.sketch.clone(),
+            candidate_scores: self.candidate_scores.clone(),
+            candidate_heap: clone_reserved(&self.candidate_heap),
+            candidate_capacity: self.candidate_capacity,
+            candidate_table_peak: self.candidate_table_peak,
+            ever_evicted: self.ever_evicted,
+        }
+    }
 }
 
 impl Layer {
@@ -475,6 +499,7 @@ impl Layer {
 
     /// Inserts a candidate, tracking the table's allocation.
     fn insert_candidate(&mut self, key: u64, score: u64) {
+        crate::analytics::ops::add(1);
         self.candidate_scores.insert(key, score);
         self.candidate_table_peak = self
             .candidate_table_peak
@@ -491,68 +516,92 @@ impl Layer {
     fn update(&mut self, key: u64, hash: u128, bucket_bits: u32) {
         self.sketch.update(hash, bucket_bits);
         let score = self.sketch.estimate(hash, bucket_bits).max(0) as u64;
+        crate::analytics::ops::add(1);
         if let Some(stored_score) = self.candidate_scores.get_mut(&key) {
             *stored_score = score;
             return;
         }
         if self.candidate_scores.len() < self.candidate_capacity {
             self.insert_candidate(key, score);
-            self.candidate_heap.push(Reverse((score, key)));
+            self.push_candidate(Reverse((score, key)));
             return;
         }
         if let Some((minimum, evicted)) = self.lightest_candidate() {
+            crate::analytics::ops::add(1);
             self.ever_evicted = true;
             if score > minimum {
+                crate::analytics::ops::add(1);
                 self.candidate_scores.remove(&evicted);
                 self.insert_candidate(key, score);
-                self.candidate_heap.push(Reverse((score, key)));
+                self.push_candidate(Reverse((score, key)));
             } else {
-                self.candidate_heap.push(Reverse((minimum, evicted)));
+                self.push_candidate(Reverse((minimum, evicted)));
             }
         }
     }
 
+    fn push_candidate(&mut self, entry: Reverse<(u64, u64)>) {
+        count_binary_heap_push(self.candidate_heap.len() + 1);
+        self.candidate_heap.push(entry);
+    }
+
+    fn pop_candidate(&mut self) {
+        count_binary_heap_pop(self.candidate_heap.len());
+        self.candidate_heap.pop();
+    }
+
     fn lightest_candidate(&mut self) -> Option<(u64, u64)> {
         loop {
+            crate::analytics::ops::add(1);
             let Reverse((stored_score, key)) = *self.candidate_heap.peek()?;
+            crate::analytics::ops::add(1);
             let Some(&current_score) = self.candidate_scores.get(&key) else {
-                self.candidate_heap.pop();
+                self.pop_candidate();
                 continue;
             };
             if current_score != stored_score {
-                self.candidate_heap.pop();
-                self.candidate_heap.push(Reverse((current_score, key)));
+                self.pop_candidate();
+                self.push_candidate(Reverse((current_score, key)));
                 continue;
             }
-            self.candidate_heap.pop();
+            self.pop_candidate();
             return Some((stored_score, key));
         }
     }
 
     fn merge(&mut self, other: &Self, bucket_bits: u32, hash_key: impl Fn(u64) -> u128) {
         self.sketch.merge(&other.sketch);
+        // Each candidate key is read from its table and inserted into `combined`.
+        crate::analytics::ops::add(
+            2 * (self.candidate_scores.len() + other.candidate_scores.len()),
+        );
         let mut combined: HashSet<u64> = self.candidate_scores.keys().copied().collect();
         combined.extend(other.candidate_scores.keys().copied());
         let combined_len = combined.len();
         let mut retained: Vec<(u64, u64)> = combined
             .into_iter()
             .map(|key| {
+                crate::analytics::ops::add(2);
                 let hash = hash_key(key);
                 let score = self.sketch.estimate(hash, bucket_bits).max(0) as u64;
                 (key, score)
             })
             .collect();
+        crate::analytics::ops::add_sort(retained.len());
         retained.sort_unstable_by(|left, right| {
             right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0))
         });
         retained.truncate(self.candidate_capacity);
+        crate::analytics::ops::add(2);
         self.ever_evicted =
             self.ever_evicted || other.ever_evicted || combined_len > self.candidate_capacity;
+        crate::analytics::ops::add(2);
         self.candidate_scores.clear();
         self.candidate_heap.clear();
         for (key, count) in retained {
+            crate::analytics::ops::add(1);
             self.insert_candidate(key, count);
-            self.candidate_heap.push(Reverse((count, key)));
+            self.push_candidate(Reverse((count, key)));
         }
     }
 
@@ -569,7 +618,7 @@ impl Layer {
 /// `H` is the same pluggable hash abstraction used throughout Sketchlib. The
 /// default uses [`DefaultXxHasher`]. Values use `f64::total_cmp` ordering,
 /// including distinct `-0.0`/`0.0` and deterministic placement of NaNs.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct UnivMonQ<H: SketchHasher = DefaultXxHasher> {
     config: UnivMonQConfig,
     hash_layout: HashLayout,
@@ -581,6 +630,23 @@ pub struct UnivMonQ<H: SketchHasher = DefaultXxHasher> {
     next_sequence: u64,
     ordered_heap: BinaryHeap<OrderedOccurrence>,
     hasher: PhantomData<H>,
+}
+
+impl<H: SketchHasher> Clone for UnivMonQ<H> {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config,
+            hash_layout: self.hash_layout,
+            layers: self.layers.clone(),
+            count: self.count,
+            min: self.min,
+            max: self.max,
+            source_id: self.source_id,
+            next_sequence: self.next_sequence,
+            ordered_heap: clone_reserved(&self.ordered_heap),
+            hasher: PhantomData,
+        }
+    }
 }
 
 impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {
@@ -876,6 +942,8 @@ impl<H: SketchHasher> UnivMonQ<H> {
 
     #[inline(always)]
     fn update_value(&mut self, value: f64) {
+        // The sequence number is read, then incremented; count, min and max are updated.
+        crate::analytics::ops::add(5);
         let key = float_to_ordered(value);
         let hash = self.hash_key(key);
         let sequence = self.next_sequence;
@@ -901,6 +969,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
                 "cannot merge UnivMon-Q sketches with different configurations",
             ));
         }
+        crate::analytics::ops::add(6);
         self.count = self.count.saturating_add(other.count);
         self.min = match (self.min, other.min) {
             (Some(left), Some(right)) => Some(left.min(right)),
@@ -959,6 +1028,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
 
     /// CountSketch point-frequency estimate for a numeric value.
     pub fn estimate_frequency(&self, value: f64) -> u64 {
+        crate::analytics::ops::add(1);
         if self.is_empty() {
             return 0;
         }
@@ -1252,6 +1322,33 @@ impl<H: SketchHasher> UnivMonQ<H> {
             + self.ordered_heap.capacity() * size_of::<OrderedOccurrence>()
     }
 
+    /// Bytes a sketch with `config` holds once each layer's candidate table
+    /// has churned: as [`Self::memory_bytes`] counts them, at full candidate
+    /// tables and heaps. Saturates at `usize::MAX`.
+    pub fn theoretical_memory_bytes(config: UnivMonQConfig) -> usize {
+        let counter_bytes = usize::from(config.counter_bits / 8);
+        let counters = (0..config.layers)
+            .map(|level| layer_cols(config, level))
+            .fold(0usize, |sum, cols| sum.saturating_add(cols))
+            .saturating_mul(config.rows)
+            .saturating_mul(counter_bytes);
+        let candidates = hash_index_bytes::<(u64, u64)>(config.heap_size, config.heap_size)
+            .saturating_add(
+                config
+                    .heap_size
+                    .saturating_mul(size_of::<Reverse<(u64, u64)>>()),
+            );
+        size_of::<Self>()
+            .saturating_add(config.layers.saturating_mul(size_of::<Layer>()))
+            .saturating_add(counters)
+            .saturating_add(config.layers.saturating_mul(candidates))
+            .saturating_add(
+                config
+                    .ordered_samples
+                    .saturating_mul(size_of::<OrderedOccurrence>()),
+            )
+    }
+
     fn cdf_keys(&self) -> Vec<(u64, f64)> {
         if self.is_empty() || self.config.ordered_samples == 0 {
             return Vec::new();
@@ -1467,15 +1564,19 @@ impl<H: SketchHasher> UnivMonQ<H> {
             return;
         }
         if self.ordered_heap.len() < capacity {
+            count_binary_heap_push(self.ordered_heap.len() + 1);
             self.ordered_heap.push(occurrence);
             return;
         }
+        crate::analytics::ops::add(1);
         if self
             .ordered_heap
             .peek()
             .is_some_and(|largest| occurrence < *largest)
         {
+            count_binary_heap_pop(self.ordered_heap.len());
             self.ordered_heap.pop();
+            count_binary_heap_push(self.ordered_heap.len() + 1);
             self.ordered_heap.push(occurrence);
         }
     }
@@ -1486,6 +1587,7 @@ impl<H: SketchHasher> UnivMonQ<H> {
             return;
         }
         for &occurrence in &other.ordered_heap {
+            crate::analytics::ops::add(1);
             self.update_ordered_sample(occurrence);
         }
     }
@@ -1562,6 +1664,11 @@ fn allocate_source_id() -> u64 {
         .expect("UnivMon-Q automatic source IDs exhausted")
 }
 
+/// Whether [`UnivMonQ::with_hasher`] accepts `config`.
+pub(crate) fn config_is_valid(config: UnivMonQConfig) -> bool {
+    validate_config(config).is_ok() && HashLayout::new(config).is_ok()
+}
+
 fn validate_config(config: UnivMonQConfig) -> Result<(), UnivMonQError> {
     if !(2..=63).contains(&config.layers) {
         return Err(UnivMonQError::new("layers must be in 2..=63"));
@@ -1581,7 +1688,36 @@ fn validate_config(config: UnivMonQConfig) -> Result<(), UnivMonQError> {
     Ok(())
 }
 
-fn layer_cols(config: UnivMonQConfig, level: usize) -> usize {
+/// Ops a `BinaryHeap` push counts when the heap then holds `len` entries:
+/// the appended slot, its re-read, a parent read and a move per level, and
+/// the final write.
+#[inline(always)]
+fn count_binary_heap_push(len: usize) {
+    crate::analytics::ops::add(binary_heap_push_ops(len));
+}
+
+fn binary_heap_push_ops(len: usize) -> usize {
+    3 + 2 * binary_heap_levels(len)
+}
+
+/// Ops a `BinaryHeap` pop counts from `len` entries: the last slot, the root
+/// read and written, two hole reads and two hole writes, two child reads and
+/// a move per level down, and a parent read and a move per level back up.
+#[inline(always)]
+fn count_binary_heap_pop(len: usize) {
+    crate::analytics::ops::add(binary_heap_pop_ops(len));
+}
+
+fn binary_heap_pop_ops(len: usize) -> usize {
+    7 + 5 * binary_heap_levels(len)
+}
+
+#[inline(always)]
+fn binary_heap_levels(len: usize) -> usize {
+    if len <= 1 { 0 } else { len.ilog2() as usize }
+}
+
+pub(crate) fn layer_cols(config: UnivMonQConfig, level: usize) -> usize {
     let shift = if config.cols_halving_period == 0 {
         0
     } else {
@@ -2627,5 +2763,97 @@ mod tests {
         assert!(sketch.is_empty());
         assert_eq!(sketch.config(), tiny_config());
         assert_eq!(sketch.quantile(0.5), None);
+    }
+
+    /// Accesses std's `BinaryHeap::push` makes, one per slot read or write
+    /// and one per hole move, on a max-heap mirrored step by step.
+    fn mirrored_push(data: &mut Vec<u32>, item: u32) -> usize {
+        data.push(item);
+        let mut pos = data.len() - 1;
+        let mut ops = 2;
+        while pos > 0 {
+            let parent = (pos - 1) / 2;
+            ops += 1;
+            if item <= data[parent] {
+                break;
+            }
+            data[pos] = data[parent];
+            ops += 1;
+            pos = parent;
+        }
+        data[pos] = item;
+        ops + 1
+    }
+
+    /// Accesses std's `BinaryHeap::pop` makes: `sift_down_to_bottom`, then
+    /// `sift_up` from where the hole stopped.
+    fn mirrored_pop(data: &mut Vec<u32>) -> usize {
+        let mut item = data.pop().unwrap();
+        let mut ops = 1;
+        if data.is_empty() {
+            return ops;
+        }
+        std::mem::swap(&mut item, &mut data[0]);
+        ops += 3;
+        let (end, element) = (data.len(), data[0]);
+        let (mut pos, mut child) = (0, 1);
+        while child + 2 <= end {
+            ops += 2;
+            child += usize::from(data[child] <= data[child + 1]);
+            data[pos] = data[child];
+            ops += 1;
+            pos = child;
+            child = 2 * pos + 1;
+        }
+        if child + 1 == end {
+            data[pos] = data[child];
+            ops += 1;
+            pos = child;
+        }
+        ops += 2;
+        while pos > 0 {
+            let parent = (pos - 1) / 2;
+            ops += 1;
+            if element <= data[parent] {
+                break;
+            }
+            data[pos] = data[parent];
+            ops += 1;
+            pos = parent;
+        }
+        data[pos] = element;
+        ops + 1
+    }
+
+    #[test]
+    fn binary_heap_op_models_bound_std_push_and_pop() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % 64) as u32
+        };
+        let mut worst_pop_slack = usize::MAX;
+        for len in 1..200 {
+            for _ in 0..50 {
+                let mut heap = BinaryHeap::new();
+                let mut mirror = Vec::new();
+                for _ in 0..len {
+                    let item = next();
+                    let ops = mirrored_push(&mut mirror, item);
+                    heap.push(item);
+                    assert!(ops <= binary_heap_push_ops(mirror.len()));
+                }
+                assert_eq!(heap.as_slice(), mirror.as_slice());
+                let ops = mirrored_pop(&mut mirror);
+                heap.pop();
+                assert_eq!(heap.as_slice(), mirror.as_slice());
+                let model = binary_heap_pop_ops(len);
+                assert!(ops <= model, "pop from {len} made {ops}, model {model}");
+                worst_pop_slack = worst_pop_slack.min(model - ops);
+            }
+        }
+        assert!(worst_pop_slack <= 1, "pop model slack {worst_pop_slack}");
     }
 }

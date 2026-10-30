@@ -426,6 +426,20 @@ impl<S: NitroTarget + NitroMerge> NitroBatch<S> {
     }
 }
 
+impl<H: crate::SketchHasher> NitroBatch<CountMinSketch<Vector2D<i32>, FastPath, H>> {
+    /// Bytes this wrapper holds: the struct and the target's heap.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() + self.sk.memory_bytes() - size_of_val(&self.sk)
+    }
+}
+
+impl<H: crate::SketchHasher> NitroBatch<CountSketch<Vector2D<i32>, FastPath, H>> {
+    /// Bytes this wrapper holds: the struct and the target's heap.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() + self.sk.memory_bytes() - size_of_val(&self.sk)
+    }
+}
+
 impl<S: NitroTarget + NitroEstimate> NitroBatch<S> {
     /// Returns the wrapped sketch's estimate for `value`.
     pub fn estimate_median(&self, value: &DataInput) -> f64 {

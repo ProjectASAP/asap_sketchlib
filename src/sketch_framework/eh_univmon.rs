@@ -17,7 +17,16 @@ const MASS_EPSILON: f64 = 1e-9;
 const DEFAULT_ROWS: usize = 5;
 const DEFAULT_COLS: usize = 2048;
 const DEFAULT_LAYERS: usize = 8;
-const DEFAULT_POOL_INITIAL_SIZE: usize = 4;
+pub(crate) const DEFAULT_POOL_INITIAL_SIZE: usize = 4;
+
+/// Heap bytes a key owns.
+fn owned_key_bytes(key: &OwnedDataInput) -> usize {
+    match key {
+        OwnedDataInput::String(s) => s.capacity(),
+        OwnedDataInput::Bytes(b) => b.capacity(),
+        _ => 0,
+    }
+}
 
 fn exact_l2_squared(counts: &HashMap<OwnedDataInput, i64>) -> f64 {
     counts.values().map(|&v| (v as f64) * (v as f64)).sum()
@@ -183,7 +192,9 @@ impl ExponentialHistogramUnivMon {
             .iter()
             .take_while(|b| b.max_time < cutoff)
             .count();
+        crate::analytics::ops::add((expired_count + 1).min(self.sketch_buckets.len()));
         if expired_count > 0 {
+            crate::analytics::ops::add(2 * (self.sketch_buckets.len() - expired_count));
             let expired: Vec<EhUnivMonSketchBucket> =
                 self.sketch_buckets.drain(0..expired_count).collect();
             for bucket in expired {
@@ -197,7 +208,9 @@ impl ExponentialHistogramUnivMon {
             .iter()
             .take_while(|b| b.max_time < cutoff)
             .count();
+        crate::analytics::ops::add((expired + 1).min(self.exact_buckets.len()));
         if expired > 0 {
+            crate::analytics::ops::add(2 * (self.exact_buckets.len() - expired));
             self.exact_buckets.drain(0..expired);
         }
 
@@ -205,6 +218,7 @@ impl ExponentialHistogramUnivMon {
         let owned_key = key.to_owned_input();
         let mut counts = HashMap::new();
         counts.insert(owned_key, weight);
+        crate::analytics::ops::add(2);
         self.exact_buckets.push(EhUnivMonExactBucket {
             counts,
             l2_squared: (weight as f64) * (weight as f64),
@@ -218,12 +232,15 @@ impl ExponentialHistogramUnivMon {
         if self.exact_buckets.len() >= 2 {
             let mut i = self.exact_buckets.len() - 2;
             loop {
+                crate::analytics::ops::add(2);
                 let pair_l22 =
                     self.exact_buckets[i].l2_squared + self.exact_buckets[i + 1].l2_squared;
                 let threshold = sum_l22 / (self.k as f64);
                 if pair_l22 <= threshold + MASS_EPSILON {
                     // Merge i+1 into i
+                    crate::analytics::ops::add(1 + 2 * (self.exact_buckets.len() - i - 2));
                     let other = self.exact_buckets.remove(i + 1);
+                    crate::analytics::ops::add(other.counts.len());
                     let bucket = &mut self.exact_buckets[i];
                     bucket.total_weight += other.total_weight;
                     bucket.max_time = bucket.max_time.max(other.max_time);
@@ -231,8 +248,10 @@ impl ExponentialHistogramUnivMon {
                     for (k, v) in other.counts {
                         *bucket.counts.entry(k).or_insert(0) += v;
                     }
+                    crate::analytics::ops::add(bucket.counts.len());
                     bucket.l2_squared = exact_l2_squared(&bucket.counts);
                 } else {
+                    crate::analytics::ops::add(1);
                     sum_l22 += self.exact_buckets[i + 1].l2_squared;
                 }
                 if i == 0 {
@@ -251,11 +270,13 @@ impl ExponentialHistogramUnivMon {
     }
 
     fn promote_oldest_exact_bucket(&mut self, sum_l22: f64) {
+        crate::analytics::ops::add(1 + 2 * (self.exact_buckets.len() - 1));
         let oldest = self.exact_buckets.remove(0);
 
         // Take a sketch from the pool (moved, not borrowed) — zero allocation
         // if the pool has a recycled sketch available.
         let mut sketch = self.pool.take();
+        crate::analytics::ops::add(oldest.counts.len());
         for (key, value) in &oldest.counts {
             let input = key.as_data_input();
             sketch.update_weighted(&input, *value);
@@ -263,6 +284,7 @@ impl ExponentialHistogramUnivMon {
 
         let l2_squared = sketch.layer_sketches[0].l2().powi(2);
 
+        crate::analytics::ops::add(1);
         self.sketch_buckets.push(EhUnivMonSketchBucket {
             sketch,
             l2_squared,
@@ -287,6 +309,7 @@ impl ExponentialHistogramUnivMon {
             let pair_l22 = l22_i + l22_next;
             let threshold = sum_l22 / (self.k as f64);
             if pair_l22 <= threshold + MASS_EPSILON {
+                crate::analytics::ops::add(1 + 2 * (self.sketch_buckets.len() - i - 2));
                 let other = self.sketch_buckets.remove(i + 1);
                 let bucket = &mut self.sketch_buckets[i];
                 bucket.sketch.merge(&other.sketch);
@@ -316,6 +339,7 @@ impl ExponentialHistogramUnivMon {
 
         let mut from_bucket: usize = 0;
         let mut to_bucket: usize = 0;
+        crate::analytics::ops::add(2 * total + 6);
 
         // Search sketch buckets
         for i in 0..s_count {
@@ -383,8 +407,11 @@ impl ExponentialHistogramUnivMon {
         // Three cases
         if to_bucket < s_count {
             // Case 1: Both in sketch tier
+            #[cfg(feature = "op-count")]
+            crate::analytics::ops::add(self.sketch_buckets[from_bucket].sketch.cells());
             let mut merged = self.sketch_buckets[from_bucket].sketch.clone();
             for i in (from_bucket + 1)..=to_bucket {
+                crate::analytics::ops::add(1);
                 merged.merge(&self.sketch_buckets[i].sketch);
             }
             Some(EhUnivMonQueryResult::Sketch(merged))
@@ -394,10 +421,12 @@ impl ExponentialHistogramUnivMon {
             let to_map = to_bucket - s_count;
             let mut merged_map: HashMap<OwnedDataInput, i64> = HashMap::new();
             for i in from_map..=to_map {
+                crate::analytics::ops::add(1 + 2 * self.exact_buckets[i].counts.len());
                 for (k, &v) in &self.exact_buckets[i].counts {
                     *merged_map.entry(k.clone()).or_insert(0) += v;
                 }
             }
+            crate::analytics::ops::add(merged_map.len());
             let total_weight = merged_map.values().sum::<i64>() as usize;
             Some(EhUnivMonQueryResult::Exact {
                 counts: merged_map,
@@ -406,7 +435,10 @@ impl ExponentialHistogramUnivMon {
         } else {
             // Case 3: Hybrid — from in sketch, to in map
             let mut merged = UnivMon::new(self.heap_size, self.rows, self.cols, self.layers);
+            #[cfg(feature = "op-count")]
+            crate::analytics::ops::add(merged.cells());
             for i in from_bucket..s_count {
+                crate::analytics::ops::add(1);
                 merged.merge(&self.sketch_buckets[i].sketch);
             }
 
@@ -414,12 +446,14 @@ impl ExponentialHistogramUnivMon {
             let to_map = to_bucket - s_count;
             let mut map_merged: HashMap<OwnedDataInput, i64> = HashMap::new();
             for i in 0..=to_map {
+                crate::analytics::ops::add(1 + 2 * self.exact_buckets[i].counts.len());
                 for (k, &v) in &self.exact_buckets[i].counts {
                     *map_merged.entry(k.clone()).or_insert(0) += v;
                 }
             }
 
             // Insert map entries into merged sketch
+            crate::analytics::ops::add(map_merged.len());
             for (key, value) in &map_merged {
                 let input = key.as_data_input();
                 merged.update_weighted(&input, *value);
@@ -501,6 +535,27 @@ impl ExponentialHistogramUnivMon {
                 b.counts.len()
             );
         }
+    }
+
+    /// Bytes this histogram holds: the struct, both bucket lists' slots, each
+    /// UnivMon bucket's heap, each exact bucket's map and key bytes, and the
+    /// pool ([`UnivMonPool::memory_bytes`]).
+    pub fn memory_bytes(&self) -> usize {
+        let univmon = |s: &UnivMon| s.memory_bytes() - size_of::<UnivMon>();
+        let exact = |b: &EhUnivMonExactBucket| {
+            crate::common::heap::hash_map_bytes::<(OwnedDataInput, i64)>(b.counts.capacity())
+                + b.counts.keys().map(owned_key_bytes).sum::<usize>()
+        };
+        size_of::<Self>() - size_of::<UnivMonPool>()
+            + self.sketch_buckets.capacity() * size_of::<EhUnivMonSketchBucket>()
+            + self
+                .sketch_buckets
+                .iter()
+                .map(|b| univmon(&b.sketch))
+                .sum::<usize>()
+            + self.exact_buckets.capacity() * size_of::<EhUnivMonExactBucket>()
+            + self.exact_buckets.iter().map(exact).sum::<usize>()
+            + self.pool.memory_bytes()
     }
 
     pub fn memory_info(&self) -> (usize, usize, Vec<usize>, Vec<usize>) {

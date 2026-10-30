@@ -145,6 +145,15 @@ impl<H: SketchHasher> ElasticSketch<H> {
         }
     }
 
+    /// Bytes this sketch holds: the struct, the heavy buckets with their flow
+    /// ids' owned bytes, and the light layer's counters.
+    pub fn memory_bytes(&self) -> usize {
+        let ids: usize = self.heavy.iter().map(|b| b.flow_id.capacity()).sum();
+        size_of::<Self>() + self.heavy.capacity() * size_of::<HeavyBucket>() + ids
+            - size_of::<CountMinSketch<Vector2D<i32>, RegularPath, H>>()
+            + self.light.memory_bytes()
+    }
+
     /// Records one occurrence of `id`.
     ///
     /// A vacant bucket seats the flow; a matching bucket takes a positive vote.
@@ -175,6 +184,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
             self.seat_over_stale_copy(idx, id, weight);
             return;
         }
+        crate::analytics::ops::add(1);
         let bucket = &mut self.heavy[idx];
 
         if bucket.is_vacant() {
@@ -282,6 +292,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
     /// layer whenever the bucket carries the eviction flag.
     pub fn estimate(&self, id: String) -> i32 {
         let idx = self.bucket_index(&id);
+        crate::analytics::ops::add(1);
         let bucket = &self.heavy[idx];
         if !bucket.is_vacant() && bucket.flow_id == id {
             if bucket.eviction {
@@ -353,10 +364,15 @@ impl<H: SketchHasher> ElasticSketch<H> {
         let mut merged: Vec<Option<HeavyBucket>> = Vec::with_capacity(self.heavy.len());
 
         for idx in 0..self.heavy.len() {
-            let mine = (!self.heavy[idx].is_vacant() && !self.stale_at(idx))
-                .then(|| self.heavy[idx].clone());
-            let theirs = (!other.heavy[idx].is_vacant() && !other.stale_at(idx))
-                .then(|| other.heavy[idx].clone());
+            crate::analytics::ops::add(3);
+            let mine = (!self.heavy[idx].is_vacant() && !self.stale_at(idx)).then(|| {
+                crate::analytics::ops::add(1);
+                self.heavy[idx].clone()
+            });
+            let theirs = (!other.heavy[idx].is_vacant() && !other.stale_at(idx)).then(|| {
+                crate::analytics::ops::add(1);
+                other.heavy[idx].clone()
+            });
 
             merged.push(match (mine, theirs) {
                 (None, None) => None,
@@ -374,6 +390,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
                     } else {
                         (theirs, mine)
                     };
+                    crate::analytics::ops::add(1);
                     losers.push((lost.flow_id, lost.vote_pos));
                     Some(kept)
                 }
@@ -381,6 +398,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
         }
 
         for (idx, slot) in merged.into_iter().enumerate() {
+            crate::analytics::ops::add(2);
             let bucket = &mut self.heavy[idx];
             match slot {
                 Some(mut kept) => {
@@ -402,6 +420,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
     /// Adds each flow's votes to the light layer.
     fn spill(&mut self, flows: Vec<(String, i32)>) {
         for (flow_id, votes) in flows {
+            crate::analytics::ops::add(1);
             self.light
                 .update_weighted(&DataInput::String(flow_id), votes);
         }
@@ -430,13 +449,18 @@ impl<H: SketchHasher> ElasticSketch<H> {
     /// left by an expansion are skipped, so no flow is reported twice.
     fn resident_flows(&self) -> Vec<(String, i32)> {
         let mut flows: Vec<(String, i32)> = (0..self.heavy.len())
-            .filter(|idx| !self.heavy[*idx].is_vacant() && !self.stale_at(*idx))
+            .filter(|idx| {
+                crate::analytics::ops::add(1);
+                !self.heavy[*idx].is_vacant() && !self.stale_at(*idx)
+            })
             .map(|idx| {
+                crate::analytics::ops::add(2);
                 let id = self.heavy[idx].flow_id.clone();
                 let size = self.estimate(id.clone());
                 (id, size)
             })
             .collect();
+        crate::analytics::ops::add_sort(flows.len());
         flows.sort_unstable();
         flows
     }
@@ -458,6 +482,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
     /// [`Self::heavy_hitters`]), by estimate descending, ties by flow id.
     pub fn top_k(&self, k: usize) -> Vec<(String, i32)> {
         let mut flows = self.resident_flows();
+        crate::analytics::ops::add_sort(flows.len());
         flows.sort_by_key(|flow| std::cmp::Reverse(flow.1));
         flows.truncate(k);
         flows
@@ -606,6 +631,7 @@ impl<H: SketchHasher> ElasticSketch<H> {
         if !self.stale_copies {
             return false;
         }
+        crate::analytics::ops::add(1);
         let bucket = &self.heavy[idx];
         !bucket.is_vacant() && self.bucket_index(&bucket.flow_id) != idx
     }

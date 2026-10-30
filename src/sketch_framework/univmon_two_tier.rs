@@ -18,12 +18,12 @@ mod wire;
 // UnivMonTwoTier
 // ---------------------------------------------------------------------------
 
-const DEFAULT_ELEPHANT_LAYERS: usize = 8;
-const DEFAULT_ELEPHANT_ROWS: usize = 3;
-const DEFAULT_ELEPHANT_COLS: usize = 2048;
-const DEFAULT_MOUSE_ROWS: usize = 3;
-const DEFAULT_MOUSE_COLS: usize = 512;
-const DEFAULT_LAYERS: usize = 16;
+pub(crate) const DEFAULT_ELEPHANT_LAYERS: usize = 8;
+pub(crate) const DEFAULT_ELEPHANT_ROWS: usize = 3;
+pub(crate) const DEFAULT_ELEPHANT_COLS: usize = 2048;
+pub(crate) const DEFAULT_MOUSE_ROWS: usize = 3;
+pub(crate) const DEFAULT_MOUSE_COLS: usize = 512;
+pub(crate) const DEFAULT_LAYERS: usize = 16;
 
 /// Pyramid-structured UnivMon with two-tier sketch dimensions.
 ///
@@ -134,6 +134,7 @@ impl UnivMonTwoTier {
             current if current == mode => {}
             _ => panic!("cannot mix standard and terminal-only updates in one UnivMon"),
         }
+        crate::analytics::ops::add(1);
         self.total_weight = self
             .total_weight
             .checked_add(value as usize)
@@ -161,6 +162,7 @@ impl UnivMonTwoTier {
         for i in 0..=bottom {
             let count = self.layer_sketches[i].update_weighted_and_estimate(key, weight);
             if !self.layer_heaps[i].update(key, count as i64) {
+                crate::analytics::ops::add(1);
                 self.candidate_complete[i] = false;
             }
         }
@@ -188,6 +190,7 @@ impl UnivMonTwoTier {
     where
         F: Fn(f64) -> f64,
     {
+        crate::analytics::ops::add(1);
         if self.total_weight == 0 && !count_every_key {
             return 0.0;
         }
@@ -196,6 +199,8 @@ impl UnivMonTwoTier {
         }
 
         let counted = |count: i64| count_every_key || count > 0;
+        // Each `y` slot is written once and read once.
+        crate::analytics::ops::add(2 * self.layers);
         let mut y = vec![0.0; self.layers];
 
         let mut tmp = 0.0;
@@ -311,6 +316,7 @@ impl UnivMonTwoTier {
 
     /// Returns the exact L1 norm for the supported non-negative update stream.
     pub fn estimate_l1(&self) -> f64 {
+        crate::analytics::ops::add(1);
         self.total_weight as f64
     }
 
@@ -329,10 +335,12 @@ impl UnivMonTwoTier {
 
     /// Returns the estimated Shannon entropy, in bits (log2).
     pub fn estimate_entropy(&self) -> f64 {
+        crate::analytics::ops::add(1);
         if self.total_weight == 0 {
             return 0.0;
         }
         let tmp = self.estimate_g_sum(|x| if x > 0.0 { x * x.log2() } else { 0.0 }, false);
+        crate::analytics::ops::add(2);
         (self.total_weight as f64).log2() - tmp / (self.total_weight as f64)
     }
 
@@ -391,27 +399,34 @@ impl UnivMonTwoTier {
                 "cannot merge standard and terminal-only UnivMon states"
             ),
         }
+        crate::analytics::ops::add(2);
         self.total_weight = self
             .total_weight
             .checked_add(other.total_weight)
             .expect("merged UnivMon total weight overflowed usize");
         for i in 0..self.layers {
+            crate::analytics::ops::add(2);
             let sources_complete = self.candidate_complete[i] && other.candidate_complete[i];
             let candidate_keys: HashSet<OwnedDataInput> = self.layer_heaps[i]
                 .heap()
                 .iter()
                 .chain(other.layer_heaps[i].heap())
-                .map(|item| item.key.clone())
+                .map(|item| {
+                    crate::analytics::ops::add(1);
+                    item.key.clone()
+                })
                 .collect();
             let merged_candidates_complete =
                 sources_complete && candidate_keys.len() <= self.heap_size;
             self.layer_sketches[i].merge(&other.layer_sketches[i]);
             self.layer_heaps[i].clear();
             for key in candidate_keys {
+                crate::analytics::ops::add(1);
                 let input = key.as_data_input();
                 let count = self.layer_sketches[i].estimate(&input) as i64;
                 self.layer_heaps[i].update(&input, count);
             }
+            crate::analytics::ops::add(1);
             self.candidate_complete[i] = merged_candidates_complete;
         }
     }
@@ -419,6 +434,53 @@ impl UnivMonTwoTier {
     /// Returns the heap for one layer.
     pub fn layer_heap_mut(&mut self, layer: usize) -> &mut TopKHeap {
         &mut self.layer_heaps[layer]
+    }
+
+    /// Bytes this pyramid holds: the struct, each layer's sketch and heap
+    /// ([`CountSketchWithL2Norm::memory_bytes`], [`TopKHeap::memory_bytes`])
+    /// and the per-layer candidate flags.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.layer_sketches.capacity() * size_of::<CountSketchWithL2Norm>()
+            + self
+                .layer_sketches
+                .iter()
+                .map(|sketch| sketch.memory_bytes() - size_of::<CountSketchWithL2Norm>())
+                .sum::<usize>()
+            + self.layer_heaps.capacity() * size_of::<TopKHeap>()
+            + self
+                .layer_heaps
+                .iter()
+                .map(|heap| heap.memory_bytes() - size_of::<TopKHeap>())
+                .sum::<usize>()
+            + self.candidate_complete.capacity() * size_of::<bool>()
+    }
+
+    /// Bytes a pyramid of that shape holds once keys shaped like `key` churn
+    /// through every layer, as [`UnivMon::theoretical_memory_bytes`] counts
+    /// them with each layer's own dimensions. Saturates at `usize::MAX`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn theoretical_memory_bytes(
+        heap_size: usize,
+        elephant_layers: usize,
+        elephant_rows: usize,
+        elephant_cols: usize,
+        mouse_rows: usize,
+        mouse_cols: usize,
+        layers: usize,
+        key: &DataInput,
+    ) -> usize {
+        let per_layer = TopKHeap::<i64>::theoretical_memory_bytes(heap_size, key)
+            .saturating_add(size_of::<bool>());
+        let elephants = elephant_layers.min(layers);
+        let elephant =
+            CountSketchWithL2Norm::theoretical_memory_bytes(elephant_rows, elephant_cols)
+                .saturating_add(per_layer);
+        let mouse = CountSketchWithL2Norm::theoretical_memory_bytes(mouse_rows, mouse_cols)
+            .saturating_add(per_layer);
+        size_of::<Self>()
+            .saturating_add(elephants.saturating_mul(elephant))
+            .saturating_add((layers - elephants).saturating_mul(mouse))
     }
 }
 
@@ -561,8 +623,8 @@ mod tests {
     }
 
     /// Mouse layers much narrower than the elephant ones: the joint bound
-    /// `P(error > eps F0 AND complete) <= 2/(k eps^2)`, and the ideal estimator
-    /// (exact top count restored) has mean `F0` and variance at most `2 F0^2/k`.
+    /// `P(error > eps F0 AND complete) <= 1.35/(k eps^2)`, and the ideal estimator
+    /// (exact top count restored) has mean `F0` and variance at most `1.35 F0^2/k`.
     fn check_cardinality(trials: usize) {
         const HEAP: usize = 32;
         const KEYS: usize = 2000;
@@ -598,15 +660,15 @@ mod tests {
             "top layer incomplete in {incomplete}/{trials} trials"
         );
         let n = trials as f64;
-        let delta = 2.0 / (HEAP as f64 * EPS * EPS);
+        let delta = 1.35 / (HEAP as f64 * EPS * EPS);
         assert!(
             failures as f64 <= allowed_failures(trials, delta),
             "{failures}/{trials} joint misses beyond eps={EPS}"
         );
         let variance = sum_sq / n;
         assert!(
-            variance <= 2.0 * f0 * f0 / HEAP as f64,
-            "variance {:.3} F0^2/k above 2",
+            variance <= 1.35 * f0 * f0 / HEAP as f64,
+            "variance {:.3} F0^2/k above 1.35",
             variance / (f0 * f0 / HEAP as f64)
         );
         assert!(

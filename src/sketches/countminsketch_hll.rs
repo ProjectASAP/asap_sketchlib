@@ -128,6 +128,12 @@ impl<H: SketchHasher> CountMinHll<H> {
         }
     }
 
+    /// Bytes this sketch holds: the struct and its `rows * cols * 2^p`
+    /// one-byte registers.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() + self.buckets.as_slice().len()
+    }
+
     /// Number of hash rows.
     pub fn rows(&self) -> usize {
         self.buckets.rows()
@@ -176,6 +182,7 @@ impl<H: SketchHasher> CountMinHll<H> {
         let col_hash = H::hash128_seeded(0, key);
         let hll_hash = H::hash64_seeded(HLL_SEED, distinct_value);
         let (index, rank) = self.register_and_rank_from_hash(hll_hash);
+        crate::analytics::ops::add(self.buckets.rows());
         self.buckets.fast_insert(
             |registers, &(index, rank): &(usize, u8), _row| {
                 registers[index] = registers[index].max(rank);
@@ -201,6 +208,7 @@ impl<H: SketchHasher> CountMinHll<H> {
     /// tightest available estimate.
     pub fn estimate(&self, key: &DataInput) -> f64 {
         let col_hash = H::hash128_seeded(0, key);
+        crate::analytics::ops::add(self.buckets.rows() << self.precision);
         self.buckets
             .fast_query_min(&col_hash, |registers, _row| classic_estimate(registers))
     }
@@ -223,6 +231,7 @@ impl<H: SketchHasher> CountMinHll<H> {
                  (rows, cols, precision) is {mine:?} against {theirs:?}"
             ));
         }
+        crate::analytics::ops::add(2 * self.buckets.as_slice().len());
         for (reg, other_reg) in self
             .buckets
             .as_mut_slice()

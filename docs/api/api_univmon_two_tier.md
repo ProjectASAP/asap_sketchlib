@@ -54,7 +54,7 @@ Count Sketch F2 estimate in standard mode, so its `(ε, δ)` bound uses layer 0'
 dimensions (the elephant ones whenever `elephant_layers >= 1`); in terminal mode
 it sums the strata, each held to its own layer's dimensions.
 `estimate_cardinality()` counts every heap key; it misses by more than `ε F0`
-jointly with `top_layer_complete()` with probability at most `2/(kε²)` for
+jointly with `top_layer_complete()` with probability at most `1.35/(kε²)` for
 `k = heap_size >= 8`, independent of the elephant/mouse split.
 
 ## Merge

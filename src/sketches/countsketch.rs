@@ -244,7 +244,7 @@ impl<S: MatrixStorage, Mode> CountSketch<S, Mode> {
     /// Bytes a sketch of `rows * cols` counters holds: [`Self::memory_bytes`]
     /// of one built with those dimensions. Defined on the default hasher, so
     /// only the storage and path are named.
-    pub fn estimated_memory_bytes(rows: usize, cols: usize) -> usize {
+    pub fn theoretical_memory_bytes(rows: usize, cols: usize) -> usize {
         size_of::<Self>().saturating_add(
             rows.saturating_mul(cols)
                 .saturating_mul(size_of::<S::Counter>()),
@@ -412,6 +412,8 @@ where
         if estimates.is_empty() {
             return 0.0;
         }
+        crate::analytics::ops::add(rows);
+        crate::analytics::ops::add_sort(rows);
         estimates.sort_unstable_by(f64::total_cmp);
         let mid = estimates.len() / 2;
         if estimates.len() % 2 == 1 {

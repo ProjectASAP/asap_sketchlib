@@ -35,9 +35,9 @@ use std::collections::{HashMap, HashSet};
 
 pub(crate) mod wire;
 
-const DEFAULT_ROWS: usize = 5;
-const DEFAULT_COLS: usize = 2048;
-const DEFAULT_LAYERS: usize = 8;
+pub(crate) const DEFAULT_ROWS: usize = 5;
+pub(crate) const DEFAULT_COLS: usize = 2048;
+pub(crate) const DEFAULT_LAYERS: usize = 8;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum UnivMonUpdateMode {
@@ -184,6 +184,7 @@ impl UnivMon {
             current if current == mode => {}
             _ => panic!("cannot mix standard and terminal-only updates in one UnivMon"),
         }
+        crate::analytics::ops::add(1);
         self.total_weight = self
             .total_weight
             .checked_add(value as usize)
@@ -284,6 +285,7 @@ impl UnivMon {
         for i in 0..=bottom_layer_num {
             let count = self.layer_sketches[i].update_weighted_and_estimate(key, value);
             if !self.layer_heaps[i].update(key, count as i64) {
+                crate::analytics::ops::add(1);
                 self.candidate_complete[i] = false;
             }
         }
@@ -333,6 +335,7 @@ impl UnivMon {
     where
         F: Fn(f64) -> f64,
     {
+        crate::analytics::ops::add(1);
         if self.total_weight == 0 && !count_every_key {
             return 0.0;
         }
@@ -341,6 +344,8 @@ impl UnivMon {
         }
 
         let counted = |count: i64| count_every_key || count > 0;
+        // Each `y` slot is written once and read once.
+        crate::analytics::ops::add(2 * self.layers);
         let mut y = vec![0.0; self.layers];
         let mut tmp: f64;
 
@@ -460,6 +465,7 @@ impl UnivMon {
 
     /// Returns the exact L1 norm for the supported non-negative update stream.
     pub fn estimate_l1(&self) -> f64 {
+        crate::analytics::ops::add(1);
         self.total_weight as f64
     }
 
@@ -478,6 +484,7 @@ impl UnivMon {
 
     /// Returns the estimated Shannon entropy, in bits (log2).
     pub fn estimate_entropy(&self) -> f64 {
+        crate::analytics::ops::add(1);
         if self.total_weight == 0 {
             return 0.0;
         }
@@ -487,6 +494,7 @@ impl UnivMon {
             },
             false,
         );
+        crate::analytics::ops::add(2);
         (self.total_weight as f64).log2() - tmp / (self.total_weight as f64)
     }
 
@@ -532,27 +540,34 @@ impl UnivMon {
                 "cannot merge standard and terminal-only UnivMon states"
             ),
         }
+        crate::analytics::ops::add(2);
         self.total_weight = self
             .total_weight
             .checked_add(other.total_weight)
             .expect("merged UnivMon total weight overflowed usize");
         for i in 0..self.layers {
+            crate::analytics::ops::add(2);
             let sources_complete = self.candidate_complete[i] && other.candidate_complete[i];
             let candidate_keys: HashSet<OwnedDataInput> = self.layer_heaps[i]
                 .heap()
                 .iter()
                 .chain(other.layer_heaps[i].heap())
-                .map(|item| item.key.clone())
+                .map(|item| {
+                    crate::analytics::ops::add(1);
+                    item.key.clone()
+                })
                 .collect();
             let merged_candidates_complete =
                 sources_complete && candidate_keys.len() <= self.heap_size;
             self.layer_sketches[i].merge(&other.layer_sketches[i]);
             self.layer_heaps[i].clear();
             for key in candidate_keys {
+                crate::analytics::ops::add(1);
                 let input = key.as_data_input();
                 let count = self.layer_sketches[i].estimate(&input) as i64;
                 self.layer_heaps[i].update(&input, count);
             }
+            crate::analytics::ops::add(1);
             self.candidate_complete[i] = merged_candidates_complete;
         }
     }
@@ -582,22 +597,30 @@ impl UnivMon {
             + self.candidate_complete.capacity() * size_of::<bool>()
     }
 
+    /// `C_in`: the cells a clone or clear copies, the heap bytes over 8.
+    #[cfg(feature = "op-count")]
+    pub(crate) fn cells(&self) -> usize {
+        use crate::analytics::frameworks::{InnerSketch, heap_cells};
+        let cell = <Self as InnerSketch>::cell_bytes(&Default::default());
+        heap_cells(self.memory_bytes(), size_of::<Self>(), cell)
+    }
+
     /// Bytes a pyramid of that shape, built by [`Self::new`], decoded or cloned,
     /// holds in steady state once keys shaped like `key` churn through every
     /// layer: the struct and, per layer,
-    /// [`CountSketchWithL2Norm::estimated_memory_bytes`],
-    /// [`TopKHeap::estimated_memory_bytes`] and a candidate flag. A pyramid
+    /// [`CountSketchWithL2Norm::theoretical_memory_bytes`],
+    /// [`TopKHeap::theoretical_memory_bytes`] and a candidate flag. A pyramid
     /// holds at most this, and exactly this once every layer's heap has
     /// churned. Saturates at `usize::MAX`.
-    pub fn estimated_memory_bytes(
+    pub fn theoretical_memory_bytes(
         heap_size: usize,
         rows: usize,
         cols: usize,
         layers: usize,
         key: &DataInput,
     ) -> usize {
-        let layer = CountSketchWithL2Norm::estimated_memory_bytes(rows, cols)
-            .saturating_add(TopKHeap::<i64>::estimated_memory_bytes(heap_size, key))
+        let layer = CountSketchWithL2Norm::theoretical_memory_bytes(rows, cols)
+            .saturating_add(TopKHeap::<i64>::theoretical_memory_bytes(heap_size, key))
             .saturating_add(size_of::<bool>());
         size_of::<Self>().saturating_add(layers.saturating_mul(layer))
     }
@@ -645,6 +668,7 @@ impl UnivMonPool {
     /// Pops a recycled sketch from the free-list if available, otherwise
     /// allocates a fresh one.
     pub fn take(&mut self) -> UnivMon {
+        crate::analytics::ops::add(1);
         if let Some(sketch) = self.free_list.pop() {
             sketch
         } else {
@@ -655,6 +679,8 @@ impl UnivMonPool {
 
     /// Returns a sketch to the pool for reuse. Resets all internal state.
     pub fn put(&mut self, mut sketch: UnivMon) {
+        #[cfg(feature = "op-count")]
+        crate::analytics::ops::add(1 + sketch.cells());
         sketch.clear();
         self.free_list.push(sketch);
     }
@@ -667,6 +693,18 @@ impl UnivMonPool {
     /// Total number of sketches ever allocated by this pool.
     pub fn total_allocated(&self) -> usize {
         self.total_allocated
+    }
+
+    /// Bytes this pool holds: the struct, its free-list slots and each free
+    /// sketch's heap.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>()
+            + self.free_list.capacity() * size_of::<UnivMon>()
+            + self
+                .free_list
+                .iter()
+                .map(|s| s.memory_bytes() - size_of::<UnivMon>())
+                .sum::<usize>()
     }
 }
 
@@ -1407,7 +1445,7 @@ mod tests {
             const EPS: f64 = 0.5;
             // L >= ceil(log2(F0 / k)) + 2.
             let layers = (KEYS as f64 / HEAP as f64).log2().ceil() as usize + 2;
-            let chebyshev = 2.0 / (HEAP as f64 * EPS * EPS);
+            let chebyshev = 1.35 / (HEAP as f64 * EPS * EPS);
             let mut rng = StdRng::seed_from_u64(0x5EED_00F0);
             let f0 = KEYS as f64;
             for shape in SHAPES {

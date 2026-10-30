@@ -79,10 +79,12 @@ pub(crate) fn rank_candidates<H: SketchHasher, C: CandidateCounter>(
         .entries()
         .into_iter()
         .map(|(key, _, _)| {
+            crate::analytics::ops::add(2);
             let count = estimate(&key.as_data_input());
             (key, count)
         })
         .collect();
+    crate::analytics::ops::add_sort(ranked.len());
     ranked.sort_unstable_by(|a, b| b.1.order(&a.1).then_with(|| key_cmp(&a.0, &b.0)));
     ranked.truncate(k);
     ranked
@@ -151,6 +153,14 @@ impl<S: MatrixStorage, M, H: SketchHasher> CountMinSketchWithSpaceSaving<S, M, H
     /// Keys the summary can monitor.
     pub fn capacity(&self) -> usize {
         self.summary.capacity()
+    }
+
+    /// Bytes this sketch holds: [`CountMinSketch::memory_bytes`] and
+    /// [`SpaceSaving::memory_bytes`].
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() - size_of::<CountMinSketch<S, M, H>>() - size_of::<SpaceSaving<H>>()
+            + self.count_min_sketch.memory_bytes()
+            + self.summary.memory_bytes()
     }
 
     /// Adds `other`'s matrix to this one and merges the summaries. Panics when

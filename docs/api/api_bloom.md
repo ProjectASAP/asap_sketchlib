@@ -22,7 +22,7 @@ AND.
 ```rust
 fn with_capacity(expected_items: usize, target_fpp: f64) -> Self
 fn with_dimensions(rows: usize, cols: usize) -> Self
-fn dimensions_for(expected_items: usize, target_fpp: f64) -> (usize, usize)
+fn dimensions_for(expected_items: usize, target_fpp: f64) -> Option<(usize, usize)>
 
 const BLOOM_MAX_SLICES: usize   // MATRIX_MAX_ROWS (20), the most rows ASAPv1 carries
 const BLOOM_MAX_BITS: usize     // 2^31, the sizing ceiling
@@ -30,10 +30,10 @@ const BLOOM_MAX_BITS: usize     // 2^31, the sizing ceiling
 
 `with_capacity` takes `k = round(log2(1/p))` slices, **capped at
 `BLOOM_MAX_SLICES`**, then solves for the slice width that hits `p` with
-exactly that many slices — `cols = -n / ln(1 - p^(1/k))` — and rounds it up to a
-power of two. The rounding keeps the column fold free of modulo bias, so the
-delivered rate lands under the target rather than over it. `dimensions_for`
-reports the choice without allocating.
+exactly that many slices — `cols = -n / ln(1 - p^(1/k))` — rounds it up to a
+power of two, and doubles it until the exact rate `(1 - (1 - 1/cols)^n)^k` is at
+most `p`. The power-of-two width keeps the column fold free of modulo bias.
+`dimensions_for` reports the choice without allocating.
 
 The cap is the reason the width is solved for `k` rather than taken as the
 `k`-optimal split `m/k`. A filter has at most 20 slices, the most an ASAPv1
@@ -42,9 +42,9 @@ bits — about 20% more at `p = 1e-12` — and delivers the target, where the
 `k`-optimal split would have delivered `2^-20` no matter what was asked for.
 
 `with_capacity` and `dimensions_for` **panic on a NaN or infinite
-`target_fpp`**; a finite value outside `(0, 1)` is clamped into it. A target
-needing more than `BLOOM_MAX_BITS` gets the widest slices that fit, and
-`predicted_fpp` then reports the rate those slices deliver.
+`target_fpp`**; a finite value outside `(0, 1)` is clamped into it. For a target
+needing more than `BLOOM_MAX_BITS`, `dimensions_for` returns `None` and
+`with_capacity` panics.
 
 `Default` is 7 x 65536 — 56 KiB of packed bits — which holds 20k distinct keys
 at about 1 false positive in 11,500.
@@ -83,7 +83,7 @@ fn size_in_bytes(&self) -> usize
 fn is_empty(&self) -> bool
 ```
 
-`predicted_fpp` is the model, `(1 - e^(-n/cols))^rows`. `estimated_fpp` reads
+`predicted_fpp` is the model, `(1 - (1 - 1/cols)^n)^rows`. `estimated_fpp` reads
 the bits actually set, so it is the one to trust on a filter whose distinct
 count is unknown.
 

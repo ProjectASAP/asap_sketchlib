@@ -25,14 +25,14 @@ pub(crate) use wire::{
     validate_kll_payload,
 };
 
-const MAX_LEVELS: usize = 61;
+pub(crate) const MAX_LEVELS: usize = 61;
 
-const CAPACITY_CACHE_LEN: usize = 20;
+pub(crate) const CAPACITY_CACHE_LEN: usize = 20;
 pub(crate) const MAX_K: usize = 26_602;
 /// Minimum level capacity `m` that `with_k` and `with_k_and_seed` use.
 pub const DEFAULT_M: usize = 8;
 const CAPACITY_DECAY: f64 = 2.0 / 3.0;
-const DEFAULT_K: i32 = 200;
+pub(crate) const DEFAULT_K: i32 = 200;
 /// Items the buffer holds at its first allocation; it then doubles, up to
 /// the sketch's `max_capacity`.
 const INITIAL_BUFFER_ITEMS: usize = 16;
@@ -133,14 +133,14 @@ fn compute_max_capacity(k: usize, m: usize) -> usize {
 }
 
 /// `k` and `m` as a sketch keeps them: `m` in `[2, MAX_K]`, `k` in `[m, MAX_K]`.
-fn normalized_k_m(k: usize, m: usize) -> (usize, usize) {
+pub(crate) fn normalized_k_m(k: usize, m: usize) -> (usize, usize) {
     let m = m.clamp(2, MAX_K);
     (k.clamp(m, MAX_K), m)
 }
 
 /// Level capacities by height from the top: `max(ceil(k * (2/3)^i), m)`,
 /// the last entry standing for every greater height.
-fn capacity_table(k: usize, m: usize) -> [u32; CAPACITY_CACHE_LEN] {
+pub(crate) fn capacity_table(k: usize, m: usize) -> [u32; CAPACITY_CACHE_LEN] {
     let mut table = [0; CAPACITY_CACHE_LEN];
     let mut scale = 1.0_f64;
     for cap in table.iter_mut() {
@@ -148,6 +148,21 @@ fn capacity_table(k: usize, m: usize) -> [u32; CAPACITY_CACHE_LEN] {
         scale *= CAPACITY_DECAY;
     }
     table
+}
+
+/// `L(n)`: the levels a sketch of `k` holds after `n` items, a level added
+/// once the top holds `k + 1` items of weight 2^top.
+pub(crate) fn levels_after(k: usize, n: usize) -> usize {
+    let mut num_levels = 1;
+    while num_levels < MAX_LEVELS
+        && 1usize
+            .checked_shl(num_levels as u32 - 1)
+            .and_then(|weight| weight.checked_mul(k + 1))
+            .is_some_and(|items| items <= n)
+    {
+        num_levels += 1;
+    }
+    num_levels
 }
 
 /// Checked total weighted item count for compactor-level sizes given
@@ -181,6 +196,7 @@ pub(crate) fn randomly_halve_up<T: Copy>(
 ) -> usize {
     let num_survivors = (pop - offset).div_ceil(2);
     let dest = begin + pop - num_survivors;
+    crate::analytics::ops::add(2 * num_survivors);
     for d in (0..num_survivors).rev() {
         items[dest + d] = items[begin + offset + 2 * d];
     }
@@ -200,12 +216,15 @@ pub(crate) fn merge_sorted_runs<T: NumericalValue>(
     if left_len == 0 || left_len >= total {
         return;
     }
+    crate::analytics::ops::add(2);
     if slice[left_len - 1].total_cmp(&slice[left_len]).is_le() {
         return;
     }
 
     let right_len = total - left_len;
     buf.clear();
+    // Copying the shorter run out, then one read and one write per placed item.
+    crate::analytics::ops::add(2 * left_len.min(right_len) + 1);
 
     if left_len <= right_len {
         buf.extend_from_slice(&slice[..left_len]);
@@ -213,6 +232,7 @@ pub(crate) fn merge_sorted_runs<T: NumericalValue>(
         let mut j = left_len;
         let mut k = 0;
         while i < buf.len() && j < total {
+            crate::analytics::ops::add(2);
             if buf[i].total_cmp(&slice[j]).is_le() {
                 slice[k] = buf[i];
                 i += 1;
@@ -223,6 +243,7 @@ pub(crate) fn merge_sorted_runs<T: NumericalValue>(
             k += 1;
         }
         if i < buf.len() {
+            crate::analytics::ops::add(2 * (buf.len() - i));
             slice[k..k + (buf.len() - i)].copy_from_slice(&buf[i..]);
         }
     } else {
@@ -232,6 +253,7 @@ pub(crate) fn merge_sorted_runs<T: NumericalValue>(
         let mut k = total;
         while i > 0 && j > 0 {
             k -= 1;
+            crate::analytics::ops::add(2);
             if buf[j - 1].total_cmp(&slice[i - 1]).is_ge() {
                 slice[k] = buf[j - 1];
                 j -= 1;
@@ -241,6 +263,7 @@ pub(crate) fn merge_sorted_runs<T: NumericalValue>(
             }
         }
         if j > 0 {
+            crate::analytics::ops::add(2 * j);
             slice[..j].copy_from_slice(&buf[..j]);
         }
     }
@@ -389,19 +412,10 @@ impl<T: NumericalValue> Kll<T> {
     ///
     /// The struct and level array are exact; the buffer, compaction scratch
     /// space and CDF are bounded by the items `n` can leave retained.
-    pub fn estimated_memory_bytes(k: usize, m: usize, n: usize) -> usize {
+    pub fn theoretical_memory_bytes(k: usize, m: usize, n: usize) -> usize {
         let (k, m) = normalized_k_m(k, m);
         let capacities = capacity_table(k, m);
-        // A level is added once the top holds `k + 1` items of weight 2^top.
-        let mut num_levels = 1;
-        while num_levels < MAX_LEVELS
-            && 1usize
-                .checked_shl(num_levels as u32 - 1)
-                .and_then(|weight| weight.checked_mul(k + 1))
-                .is_some_and(|items| items <= n)
-        {
-            num_levels += 1;
-        }
+        let num_levels = levels_after(k, n);
         let level_capacity: usize = (0..num_levels)
             .map(|height| capacities[height.min(CAPACITY_CACHE_LEN - 1)] as usize)
             .sum();
@@ -503,6 +517,8 @@ impl<T: NumericalValue> Kll<T> {
         }
         self.levels[0] -= 1;
         self.items[self.levels[0]] = value;
+        // levels[0] read and decremented, the item written, levels[1] read.
+        crate::analytics::ops::add(3);
 
         if self.levels[1] - self.levels[0] > self.level0_capacity {
             self.compress_while_updating();
@@ -543,6 +559,7 @@ impl<T: NumericalValue> Kll<T> {
     fn compress_while_updating(&mut self) {
         let mut h = 0;
         loop {
+            crate::analytics::ops::add(2);
             let pop = self.level_size(h);
             let cap = self.capacity_for_level(h);
             if pop <= cap {
@@ -564,8 +581,11 @@ impl<T: NumericalValue> Kll<T> {
         let beg = self.levels[h];
         let end = self.levels[h + 1];
         let pop = end - beg;
+        // The level's bounds and the end of the level above read.
+        crate::analytics::ops::add(3);
 
         if h == 0 {
+            crate::analytics::ops::add_sort(pop);
             self.items[beg..end].sort_unstable_by(T::total_cmp);
         }
 
@@ -586,6 +606,7 @@ impl<T: NumericalValue> Kll<T> {
         if delta > 0 && h > 0 {
             let lo = self.levels[0];
             let hi = beg;
+            crate::analytics::ops::add(1 + 2 * (hi - lo) + h);
             if hi > lo {
                 self.items.copy_within(lo..hi, lo + delta);
             }
@@ -596,12 +617,14 @@ impl<T: NumericalValue> Kll<T> {
 
         self.levels[h] = surv_start;
         self.levels[h + 1] = surv_start;
+        crate::analytics::ops::add(2);
     }
 
     fn add_new_top_level(&mut self) {
         let sentinel = self.levels[self.num_levels];
         self.num_levels += 1;
         self.levels[self.num_levels] = sentinel;
+        crate::analytics::ops::add(2);
         self.top_height = self.num_levels - 1;
         self.level0_capacity = self.capacity_for_level(0);
     }
@@ -646,6 +669,7 @@ impl<T: NumericalValue> Kll<T> {
             let start = self.levels[h];
             let end = self.levels[h + 1];
             let weight = 1 << h;
+            crate::analytics::ops::add(2 + 2 * (end - start));
             for &value in &self.items[start..end] {
                 cdf.entries.push(CdfEntry {
                     value: value.to_f64(),
@@ -659,6 +683,8 @@ impl<T: NumericalValue> Kll<T> {
             return cdf;
         }
 
+        crate::analytics::ops::add_sort(cdf.entries.len());
+        crate::analytics::ops::add(cdf.entries.len());
         // Stability is irrelevant: entries sharing a value contribute the same
         // weight either way, so the unstable sort's reordering cannot change
         // any prefix sum. `total_cmp` also avoids `partial_cmp`'s NaN branch.
@@ -719,6 +745,7 @@ impl<T: NumericalValue> Kll<T> {
         if let Err(problem) = self.check_mergeable(other) {
             panic!("{problem}");
         }
+        crate::analytics::ops::add(2);
         let other_start = other.levels[0];
         let other_end = other.levels[other.num_levels];
         if other_end == other_start {
@@ -735,6 +762,7 @@ impl<T: NumericalValue> Kll<T> {
         for h in 0..self.num_levels {
             let s = self.levels[h];
             let e = self.levels[h + 1];
+            crate::analytics::ops::add(2 + 2 * (e - s));
             work[h].extend_from_slice(&self.items[s..e]);
         }
         let mut merge_buf: Vec<T> = Vec::new();
@@ -742,6 +770,7 @@ impl<T: NumericalValue> Kll<T> {
         for h in 0..other.num_levels {
             let s = other.levels[h];
             let e = other.levels[h + 1];
+            crate::analytics::ops::add(2 + 2 * (e - s));
             let self_len = work[h].len();
             work[h].extend_from_slice(&other.items[s..e]);
             // Levels >= 1 are individually sorted in both operands already;
@@ -763,6 +792,7 @@ impl<T: NumericalValue> Kll<T> {
         let mut h = 0;
         while h < self.num_levels {
             if h == 0 {
+                crate::analytics::ops::add_sort(work[0].len());
                 work[0].sort_unstable_by(T::total_cmp);
             }
             while work[h].len() > self.capacity_for_level(h) {
@@ -775,6 +805,8 @@ impl<T: NumericalValue> Kll<T> {
                 let offset = usize::from(self.coin.toss());
                 let num_survivors = randomly_halve_up(work[h].as_mut_slice(), 0, pop, offset);
                 let discard = pop - num_survivors;
+                // The survivors move to the front, and level h+1 is appended.
+                crate::analytics::ops::add(2 * num_survivors + 2 * work[h + 1].len());
                 work[h].drain(0..discard);
 
                 // Promote the (sorted) survivors into level h+1, merging
@@ -796,6 +828,7 @@ impl<T: NumericalValue> Kll<T> {
             self.grow_buffer(total);
         }
         let mc = self.items.len();
+        crate::analytics::ops::add(2 * total + self.levels.len());
         let mut cursor = mc;
         for h in (0..self.num_levels).rev() {
             let len = work[h].len();
@@ -833,6 +866,7 @@ impl<T: NumericalValue> Kll<T> {
             let start = self.levels[h];
             let end = self.levels[h + 1];
             let weight = 1 << h;
+            crate::analytics::ops::add(2 + end - start);
             for &val in &self.items[start..end] {
                 if val.to_f64() <= x {
                     r += weight;
@@ -849,6 +883,7 @@ impl<T: NumericalValue> Kll<T> {
 
     /// Returns the total (weighted) number of items ingested by the sketch.
     pub fn count(&self) -> usize {
+        crate::analytics::ops::add(2 * self.num_levels);
         let mut total = 0;
         for h in 0..self.num_levels {
             total += self.level_size(h) * (1 << h);
@@ -1051,7 +1086,10 @@ impl Cdf {
             return 0.0;
         }
         let slice = self.entries.as_slice();
+        // One read per probe, and one for the entry returned.
+        crate::analytics::ops::add(1);
         match slice.binary_search_by(|e| {
+            crate::analytics::ops::add(1);
             e.quantile
                 .partial_cmp(&p)
                 .unwrap_or(std::cmp::Ordering::Less)

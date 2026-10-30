@@ -337,6 +337,11 @@ impl<H: SketchHasher> MicroCm<H> {
         }
     }
 
+    /// Bytes this sketch holds: the struct and its cells.
+    pub fn memory_bytes(&self) -> usize {
+        size_of::<Self>() + self.cells.as_slice().len()
+    }
+
     /// Number of hash rows.
     pub fn rows(&self) -> usize {
         self.cells.rows()

@@ -508,8 +508,8 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
         let mut candidate = 0usize;
         for (index, &width) in widths.iter().enumerate() {
             let run = shared.candidate_lens[index] as usize;
-            let mut candidate_scores = HashMap::with_capacity(run);
-            let mut candidate_heap = BinaryHeap::with_capacity(run);
+            let mut candidate_scores = HashMap::with_capacity(config.heap_size);
+            let mut candidate_heap = BinaryHeap::with_capacity(config.heap_size);
             if shared.candidate_keys[candidate..candidate + run]
                 .windows(2)
                 .any(|pair| pair[0] >= pair[1])
@@ -541,6 +541,8 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
             cell += span;
         }
 
+        let mut ordered_heap = BinaryHeap::with_capacity(config.ordered_samples);
+        ordered_heap.extend(shared.occurrences);
         let sketch = UnivMonQ {
             config,
             hash_layout,
@@ -550,7 +552,7 @@ impl<H: SketchHasher + HashProfile> UnivMonQ<H> {
             max: shared.max,
             source_id: shared.source_id,
             next_sequence: shared.next_sequence,
-            ordered_heap: BinaryHeap::from(shared.occurrences),
+            ordered_heap,
             hasher: PhantomData,
         };
         // A candidate only reaches a level its own key hashes into.

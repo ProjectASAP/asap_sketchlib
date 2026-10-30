@@ -27,6 +27,7 @@
 //!   ICDT 2005. <https://doi.org/10.1007/978-3-540-30570-5_27>
 
 use crate::common::DigestBuildHasher;
+use crate::common::heap::{hash_index_bytes, hash_map_bytes, vec_slots_after_pushes};
 use crate::{DataInput, DefaultXxHasher, OwnedDataInput, SketchHasher};
 use smallvec::SmallVec;
 use std::collections::HashMap;
@@ -132,7 +133,10 @@ impl<H: SketchHasher> SpaceSaving<H> {
     /// nothing.
     #[inline(always)]
     pub fn min_count(&self) -> u64 {
-        let lowest = if self.monitored.len() == self.capacity && self.bucket_head != NIL {
+        let full = self.monitored.len() == self.capacity;
+        crate::analytics::ops::add(1 + full as usize);
+        let lowest = if full && self.bucket_head != NIL {
+            crate::analytics::ops::add(2);
             self.buckets[self.bucket_head].count
         } else {
             0
@@ -140,8 +144,52 @@ impl<H: SketchHasher> SpaceSaving<H> {
         self.discarded_max.max(lowest)
     }
 
+    /// Bytes this summary holds: the struct, the allocated key, bucket and
+    /// free-list slots, the key index and the keys' owned bytes.
+    pub fn memory_bytes(&self) -> usize {
+        let keys: usize = self
+            .monitored
+            .iter()
+            .map(|c| match &c.key {
+                OwnedDataInput::String(s) => s.capacity(),
+                OwnedDataInput::Bytes(b) => b.capacity(),
+                _ => 0,
+            })
+            .sum();
+        let spilled: usize = self
+            .index
+            .values()
+            .filter(|slot| slot.spilled())
+            .map(|slot| slot.capacity() * size_of::<usize>())
+            .sum();
+        size_of::<Self>()
+            + self.monitored.capacity() * size_of::<MonitoredKey>()
+            + self.buckets.capacity() * size_of::<Bucket>()
+            + self.bucket_free.capacity() * size_of::<usize>()
+            + hash_map_bytes::<(u64, Slot)>(self.index.capacity())
+            + keys
+            + spilled
+    }
+
+    /// Upper bound on [`Self::memory_bytes`] for a summary of `capacity`
+    /// counters whose keys own `key_bytes` bytes each, merges included.
+    ///
+    /// At most `capacity + 1` buckets exist at once, in vectors that grow by
+    /// doubling; the index follows std's `HashMap` layout under churn.
+    pub fn theoretical_memory_bytes(capacity: usize, key_bytes: usize) -> usize {
+        let m = capacity.max(1);
+        let buckets = vec_slots_after_pushes(0, m + 1, size_of::<Bucket>());
+        let free = vec_slots_after_pushes(0, m + 1, size_of::<usize>());
+        size_of::<Self>()
+            .saturating_add(m.saturating_mul(size_of::<MonitoredKey>().saturating_add(key_bytes)))
+            .saturating_add(buckets.saturating_mul(size_of::<Bucket>()))
+            .saturating_add(free.saturating_mul(size_of::<usize>()))
+            .saturating_add(hash_index_bytes::<(u64, Slot)>(m, m))
+    }
+
     /// Drops every counter.
     pub fn clear(&mut self) {
+        crate::analytics::ops::add(3);
         self.monitored.clear();
         self.buckets.clear();
         self.bucket_free.clear();
@@ -175,6 +223,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
         }
 
         if self.monitored.len() < self.capacity {
+            crate::analytics::ops::add(2);
             let seated = self.discarded_max.saturating_add(weight);
             let discarded_max = self.discarded_max;
             self.seat(digest, value.to_owned_input(), seated, discarded_max);
@@ -189,6 +238,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
             self.discarded_max
         );
         self.discarded_max = lowest;
+        crate::analytics::ops::add(10);
         self.unindex(self.monitored[victim].digest, victim);
         self.monitored[victim].key = value.to_owned_input();
         self.monitored[victim].digest = digest;
@@ -213,7 +263,10 @@ impl<H: SketchHasher> SpaceSaving<H> {
     pub fn estimate(&self, value: &DataInput) -> u64 {
         let digest = H::hash64_seeded(0, value);
         match self.find(digest, value) {
-            Some(cid) => self.buckets[self.monitored[cid].bucket].count,
+            Some(cid) => {
+                crate::analytics::ops::add(2);
+                self.buckets[self.monitored[cid].bucket].count
+            }
             None => 0,
         }
     }
@@ -259,11 +312,14 @@ impl<H: SketchHasher> SpaceSaving<H> {
     /// `(key, count, error)`.
     pub fn top_k(&self, k: usize) -> Vec<(OwnedDataInput, u64, u64)> {
         let mut out = Vec::with_capacity(k.min(self.monitored.len()));
+        crate::analytics::ops::add(1);
         let mut bid = self.bucket_tail;
         while bid != NIL && out.len() < k {
+            crate::analytics::ops::add(3);
             let count = self.buckets[bid].count;
             let mut cid = self.buckets[bid].head;
             while cid != NIL && out.len() < k {
+                crate::analytics::ops::add(4);
                 out.push((
                     self.monitored[cid].key.clone(),
                     count,
@@ -278,6 +334,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
 
     /// Every monitored key as `(key, count, error)`, in no particular order.
     pub fn entries(&self) -> Vec<(OwnedDataInput, u64, u64)> {
+        crate::analytics::ops::add(3 * self.monitored.len());
         self.monitored
             .iter()
             .map(|c| (c.key.clone(), self.buckets[c.bucket].count, c.error))
@@ -301,6 +358,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
 
         let mut merged: HashMap<u64, SmallVec<[MergeEntry; 2]>, DigestBuildHasher> =
             HashMap::default();
+        crate::analytics::ops::add(6 * self.monitored.len());
         for c in &self.monitored {
             merged.entry(c.digest).or_default().push(MergeEntry {
                 key: c.key.clone(),
@@ -313,29 +371,42 @@ impl<H: SketchHasher> SpaceSaving<H> {
         for c in &other.monitored {
             let count = other.buckets[c.bucket].count;
             let slot = merged.entry(c.digest).or_default();
-            match slot.iter_mut().find(|entry| entry.key == c.key) {
+            crate::analytics::ops::add(3);
+            match slot.iter_mut().find(|entry| {
+                crate::analytics::ops::add(1);
+                entry.key == c.key
+            }) {
                 Some(entry) => {
+                    crate::analytics::ops::add(4);
                     entry.count = entry.count.saturating_add(count);
                     entry.error = entry.error.saturating_add(c.error);
                     entry.paired = true;
                 }
-                None => slot.push(MergeEntry {
-                    key: c.key.clone(),
-                    digest: c.digest,
-                    count: count.saturating_add(mine_min),
-                    error: c.error.saturating_add(mine_min),
-                    paired: true,
-                }),
+                None => {
+                    crate::analytics::ops::add(3);
+                    slot.push(MergeEntry {
+                        key: c.key.clone(),
+                        digest: c.digest,
+                        count: count.saturating_add(mine_min),
+                        error: c.error.saturating_add(mine_min),
+                        paired: true,
+                    })
+                }
             }
         }
 
+        crate::analytics::ops::add(merged.len());
         let mut flat: Vec<MergeEntry> = merged.into_values().flatten().collect();
+        crate::analytics::ops::add(2 * flat.len());
         for entry in &mut flat {
+            crate::analytics::ops::add(1);
             if !entry.paired {
+                crate::analytics::ops::add(2);
                 entry.count = entry.count.saturating_add(theirs_min);
                 entry.error = entry.error.saturating_add(theirs_min);
             }
         }
+        crate::analytics::ops::add_sort(flat.len());
         flat.sort_unstable_by(|a, b| {
             b.count
                 .cmp(&a.count)
@@ -344,12 +415,14 @@ impl<H: SketchHasher> SpaceSaving<H> {
 
         let mut discarded_max = mine_min.saturating_add(theirs_min);
         if flat.len() > self.capacity {
+            crate::analytics::ops::add(1);
             discarded_max = discarded_max.max(flat[self.capacity].count);
             flat.truncate(self.capacity);
         }
 
         self.clear();
         self.discarded_max = discarded_max;
+        crate::analytics::ops::add(1 + flat.len());
         for entry in flat {
             self.seat(entry.digest, entry.key, entry.count, entry.error);
         }
@@ -358,23 +431,29 @@ impl<H: SketchHasher> SpaceSaving<H> {
     // -- Stream-Summary internals -------------------------------------------
 
     fn find(&self, digest: u64, value: &DataInput) -> Option<usize> {
+        crate::analytics::ops::add(1);
         self.index.get(&digest).and_then(|ids| {
-            ids.iter()
-                .copied()
-                .find(|cid| self.monitored[*cid].key == *value)
+            ids.iter().copied().find(|cid| {
+                crate::analytics::ops::add(1);
+                self.monitored[*cid].key == *value
+            })
         })
     }
 
     fn find_key(&self, digest: u64, key: &OwnedDataInput) -> Option<usize> {
+        crate::analytics::ops::add(1);
         self.index.get(&digest).and_then(|ids| {
-            ids.iter()
-                .copied()
-                .find(|cid| self.monitored[*cid].key == *key)
+            ids.iter().copied().find(|cid| {
+                crate::analytics::ops::add(1);
+                self.monitored[*cid].key == *key
+            })
         })
     }
 
     fn unindex(&mut self, digest: u64, cid: usize) {
+        crate::analytics::ops::add(1);
         if let Some(ids) = self.index.get_mut(&digest) {
+            crate::analytics::ops::add(ids.len());
             ids.retain(|id| *id != cid);
             if ids.is_empty() {
                 self.index.remove(&digest);
@@ -385,6 +464,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
     /// Takes a free counter for `key` at `count` with `error`.
     fn seat(&mut self, digest: u64, key: OwnedDataInput, count: u64, error: u64) {
         let cid = self.monitored.len();
+        crate::analytics::ops::add(7);
         self.monitored.push(MonitoredKey {
             key,
             digest,
@@ -400,6 +480,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
 
     /// Moves `cid` up by `count`, creating the destination bucket if needed.
     fn raise(&mut self, cid: usize, count: u64) {
+        crate::analytics::ops::add(3);
         let from = self.monitored[cid].bucket;
         let target_count = self.buckets[from].count.saturating_add(count);
         if target_count == self.buckets[from].count {
@@ -414,16 +495,23 @@ impl<H: SketchHasher> SpaceSaving<H> {
     /// such bucket exists. `after` of `NIL` searches from the low end, and any
     /// other `after` holds a count below `count`.
     fn bucket_for(&mut self, after: usize, count: u64) -> usize {
+        crate::analytics::ops::add(1);
         let mut prev = after;
         let mut next = if after == NIL {
             self.bucket_head
         } else {
             self.buckets[after].next
         };
-        while next != NIL && self.buckets[next].count < count {
+        while next != NIL {
+            crate::analytics::ops::add(1);
+            if self.buckets[next].count >= count {
+                break;
+            }
+            crate::analytics::ops::add(1);
             prev = next;
             next = self.buckets[next].next;
         }
+        crate::analytics::ops::add((next != NIL) as usize);
         if next != NIL && self.buckets[next].count == count {
             return next;
         }
@@ -437,8 +525,10 @@ impl<H: SketchHasher> SpaceSaving<H> {
             prev,
             next,
         };
+        crate::analytics::ops::add(6);
         let bid = match self.bucket_free.pop() {
             Some(id) => {
+                crate::analytics::ops::add(1);
                 self.buckets[id] = bucket;
                 id
             }
@@ -461,6 +551,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
     }
 
     fn attach(&mut self, cid: usize, bid: usize) {
+        crate::analytics::ops::add(5 + (self.buckets[bid].head != NIL) as usize);
         let head = self.buckets[bid].head;
         self.monitored[cid].prev = NIL;
         self.monitored[cid].next = head;
@@ -475,6 +566,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
         let bid = self.monitored[cid].bucket;
         let prev = self.monitored[cid].prev;
         let next = self.monitored[cid].next;
+        crate::analytics::ops::add(8 + (next != NIL) as usize);
         if prev != NIL {
             self.monitored[prev].next = next;
         } else {
@@ -496,6 +588,7 @@ impl<H: SketchHasher> SpaceSaving<H> {
     fn drop_bucket(&mut self, bid: usize) {
         let prev = self.buckets[bid].prev;
         let next = self.buckets[bid].next;
+        crate::analytics::ops::add(8);
         if prev != NIL {
             self.buckets[prev].next = next;
         } else {

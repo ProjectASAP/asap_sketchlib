@@ -385,6 +385,7 @@ impl Nitro {
 /// This is used by query_median_with_custom_hash for HydraCounter queries
 #[inline(always)]
 pub fn compute_median_inline_f64(values: &mut [f64]) -> f64 {
+    crate::analytics::ops::add_sort(values.len());
     match values.len() {
         0 => 0.0,
         1 => values[0],
