@@ -73,6 +73,9 @@ pub struct HydraData {
     /// The schema arity [`SketchAnalytics::params_for`] sizes for; 1 when
     /// unknown.
     pub arity: Option<usize>,
+    /// Whether another Hydra has been merged into this one, read by Kll
+    /// cells. Unknown counts as merged.
+    pub merged: Option<bool>,
     /// Each cell's inner data.
     pub cell: CellData,
 }
@@ -243,6 +246,7 @@ impl SketchAnalytics for Hydra {
                 contract: CM_TOTAL_CONTRACT,
             }),
             (HydraCell::Kll(_), StatisticKind::Quantile | StatisticKind::Rank) => {
+                (data.merged == Some(false)).then_some(())?;
                 let mixed = share * data.total_weight? as f64 / data.group_weight?.max(1) as f64;
                 let metric = if statistic == StatisticKind::Quantile {
                     ErrorMetric::Rank
@@ -323,6 +327,7 @@ impl SketchAnalytics for Hydra {
                 )?)
             }
             StatisticKind::Quantile | StatisticKind::Rank => {
+                (data.merged == Some(false)).then_some(())?;
                 HydraCell::Kll(<crate::Kll as SketchAnalytics>::params_for(
                     statistic,
                     inner_epsilon,

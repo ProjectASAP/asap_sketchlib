@@ -32,6 +32,10 @@ pub struct SpaceSavingData {
     pub key_bytes: Option<usize>,
     /// `k`, the TopK size. Unknown counts as `m`.
     pub top_k: Option<usize>,
+    /// `m_o`, the capacity of the state merged in. Unknown is unbounded.
+    pub other_capacity: Option<usize>,
+    /// Whether the state has been merged into. Unknown counts as merged.
+    pub merged: Option<bool>,
 }
 
 const SPACE_SAVING_CONTRACT: &str = "space_saving_min_counter_v1";
@@ -67,21 +71,24 @@ impl<H: SketchHasher> SketchAnalytics for SpaceSaving<H> {
         }
     }
 
-    fn theoretical_merge_ops(params: &SpaceSavingParams, _: &SpaceSavingData) -> Option<f64> {
+    fn theoretical_merge_ops(params: &SpaceSavingParams, data: &SpaceSavingData) -> Option<f64> {
         let m = params.capacity.max(1) as f64;
-        Some(44.0 * m + sort_ops(2.0 * m) + 13.0)
+        let other = data
+            .other_capacity
+            .map_or(f64::INFINITY, |c| c.max(1) as f64);
+        Some(34.0 * m + 10.0 * other + sort_ops(m + other) + 13.0)
     }
 
     fn theoretical_error(
         statistic: StatisticKind,
         params: &SpaceSavingParams,
-        _: &SpaceSavingData,
+        data: &SpaceSavingData,
         delta: Option<f64>,
     ) -> Option<ErrorBound> {
-        matches!(
+        (matches!(
             statistic,
             StatisticKind::ItemFrequency | StatisticKind::TopK
-        )
+        ) && data.merged == Some(false))
         .then_some(())?;
         Some(ErrorBound {
             metric: ErrorMetric::L1,
@@ -95,12 +102,12 @@ impl<H: SketchHasher> SketchAnalytics for SpaceSaving<H> {
         statistic: StatisticKind,
         epsilon: f64,
         _: f64,
-        _: &SpaceSavingData,
+        data: &SpaceSavingData,
     ) -> Option<SpaceSavingParams> {
-        matches!(
+        (matches!(
             statistic,
             StatisticKind::ItemFrequency | StatisticKind::TopK
-        )
+        ) && data.merged == Some(false))
         .then_some(())?;
         let capacity = (1.0 / epsilon).ceil();
         (epsilon > 0.0 && capacity <= u32::MAX as f64).then_some(SpaceSavingParams {
@@ -127,8 +134,8 @@ impl Default for ElasticParams {
     }
 }
 
-/// `D` and the key bytes, the data inputs of ElasticSketch, CocoSketch and
-/// the matrices with a heap or a Space-Saving summary.
+/// The data inputs of ElasticSketch, CocoSketch, UnivMon and the matrices
+/// with a heap or a Space-Saving summary.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FlowData {
     /// `D`, the distinct keys.
@@ -136,6 +143,9 @@ pub struct FlowData {
     /// Bytes each key owns: a string's or byte slice's length, 0 for a
     /// number, and for ElasticSketch the capacity of the `String` passed in.
     pub key_bytes: Option<usize>,
+    /// Whether the state has been merged into, read by ElasticSketch.
+    /// Unknown counts as merged.
+    pub merged: Option<bool>,
 }
 
 /// Light rows that bound an Elastic estimate: light row 5 hashes with the
@@ -205,6 +215,7 @@ impl<H: SketchHasher> SketchAnalytics for ElasticSketch<H> {
         data: &FlowData,
         delta: Option<f64>,
     ) -> Option<ErrorBound> {
+        (data.merged == Some(false)).then_some(())?;
         let light = elastic_light(params);
         match statistic {
             StatisticKind::ItemFrequency => count_min_error(&light, false, delta, ELASTIC_CONTRACT),
@@ -228,6 +239,7 @@ impl<H: SketchHasher> SketchAnalytics for ElasticSketch<H> {
         delta: f64,
         data: &FlowData,
     ) -> Option<ElasticParams> {
+        (data.merged == Some(false)).then_some(())?;
         let per_key = match statistic {
             StatisticKind::ItemFrequency => delta,
             StatisticKind::TopK => delta / data.distinct?.max(1) as f64,

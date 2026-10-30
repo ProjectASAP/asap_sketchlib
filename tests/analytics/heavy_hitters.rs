@@ -14,6 +14,19 @@ type Ss = SpaceSaving;
 type Elastic = ElasticSketch;
 type Coco = CocoSketch;
 
+const UNMERGED: FlowData = FlowData {
+    distinct: None,
+    key_bytes: None,
+    merged: Some(false),
+};
+
+const UNMERGED_SS: SpaceSavingData = SpaceSavingData {
+    key_bytes: None,
+    top_k: None,
+    other_capacity: None,
+    merged: Some(false),
+};
+
 const SS_SIZES: [SpaceSavingParams; 2] = [
     SpaceSavingParams { capacity: 16 },
     SpaceSavingParams { capacity: 256 },
@@ -80,6 +93,7 @@ fn space_saving_memory_covers_the_summary() {
         let data = SpaceSavingData {
             key_bytes: Some(0),
             top_k: None,
+            ..SpaceSavingData::default()
         };
         let bound = <Ss as SketchAnalytics>::theoretical_memory_bytes(&p, &data).unwrap();
         assert!(
@@ -90,6 +104,7 @@ fn space_saving_memory_covers_the_summary() {
         let data = SpaceSavingData {
             key_bytes: Some(16),
             top_k: None,
+            ..SpaceSavingData::default()
         };
         let bound = <Ss as SketchAnalytics>::theoretical_memory_bytes(&p, &data).unwrap();
         assert!(
@@ -107,6 +122,7 @@ fn elastic_memory_is_exact_once_every_bucket_holds_a_flow() {
         let data = FlowData {
             distinct: None,
             key_bytes: Some(16),
+            merged: None,
         };
         let bound = <Elastic as SketchAnalytics>::theoretical_memory_bytes(&p, &data).unwrap();
         assert!(bound >= sketch.memory_bytes());
@@ -141,6 +157,7 @@ fn elastic_memory_counts_the_capacity_of_each_flow_id() {
         let data = FlowData {
             distinct: None,
             key_bytes: Some(capacity),
+            merged: None,
         };
         let bound = <Elastic as SketchAnalytics>::theoretical_memory_bytes(&p, &data);
         assert_eq!(bound, Some(sketch.memory_bytes()));
@@ -157,6 +174,7 @@ fn coco_memory_is_exact_once_every_bucket_holds_a_key() {
         let data = FlowData {
             distinct: Some(300),
             key_bytes: Some(16),
+            merged: None,
         };
         let bound = <Coco as SketchAnalytics>::theoretical_memory_bytes(&p, &data).unwrap();
         assert!(bound >= sketch.memory_bytes());
@@ -167,6 +185,7 @@ fn coco_memory_is_exact_once_every_bucket_holds_a_key() {
         let data = FlowData {
             distinct: None,
             key_bytes: Some(16),
+            merged: None,
         };
         let bound = <Coco as SketchAnalytics>::theoretical_memory_bytes(&p, &data);
         assert_eq!(bound, Some(sketch.memory_bytes()));
@@ -184,7 +203,7 @@ fn coco_memory_is_exact_once_every_bucket_holds_a_key() {
 #[test]
 fn space_saving_is_off_by_at_most_n_over_m_on_every_trial() {
     let p = SpaceSavingParams { capacity: 64 };
-    let data = SpaceSavingData::default();
+    let data = UNMERGED_SS;
     let bound = Ss::theoretical_error(StatisticKind::ItemFrequency, &p, &data, None).unwrap();
     assert_eq!(bound.metric, ErrorMetric::L1);
     assert_eq!(bound.delta, Some(0.0));
@@ -223,8 +242,7 @@ fn elastic_overcounts_by_at_most_epsilon_n_with_probability_one_minus_delta() {
         light_cols: 64,
     };
     let bound =
-        Elastic::theoretical_error(StatisticKind::ItemFrequency, &p, &FlowData::default(), None)
-            .unwrap();
+        Elastic::theoretical_error(StatisticKind::ItemFrequency, &p, &UNMERGED, None).unwrap();
     assert_eq!(bound.metric, ErrorMetric::L1);
     let delta = bound.delta.unwrap();
     assert!((delta - (-3.0f64).exp()).abs() < 1e-12);
@@ -285,7 +303,7 @@ fn elastic_never_undercounts_any_key() {
 
 #[test]
 fn space_saving_sizing_meets_the_target_and_one_counter_fewer_does_not() {
-    let data = SpaceSavingData::default();
+    let data = UNMERGED_SS;
     for epsilon in [0.1, 0.01, 0.003] {
         let p = Ss::params_for(StatisticKind::ItemFrequency, epsilon, 0.0, &data).unwrap();
         let bound =
@@ -304,7 +322,7 @@ fn space_saving_sizing_meets_the_target_and_one_counter_fewer_does_not() {
 
 #[test]
 fn elastic_sizing_meets_the_target_and_one_step_smaller_does_not() {
-    let data = FlowData::default();
+    let data = UNMERGED;
     for (epsilon, delta) in [(0.1, 0.1), (0.01, 0.01), (0.002, 0.007)] {
         let p = Elastic::params_for(StatisticKind::ItemFrequency, epsilon, delta, &data).unwrap();
         let bound =
@@ -359,7 +377,7 @@ fn elastic_top_k_takes_delta_over_every_distinct_key() {
         Elastic::theoretical_error(
             StatisticKind::TopK,
             &ElasticParams::default(),
-            &FlowData::default(),
+            &UNMERGED,
             None
         )
         .is_none()
@@ -367,6 +385,7 @@ fn elastic_top_k_takes_delta_over_every_distinct_key() {
     let data = FlowData {
         distinct: Some(20),
         key_bytes: None,
+        merged: Some(false),
     };
     let p = Elastic::params_for(StatisticKind::TopK, 0.01, 0.2, &data).unwrap();
     assert_eq!(p.light_rows, 5);
@@ -377,12 +396,42 @@ fn elastic_top_k_takes_delta_over_every_distinct_key() {
 }
 
 #[test]
+fn space_saving_and_elastic_bounds_need_an_unmerged_state() {
+    let ss = SpaceSavingParams::default();
+    let flows = FlowData {
+        distinct: Some(20),
+        ..UNMERGED
+    };
+    for statistic in [StatisticKind::ItemFrequency, StatisticKind::TopK] {
+        let elastic = Elastic::params_for(statistic, 0.01, 0.2, &flows).unwrap();
+        assert!(Ss::theoretical_error(statistic, &ss, &UNMERGED_SS, None).is_some());
+        assert!(Ss::params_for(statistic, 0.01, 0.0, &UNMERGED_SS).is_some());
+        assert!(Elastic::theoretical_error(statistic, &elastic, &flows, Some(0.5)).is_some());
+        assert!(Elastic::params_for(statistic, 0.01, 0.2, &flows).is_some());
+        for merged in [None, Some(true)] {
+            let data = SpaceSavingData {
+                merged,
+                ..UNMERGED_SS
+            };
+            assert_eq!(Ss::theoretical_error(statistic, &ss, &data, None), None);
+            assert_eq!(Ss::params_for(statistic, 0.01, 0.0, &data), None);
+            let data = FlowData { merged, ..flows };
+            assert_eq!(
+                Elastic::theoretical_error(statistic, &elastic, &data, Some(0.5)),
+                None
+            );
+            assert_eq!(Elastic::params_for(statistic, 0.01, 0.2, &data), None);
+        }
+    }
+}
+
+#[test]
 fn unanswered_statistics_have_no_bound() {
     let ss = SpaceSavingParams::default();
-    let flows = FlowData::default();
+    let flows = UNMERGED;
     for statistic in [StatisticKind::Total, StatisticKind::Quantile] {
         assert_eq!(
-            Ss::theoretical_error(statistic, &ss, &Default::default(), None),
+            Ss::theoretical_error(statistic, &ss, &UNMERGED_SS, None),
             None
         );
         assert_eq!(
@@ -425,6 +474,8 @@ mod ops {
             let data = SpaceSavingData {
                 key_bytes: None,
                 top_k: Some(p.capacity / 2),
+                other_capacity: Some(p.capacity),
+                merged: None,
             };
             let mut rng = rng(13, p.capacity as u64);
             let mut a = Ss::with_capacity(p.capacity);
@@ -464,6 +515,62 @@ mod ops {
             ops as f64,
             Ss::theoretical_update_ops(&p, &Default::default())
         );
+    }
+
+    /// A state of `capacity` holding `keys` keys at distinct counts.
+    fn filled(capacity: usize, keys: u64, offset: u64) -> Ss {
+        let mut s = Ss::with_capacity(capacity);
+        for id in 0..keys {
+            for _ in 0..=id {
+                s.update(&key(offset + id));
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn space_saving_merge_covers_unequal_capacities() {
+        for (m, other) in [(16, 256), (256, 16)] {
+            let p = SpaceSavingParams { capacity: m };
+            let data = SpaceSavingData {
+                other_capacity: Some(other),
+                ..SpaceSavingData::default()
+            };
+            let equal = SpaceSavingData {
+                other_capacity: Some(m),
+                ..data
+            };
+            let unknown = Ss::theoretical_merge_ops(&p, &SpaceSavingData::default());
+            assert_eq!(unknown, Some(f64::INFINITY));
+            let mut a = filled(m, m as u64, 0);
+            let b = filled(other, other as u64, 1 << 20);
+            let merge = Ss::theoretical_merge_ops(&p, &data).unwrap();
+            let ((), ops) = asap_sketchlib::analytics::ops::count(|| a.merge(&b));
+            assert!(ops as f64 <= merge, "merge: {ops} > {merge}");
+            if other > m {
+                let equal = Ss::theoretical_merge_ops(&p, &equal).unwrap();
+                assert!(
+                    ops as f64 > equal,
+                    "{ops} within the equal-capacity {equal}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn space_saving_unit_update_after_a_merge() {
+        let p = SpaceSavingParams { capacity: 256 };
+        let update = Ss::theoretical_update_ops(&p, &SpaceSavingData::default());
+        // An under-full state that carries the full side's minimum.
+        let mut a = filled(256, 8, 0);
+        a.merge(&filled(16, 16, 1 << 20));
+        assert!(a.len() < a.capacity() && a.min_count() > 0);
+        for id in 0..300 {
+            assert_ops_within("new key", update, || a.update(&key(u64::MAX - id)));
+        }
+        for id in 0..8 {
+            assert_ops_within("held key", update, || a.update(&key(id)));
+        }
     }
 
     #[test]

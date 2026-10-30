@@ -19,6 +19,7 @@ fn distinct(d: u64) -> FlowData {
     FlowData {
         distinct: Some(d),
         key_bytes: None,
+        merged: None,
     }
 }
 

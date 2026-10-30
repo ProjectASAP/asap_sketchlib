@@ -65,6 +65,7 @@ pub struct ErrorBound {
 - `Params` holds the constructor's parameters, such as `CountMinParams { rows, cols }`.
 - `Data` holds the data inputs listed in the sketch's section, each as an `Option`.
   When an input is unknown, ops use its upper bound from the section, memory uses that bound or returns `None` when the section gives none, and `theoretical_error` and `params_for` return `None` if they need it.
+- A sketch whose bounds hold only for an unmerged state takes a `merged` input, and its `theoretical_error` and `params_for` return those bounds only for `merged = Some(false)`.
 - `StatisticKind` is the enum in `src/capability.rs`.
 - `theoretical_update_ops` is the cost of the plain `update` call, or of `update_weighted` for a sketch that has only that.
 - `theoretical_query_ops`, `theoretical_merge_ops` and `theoretical_error` return `None` for what the sketch does not do or has no formula for.
@@ -102,7 +103,7 @@ Query is the sketch's main readout, and each row's symbols are defined in that s
 | CountSketchWithL2Norm | as CountSketch | `O(dw)` | `O(d)` | `O(d log d)` | `O(dw)` | 1 |
 | CountMinHll | none | `O(dw·2^p)` | `O(d)` | `O(d·2^p)` | `O(dw·2^p)` | 2 |
 | MicroCm | none | `O(dwT)` | `O(d + dw/I)` average | `O(dT)` | `O(dwT)` | 1 |
-| SpaceSaving | `ε = 1/m`, `δ = 0`, `Absolute(L1)` | `O(m)` | `O(1)` | `O(1)` | `O(m log m)` | 1 |
+| SpaceSaving | `ε = 1/m`, `δ = 0`, `Absolute(L1)` | `O(m)` | `O(1)` | `O(1)` | `O((m + m_o) log(m + m_o))` | 1 |
 | ElasticSketch | `ε = e/w`, `δ = e^−min(d, 5)`, `Absolute(L1)` | `O(H + dw)` | `O(d)` | `O(d)` | `O(Hd + dw)` | `1 + d` |
 | CocoSketch | none | `O(dw)` | `O(d)` | `O(d)` | `O(d²w)` | `d` |
 | Count-Min or Count Sketch with heap | as the base sketch | `O(dw + k)` | `O(est(d) + log k)` | `O(est(d))` | `O(dw + k(est(d) + log k))` | `2d + 1`, or 3 |
@@ -234,7 +235,7 @@ Data inputs: `I`, the updates per sub-window, the code's `items_per_sub_window` 
 
 `src/sketches/space_saving.rs`, Space-Saving on the Stream-Summary structure (Metwally et al. 2005).
 Parameter: `m` counters, the code's `capacity`.
-Data inputs: the bytes each key owns, and the TopK size `k`, `m` when unknown.
+Data inputs: the bytes each key owns, the TopK size `k`, `m` when unknown, the capacity `m_o` of the state merged in, unbounded when unknown, and `merged`.
 
 | Item | Big O | Formula |
 |---|---|---|
@@ -245,7 +246,7 @@ Data inputs: the bytes each key owns, and the TopK size `k`, `m` when unknown.
 | Update | `O(1)` | 47 at unit weight, plus 2 per count bucket passed |
 | Query ItemFrequency | `O(1)` | 4 |
 | Query TopK | `O(k)` | `1 + 7·min(k, m)` |
-| Merge | `O(m log m)` | `44m + 2m·lg(2m) + 13` |
+| Merge | `O((m + m_o) log(m + m_o))` | `34m + 10m_o + (m + m_o)·lg(m + m_o) + 13` |
 
 - In one unmerged state, an estimate is off by at most `N/m`.
   The counters sum to `N`, so the smallest is at most `N/m`, a held key overcounts by at most the smallest counter, and a key not held has `f(x)` at most the smallest counter.
@@ -256,9 +257,10 @@ Data inputs: the bytes each key owns, and the TopK size `k`, `m` when unknown.
 - The summary links keys into buckets of equal count.
   An update of a held key moves its entry to the next count's bucket, creating it and dropping the old one if needed, at most 36 ops.
   A new key in a full summary also takes over the lowest bucket's first entry and swaps the keys in the index, at most 47.
-- A unit update on an unmerged state passes no count bucket, and a weighted update or a new key seated in an under-full merged state may pass many.
+- A unit update costs at most 47 in any state, merged or not, because every held count is at least `min_count` and a new key seated at `min_count + 1` passes at most one count bucket.
+  A weighted update may pass many.
 - TopK walks down from the highest bucket, reading each bucket's count and links and each key's entry, and writing each reported key.
-- A merge reads both summaries into a temporary map, sorts their up to `2m` entries by count, and seats the top `m` at 22 ops each.
+- A merge reads both summaries into a temporary map, sorts their up to `m + m_o` entries by count, and seats the top `m` at 22 ops each.
 - After a merge, ItemFrequency and TopK have no bound.
 - Capacities may differ in a merge, which keeps this state's.
 
@@ -266,7 +268,7 @@ Data inputs: the bytes each key owns, and the TopK size `k`, `m` when unknown.
 
 `src/sketches/elastic.rs`.
 Parameters: `H` heavy buckets with one flow each, and a light Count-Min of `d × w` `i32` counters, the code's `bucket_count`, `light_rows` and `light_cols`.
-Data inputs: `D`, and the bytes each flow id owns, the capacity of the `String` passed to `update`.
+Data inputs: `D`, the bytes each flow id owns, the capacity of the `String` passed to `update`, and `merged`.
 
 | Item | Big O | Formula |
 |---|---|---|
@@ -347,13 +349,13 @@ Data inputs: `D`, and the bytes each key owns.
 
 `src/sketches/countminsketch_space_saving.rs` and `src/sketches/countsketch_space_saving.rs`.
 Parameters: `d` rows, `w` columns and `m` Space-Saving counters, the code's `rows`, `cols` and `capacity`, plus counter type and path.
-Data inputs: `D`, and the bytes each key owns.
+Data inputs: `D`, unbounded when unknown, and the bytes each key owns.
 
 | Item | Big O | Formula |
 |---|---|---|
 | ItemFrequency error | | as the base sketch, with its contract |
 | ItemFrequency sizing | | as the base sketch; `m` is not set by the bound |
-| TopK error | | each reported count as ItemFrequency at a per-key `δ` of `δ/min(m, D)`; for Count-Min `δ = min(m, D)·e^−d` fixed, `None` when that is at least 1; `None` without `D` |
+| TopK error | | each reported count as ItemFrequency at a per-key `δ` of `δ/min(m, D)`; for Count-Min `δ = min(m, D)·e^−d` fixed, `None` when that is at least 1 |
 | TopK sizing | | as ItemFrequency at `δ/min(m, D)` |
 | Memory | `O(dw + m)` | `size_of::<Self>() − size_of::<SpaceSaving>() + d·w·size_of::<Counter>() + SpaceSaving::theoretical_memory_bytes(m, key bytes)` |
 | Update | `O(d)` | `d + 47` at unit weight, plus 2 per count bucket passed |
@@ -372,13 +374,13 @@ Data inputs: `D`, and the bytes each key owns.
 `src/sketches/count_min_fold.rs` and `src/sketches/count_sketch_fold.rs`.
 Parameters: `d` rows, full width `W` (a power of two, at most 65536), fold level `F` and heap capacity `k`, the code's `rows`, `full_cols`, `fold_level` and `heap_size`.
 Each row stores `W/2^F` cells, and each cell is a short list of (full column, count) entries.
-Data inputs: `D`; `E`, the most entries one cell holds, at most `min(2^F, D)`; `S`, the entries in cells holding more than one, at most `d·min(W, D)`; and the bytes each key owns.
+Data inputs: `D`; `E`, the most entries one cell holds, at most `min(2^F, D)`; `S`, the entries in cells holding more than one, at most `d·min(W, D)`; the bytes each key owns; and `merged`, whether `merge_same_level` has merged into the state.
 
 | Item | Big O | Formula |
 |---|---|---|
 | ItemFrequency error | | as the base sketch on `RegularPath`, with `w = W` |
 | ItemFrequency sizing | | as the base sketch on `RegularPath`, with `W` rounded up to a power of two; `None` when `W > 65536`; `F` and `k` are not set by the bound |
-| TopK error | | as the heap variant, for a state not produced by `merge_same_level` |
+| TopK error | | as the heap variant, for a state `merge_same_level` has not merged into |
 | TopK sizing | | as ItemFrequency at `δ/D` |
 | Memory | `O(d(W/2^F + min(W, D)) + k)` | `size_of::<Self>() − size_of::<TopKHeap>() + 24d·W/2^F + 32S + TopKHeap::theoretical_memory_bytes(k, key)` |
 | Update | `O(dE + est(d) + log k)` | `2dE + d + est(d) + h(k)` |
@@ -730,7 +732,7 @@ A framework bound that adds `c` inner failures to its own `δ_f` has a fixed `δ
 It holds a `d × w` grid of cells, each a Count-Min, Count Sketch, HyperLogLog (`Ertl`), Kll or UnivMon.
 Parameters: `d` rows, `w` columns and schema arity `a ≤ 16`, the code's `rows`, `cols` and the length of `schema` and the paper's `r`, `w` and `D`, plus the cell's parameters.
 An update goes to `2^a − 1` subkeys, one per nonempty subset of the schema's fields, and a subpopulation `Q` is one subkey value.
-Data inputs: `N`, `n`, the label bytes, and lower bounds on `Q`'s weight `N_Q`, distinct count `D_Q` and `‖f_Q‖₂` for the readouts that use them.
+Data inputs: `N`, `n`, the label bytes, lower bounds on `Q`'s weight `N_Q`, distinct count `D_Q` and `‖f_Q‖₂` for the readouts that use them, and `merged`, whether another Hydra has been merged into this one.
 
 Cells use the `FastPath` column rule.
 In each row, other subkeys that share `Q`'s cell add at most `4N(2^a − 1)/w` weight to it with probability at least `1 − q·w/4`, by Markov's inequality.
@@ -857,6 +859,7 @@ Its analytics hold for inner types that implement `TumblingWindowSketch` and `In
 Data inputs: `t` the closed windows a query merges, `max_windows` when unknown, and `b` the window boundaries one update crosses, unbounded when unknown.
 
 - A query merges the chosen windows, so its error is the inner bound over exactly their updates.
+  The inner data describe the merged state, so a fold window's TopK has a bound only for a query that merges no closed window.
 - Kll windows get no bound, because a seeded `KllConfig` builds every window from one seed.
 - `params_for` is the inner `params_for`, around `TumblingParams::around`'s window length 1, 8 windows and a pool of 10.
 - Memory: `size_of::<TumblingWindow>() + S_c·size_of::<ClosedWindow>() + S_f·size_of::<Inner>() + A·(mem_in − size_of::<Inner>())`, with `A = max(pool_initial_size, max_windows + 2)` the most sketches alive.

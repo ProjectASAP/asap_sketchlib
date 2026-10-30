@@ -177,6 +177,7 @@ fn hydra_sizing_meets_the_target_for_every_cell_kind() {
         group_weight: Some(20_000),
         group_distinct: Some(5_000),
         group_l2: Some(8_000.0),
+        merged: Some(false),
         ..HydraData::default()
     };
     for statistic in [
@@ -195,6 +196,36 @@ fn hydra_sizing_meets_the_target_for_every_cell_kind() {
             );
         }
     }
+}
+
+#[test]
+fn hydra_kll_bounds_need_an_unmerged_hydra() {
+    let unmerged = HydraData {
+        n: Some(100_000),
+        total_weight: Some(100_000),
+        group_weight: Some(20_000),
+        merged: Some(false),
+        ..HydraData::default()
+    };
+    let p = Hydra::params_for(StatisticKind::Quantile, 0.3, 0.1, &unmerged).unwrap();
+    for statistic in [StatisticKind::Quantile, StatisticKind::Rank] {
+        assert!(Hydra::theoretical_error(statistic, &p, &unmerged, Some(0.1)).is_some());
+        for merged in [None, Some(true)] {
+            let data = HydraData { merged, ..unmerged };
+            assert_eq!(
+                Hydra::theoretical_error(statistic, &p, &data, Some(0.1)),
+                None
+            );
+            assert_eq!(Hydra::params_for(statistic, 0.3, 0.1, &data), None);
+        }
+    }
+    let merged = HydraData {
+        merged: None,
+        ..unmerged
+    };
+    let item = StatisticKind::ItemFrequency;
+    let p = Hydra::params_for(item, 0.2, 0.2, &merged).unwrap();
+    assert!(Hydra::theoretical_error(item, &p, &merged, Some(0.2)).is_some());
 }
 
 #[cfg(feature = "op-count")]

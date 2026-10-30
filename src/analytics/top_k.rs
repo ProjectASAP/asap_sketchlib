@@ -91,6 +91,9 @@ pub struct FoldData {
     /// Bytes each key owns: a string's or byte slice's length, 0 for a
     /// number.
     pub key_bytes: Option<usize>,
+    /// Whether `merge_same_level` has merged into the state. Unknown counts
+    /// as merged.
+    pub merged: Option<bool>,
 }
 
 /// The base sketch of a top-k matrix.
@@ -293,7 +296,7 @@ macro_rules! matrix_with_heap {
 matrix_with_heap!(CountMinSketchWithHeap, Base::CountMin);
 matrix_with_heap!(CountSketchWithHeap, Base::CountSketch);
 
-/// SpaceSaving's most ops for one unit update of an unmerged summary.
+/// SpaceSaving's most ops for one unit update, merged or not.
 const SPACE_SAVING_UPDATE_OPS: f64 = 47.0;
 
 macro_rules! matrix_with_space_saving {
@@ -364,8 +367,8 @@ macro_rules! matrix_with_space_saving {
                 match statistic {
                     StatisticKind::ItemFrequency => item_error($base, shape, Mode::FAST, delta),
                     StatisticKind::TopK => {
-                        let keys = data.distinct.map(|_| held(params.capacity, data.distinct));
-                        top_k_error($base, shape, Mode::FAST, keys, delta)
+                        let keys = held(params.capacity, data.distinct);
+                        top_k_error($base, shape, Mode::FAST, Some(keys), delta)
                     }
                     _ => None,
                 }
@@ -378,8 +381,8 @@ macro_rules! matrix_with_space_saving {
                 data: &FlowData,
             ) -> Option<MatrixSpaceSavingParams> {
                 let sized = MatrixSpaceSavingParams::default();
-                let keys = data.distinct.map(|_| held(sized.capacity, data.distinct));
-                let shape = top_k_params($base, statistic, epsilon, delta, Mode::FAST, keys)?;
+                let keys = held(sized.capacity, data.distinct);
+                let shape = top_k_params($base, statistic, epsilon, delta, Mode::FAST, Some(keys))?;
                 Some(MatrixSpaceSavingParams {
                     rows: shape.rows,
                     cols: shape.cols,
@@ -524,7 +527,7 @@ macro_rules! fold {
                 let shape = fold_shape(params);
                 match statistic {
                     StatisticKind::ItemFrequency => item_error($base, shape, false, delta),
-                    StatisticKind::TopK => {
+                    StatisticKind::TopK if data.merged == Some(false) => {
                         top_k_error($base, shape, false, distinct(data.distinct), delta)
                     }
                     _ => None,
@@ -537,6 +540,7 @@ macro_rules! fold {
                 delta: f64,
                 data: &FoldData,
             ) -> Option<FoldParams> {
+                (statistic != StatisticKind::TopK || data.merged == Some(false)).then_some(())?;
                 fold_params($base, statistic, epsilon, delta, distinct(data.distinct))
             }
         }

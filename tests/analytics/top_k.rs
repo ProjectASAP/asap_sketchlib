@@ -155,6 +155,7 @@ fn fold_data(cells: &[asap_sketchlib::FoldCell], distinct: usize) -> FoldData {
         max_cell_entries: Some(most),
         collided_entries: Some(collided),
         key_bytes: None,
+        merged: None,
     }
 }
 
@@ -236,6 +237,7 @@ fn top_k_trials<T: TopK>(salt: u64, params: &T::Params, bound: ErrorBound) {
 const TOP_K_FLOWS: FlowData = FlowData {
     distinct: Some(TOP_K_DISTINCT),
     key_bytes: None,
+    merged: None,
 };
 
 const TOP_K_FOLDS: FoldData = FoldData {
@@ -243,6 +245,7 @@ const TOP_K_FOLDS: FoldData = FoldData {
     max_cell_entries: None,
     collided_entries: None,
     key_bytes: None,
+    merged: Some(false),
 };
 
 const ITEM_HEAP: MatrixHeapParams = MatrixHeapParams {
@@ -400,6 +403,7 @@ fn top_k_needs_d_and_a_count_min_product_below_one() {
     let many = FlowData {
         distinct: Some(21),
         key_bytes: None,
+        merged: None,
     };
     assert!(CmHeap::theoretical_error(StatisticKind::TopK, &p, &many, None).is_none());
     // The Space-Saving variants multiply by min(m, D).
@@ -410,6 +414,52 @@ fn top_k_needs_d_and_a_count_min_product_below_one() {
     };
     let bound = CmSs::theoretical_error(StatisticKind::TopK, &p, &TOP_K_FLOWS, None).unwrap();
     assert_eq!(bound.delta, Some(8.0 * (-5f64).exp()));
+    // At most m keys are reported, so an unknown D counts as m.
+    assert_eq!(
+        CmSs::theoretical_error(StatisticKind::TopK, &p, &none, None),
+        Some(bound)
+    );
+    assert_eq!(
+        CsSs::theoretical_error(top_k, &p, &none, Some(0.05)),
+        CsSs::theoretical_error(top_k, &p, &TOP_K_FLOWS, Some(0.05))
+    );
+    assert!(CsSs::theoretical_error(top_k, &p, &none, Some(0.05)).is_some());
+    let at_m = FlowData {
+        distinct: Some(MatrixSpaceSavingParams::default().capacity as u64),
+        ..none
+    };
+    assert_eq!(
+        CmSs::params_for(top_k, 0.05, 0.01, &none),
+        CmSs::params_for(top_k, 0.05, 0.01, &at_m)
+    );
+    assert!(CmSs::params_for(top_k, 0.05, 0.01, &none).is_some());
+}
+
+#[test]
+fn fold_top_k_needs_a_state_merge_same_level_has_not_merged_into() {
+    let p = TOP_K_FOLD;
+    let top_k = StatisticKind::TopK;
+    assert!(CmFold::theoretical_error(top_k, &p, &TOP_K_FOLDS, None).is_some());
+    assert!(CsFold::params_for(top_k, 0.05, 0.05, &TOP_K_FOLDS).is_some());
+    for merged in [None, Some(true)] {
+        let data = FoldData {
+            merged,
+            ..TOP_K_FOLDS
+        };
+        assert_eq!(CmFold::theoretical_error(top_k, &p, &data, None), None);
+        assert_eq!(
+            CsFold::theoretical_error(top_k, &p, &data, Some(0.05)),
+            None
+        );
+        assert_eq!(CmFold::params_for(top_k, 0.05, 0.05, &data), None);
+        assert_eq!(CsFold::params_for(top_k, 0.05, 0.05, &data), None);
+        let item = StatisticKind::ItemFrequency;
+        assert_eq!(
+            CmFold::theoretical_error(item, &p, &data, None),
+            CmFold::theoretical_error(item, &p, &TOP_K_FOLDS, None)
+        );
+        assert!(CmFold::params_for(item, 0.05, 0.05, &data).is_some());
+    }
 }
 
 #[test]
@@ -554,6 +604,7 @@ fn heap_variant_memory_covers_the_state() {
         let strings = FlowData {
             distinct: None,
             key_bytes: Some(16),
+            merged: None,
         };
         let mut cm = CmHeap::build(&p);
         let mut cs = CsHeap::build(&p);
@@ -605,6 +656,7 @@ fn space_saving_variant_memory_covers_the_state() {
         let strings = FlowData {
             distinct: None,
             key_bytes: Some(16),
+            merged: None,
         };
         let mut cm = CmSs::build(&p);
         let mut cs = CsSs::build(&p);
@@ -833,6 +885,7 @@ mod ops {
             let data = FlowData {
                 distinct: Some(0),
                 key_bytes: None,
+                merged: None,
             };
             let top = T::theoretical_query_ops(StatisticKind::TopK, &p, &data).unwrap();
             assert_ops_within("empty top_k", top, || few.reported());
