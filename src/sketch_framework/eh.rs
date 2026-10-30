@@ -111,6 +111,7 @@ impl ExponentialHistogram {
             self.payload.drain(0..expired_count);
         }
 
+        #[cfg(feature = "op-count")]
         crate::analytics::ops::add(self.prototype.cells());
         let mut sketch = self.prototype.clone();
         update_fn(&mut sketch);
@@ -213,6 +214,7 @@ impl ExponentialHistogram {
         if index + 1 >= self.payload.len() {
             return Ok(());
         }
+        #[cfg(feature = "op-count")]
         crate::analytics::ops::add(1 + self.payload[index + 1].bucket.cells());
         let vol_to_merge = self.payload[index + 1].clone();
         self.payload[index].merge(vol_to_merge)?;
@@ -283,6 +285,7 @@ impl ExponentialHistogram {
         if to_volume >= self.payload.len() {
             to_volume = self.payload.len() - 1;
         }
+        #[cfg(feature = "op-count")]
         crate::analytics::ops::add(self.payload[from_volume].bucket.cells());
         if from_volume < to_volume {
             let mut merged = self.payload[from_volume].bucket.clone();

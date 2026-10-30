@@ -67,19 +67,19 @@ fn hll_memory_is_exact() {
     let p14 = HllParams { precision: 14 };
     assert_eq!(
         <ClassicP8 as SketchAnalytics>::theoretical_memory_bytes(&p8, &none),
-        ClassicP8::new().memory_bytes()
+        Some(ClassicP8::new().memory_bytes())
     );
     assert_eq!(
         <ErtlP12 as SketchAnalytics>::theoretical_memory_bytes(&HllParams { precision: 12 }, &none),
-        ErtlP12::new().memory_bytes()
+        Some(ErtlP12::new().memory_bytes())
     );
     assert_eq!(
         <ClassicP14 as SketchAnalytics>::theoretical_memory_bytes(&p14, &none),
-        ClassicP14::new().memory_bytes()
+        Some(ClassicP14::new().memory_bytes())
     );
     assert_eq!(
         <HipP8 as SketchAnalytics>::theoretical_memory_bytes(&p8, &()),
-        HipP8::new().memory_bytes()
+        Some(HipP8::new().memory_bytes())
     );
 }
 
@@ -94,19 +94,18 @@ fn kmv_memory_is_exact_for_known_distinct_and_bounds_unknown() {
             let p = KmvParams { k };
             assert_eq!(
                 <Kmv as SketchAnalytics>::theoretical_memory_bytes(&p, &distinct(d)),
-                sketch.memory_bytes(),
+                Some(sketch.memory_bytes()),
                 "k={k} D={d}"
             );
-            assert!(
-                <Kmv as SketchAnalytics>::theoretical_memory_bytes(&p, &DistinctData::default())
-                    >= sketch.memory_bytes()
-            );
+            let unknown =
+                <Kmv as SketchAnalytics>::theoretical_memory_bytes(&p, &DistinctData::default());
+            assert!(unknown.unwrap() >= sketch.memory_bytes());
         }
     }
 }
 
 #[test]
-fn set_aggregator_memory_is_exact() {
+fn set_aggregator_memory_is_exact_and_needs_both_inputs() {
     for (d, len) in [(0u64, 8usize), (5, 8), (1000, 12), (20_000, 6)] {
         let mut set = SetAggregator::new();
         let mut other = SetAggregator::new();
@@ -125,12 +124,21 @@ fn set_aggregator_memory_is_exact() {
         };
         assert_eq!(
             SetAggregator::theoretical_memory_bytes(&(), &data),
-            set.memory_bytes(),
+            Some(set.memory_bytes()),
             "D={d}"
         );
-        assert!(
-            SetAggregator::theoretical_memory_bytes(&(), &SetData::default()) >= set.memory_bytes()
-        );
+        for unknown in [
+            SetData {
+                mean_key_bytes: None,
+                ..data
+            },
+            SetData {
+                distinct: None,
+                ..data
+            },
+        ] {
+            assert_eq!(SetAggregator::theoretical_memory_bytes(&(), &unknown), None);
+        }
     }
 }
 
@@ -143,11 +151,11 @@ fn bloom_memory_is_exact() {
         let none = DistinctData::default();
         assert_eq!(
             <BloomRegular as SketchAnalytics>::theoretical_memory_bytes(&p, &none),
-            BloomRegular::with_dimensions(p.rows, p.cols).memory_bytes()
+            Some(BloomRegular::with_dimensions(p.rows, p.cols).memory_bytes())
         );
         assert_eq!(
             <BloomFast as SketchAnalytics>::theoretical_memory_bytes(&p, &none),
-            BloomFast::with_dimensions(p.rows, p.cols).memory_bytes()
+            Some(BloomFast::with_dimensions(p.rows, p.cols).memory_bytes())
         );
     }
 }

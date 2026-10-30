@@ -28,7 +28,7 @@ impl Default for SpaceSavingParams {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SpaceSavingData {
     /// Bytes each key owns: a string's or byte slice's length, 0 for a
-    /// number. Unknown counts as 0.
+    /// number.
     pub key_bytes: Option<usize>,
     /// `k`, the TopK size. Unknown counts as `m`.
     pub top_k: Option<usize>,
@@ -40,11 +40,14 @@ impl<H: SketchHasher> SketchAnalytics for SpaceSaving<H> {
     type Params = SpaceSavingParams;
     type Data = SpaceSavingData;
 
-    fn theoretical_memory_bytes(params: &SpaceSavingParams, data: &SpaceSavingData) -> usize {
-        SpaceSaving::<DefaultXxHasher>::theoretical_memory_bytes(
+    fn theoretical_memory_bytes(
+        params: &SpaceSavingParams,
+        data: &SpaceSavingData,
+    ) -> Option<usize> {
+        Some(SpaceSaving::<DefaultXxHasher>::theoretical_memory_bytes(
             params.capacity,
-            data.key_bytes.unwrap_or(0),
-        )
+            data.key_bytes?,
+        ))
     }
 
     fn theoretical_update_ops(_: &SpaceSavingParams, _: &SpaceSavingData) -> f64 {
@@ -131,7 +134,7 @@ pub struct FlowData {
     /// `D`, the distinct keys.
     pub distinct: Option<u64>,
     /// Bytes each key owns: a string's or byte slice's length, 0 for a
-    /// number. Unknown counts as 0.
+    /// number, and for ElasticSketch the capacity of the `String` passed in.
     pub key_bytes: Option<usize>,
 }
 
@@ -160,17 +163,16 @@ impl<H: SketchHasher> SketchAnalytics for ElasticSketch<H> {
     type Params = ElasticParams;
     type Data = FlowData;
 
-    fn theoretical_memory_bytes(params: &ElasticParams, data: &FlowData) -> usize {
-        size_of::<Self>()
-            .saturating_add(
-                params
-                    .bucket_count
-                    .saturating_mul(size_of::<HeavyBucket>() + data.key_bytes.unwrap_or(0)),
-            )
-            .saturating_add(
-                (params.light_rows.saturating_mul(params.light_cols))
-                    .saturating_mul(size_of::<i32>()),
-            )
+    fn theoretical_memory_bytes(params: &ElasticParams, data: &FlowData) -> Option<usize> {
+        let bucket = size_of::<HeavyBucket>().saturating_add(data.key_bytes?);
+        Some(
+            size_of::<Self>()
+                .saturating_add(params.bucket_count.saturating_mul(bucket))
+                .saturating_add(
+                    (params.light_rows.saturating_mul(params.light_cols))
+                        .saturating_mul(size_of::<i32>()),
+                ),
+        )
     }
 
     fn theoretical_update_ops(params: &ElasticParams, _: &FlowData) -> f64 {
@@ -255,14 +257,16 @@ impl<H: SketchHasher> SketchAnalytics for CocoSketch<H> {
     type Params = CocoParams;
     type Data = FlowData;
 
-    fn theoretical_memory_bytes(params: &CocoParams, data: &FlowData) -> usize {
+    fn theoretical_memory_bytes(params: &CocoParams, data: &FlowData) -> Option<usize> {
         let cells = params.rows.saturating_mul(params.cols);
         let held = data.distinct.map_or(cells, |d| {
             cells.min(usize::try_from(d).unwrap_or(usize::MAX))
         });
-        size_of::<Self>()
-            .saturating_add(cells.saturating_mul(size_of::<CocoBucket>()))
-            .saturating_add(held.saturating_mul(data.key_bytes.unwrap_or(0)))
+        Some(
+            size_of::<Self>()
+                .saturating_add(cells.saturating_mul(size_of::<CocoBucket>()))
+                .saturating_add(held.saturating_mul(data.key_bytes?)),
+        )
     }
 
     fn theoretical_update_ops(params: &CocoParams, _: &FlowData) -> f64 {

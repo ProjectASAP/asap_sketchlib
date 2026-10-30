@@ -75,8 +75,31 @@ fn hydra_memory_is_exact_for_count_min_cells() {
         };
         let mut h = hydra(rows, cols, arity, cell);
         hydra_update(&mut h, 7, arity, &DataInput::U64(1), 3);
-        assert_eq!(Hydra::theoretical_memory_bytes(&p, &data), h.memory_bytes());
+        assert_eq!(
+            Hydra::theoretical_memory_bytes(&p, &data),
+            Some(h.memory_bytes())
+        );
     }
+}
+
+#[test]
+fn hydra_memory_covers_escaped_labels_and_needs_label_bytes() {
+    let (rows, cols, cell) = (3, 64, MatrixParams { rows: 2, cols: 32 });
+    let labels = vec![String::from("a:b"), String::from("x;y\\z")];
+    let escaped = "a\\:b".len() + "x\\;y\\\\z".len();
+    let prototype = HydraCounter::CountMinSketch(Cm::with_dimensions(cell.rows, cell.cols));
+    let h = Hydra::with_schema(rows, cols, labels, prototype).unwrap();
+    let p = hydra_params(rows, cols, 2, cell);
+    let data = HydraData {
+        label_bytes: Some(escaped),
+        ..HydraData::default()
+    };
+    let bound = Hydra::theoretical_memory_bytes(&p, &data).unwrap();
+    assert!(bound >= h.memory_bytes(), "{bound} < {}", h.memory_bytes());
+    assert_eq!(
+        Hydra::theoretical_memory_bytes(&p, &HydraData::default()),
+        None
+    );
 }
 
 #[test]
@@ -274,7 +297,7 @@ fn eh_memory_bounds_memory_bytes() {
                 buckets: Some(most),
                 ..EhData::default()
             };
-            let theory = ExponentialHistogram::theoretical_memory_bytes(&params, &data);
+            let theory = ExponentialHistogram::theoretical_memory_bytes(&params, &data).unwrap();
             assert!(
                 theory >= eh.memory_bytes(),
                 "{theory} < {}",
@@ -286,7 +309,16 @@ fn eh_memory_bounds_memory_bytes() {
                     ..EhData::default()
                 };
                 let bound = ExponentialHistogram::theoretical_memory_bytes(&params, &from_arrivals);
-                assert!(bound >= eh.memory_bytes());
+                assert!(bound.unwrap() >= eh.memory_bytes());
+            } else {
+                let unknown = ExponentialHistogram::theoretical_memory_bytes(
+                    &params,
+                    &EhData {
+                        window_arrivals: Some(301),
+                        ..EhData::default()
+                    },
+                );
+                assert_eq!(unknown, None);
             }
         }
     }
@@ -426,7 +458,7 @@ fn nitro_memory_is_exact() {
         let nitro = Nitro::with_target_and_seed(0.25, Cm::with_dimensions(cell.rows, cell.cols), 1);
         assert_eq!(
             Nitro::theoretical_memory_bytes(&p, &NitroData::default()),
-            nitro.memory_bytes()
+            Some(nitro.memory_bytes())
         );
     }
 }
@@ -580,11 +612,12 @@ fn tumbling_memory_bounds_memory_bytes() {
             let data = TumblingData {
                 inner: FoldData {
                     distinct: Some(100),
+                    key_bytes: Some(0),
                     ..FoldData::default()
                 },
                 ..TumblingData::default()
             };
-            let theory = FoldWindow::theoretical_memory_bytes(&p, &data);
+            let theory = FoldWindow::theoretical_memory_bytes(&p, &data).unwrap();
             assert!(
                 theory >= w.memory_bytes(),
                 "{theory} < {}",
@@ -623,12 +656,22 @@ fn tumbling_ops_are_within_their_formulas() {
             inner,
         };
         let data = TumblingData {
+            boundaries: Some(1),
             inner: FoldData {
                 distinct: Some(200),
+                key_bytes: Some(0),
                 ..FoldData::default()
             },
             ..TumblingData::default()
         };
+        let unbounded = TumblingData {
+            boundaries: None,
+            ..data
+        };
+        assert_eq!(
+            FoldWindow::theoretical_update_ops(&p, &unbounded),
+            f64::INFINITY
+        );
         let update = FoldWindow::theoretical_update_ops(&p, &data);
         let mut rng = rng(109, i as u64);
         for t in 0..120 {
@@ -663,10 +706,14 @@ fn ensemble(cell: MatrixParams) -> HashSketchEnsemble {
 }
 
 fn ensemble_params(cell: MatrixParams, index: usize) -> EnsembleParams {
+    let count_min = EnsembleCell::CountMin {
+        shape: cell,
+        counter_bytes: 4,
+    };
     EnsembleParams {
         sketches: vec![
-            EnsembleCell::CountMin(cell),
-            EnsembleCell::CountMin(cell),
+            count_min,
+            count_min,
             EnsembleCell::HllErtl(HllParams::default()),
         ],
         index,
@@ -686,7 +733,7 @@ fn ensemble_memory_is_exact_and_each_sketch_keeps_its_bound() {
         let e = ensemble(cell);
         assert_eq!(
             Ensemble::theoretical_memory_bytes(&p, &CellData::default()),
-            e.memory_bytes()
+            Some(e.memory_bytes())
         );
         assert_eq!(
             Ensemble::theoretical_error(
@@ -698,6 +745,34 @@ fn ensemble_memory_is_exact_and_each_sketch_keeps_its_bound() {
             Cm::theoretical_error(StatisticKind::ItemFrequency, &cell, &(), None)
         );
     }
+}
+
+#[test]
+fn ensemble_memory_reads_each_matrix_counter_width() {
+    type Cm64 = CountMinSketch<Vector2D<i64>, FastPath>;
+    let shape = MatrixParams { rows: 3, cols: 64 };
+    let e = Ensemble::new(vec![
+        EnsembleSketch::from(Cm64::with_dimensions(shape.rows, shape.cols)),
+        EnsembleSketch::from(Cm::with_dimensions(shape.rows, shape.cols)),
+    ])
+    .unwrap();
+    let p = EnsembleParams {
+        sketches: vec![
+            EnsembleCell::CountMin {
+                shape,
+                counter_bytes: 8,
+            },
+            EnsembleCell::CountMin {
+                shape,
+                counter_bytes: 4,
+            },
+        ],
+        index: 0,
+    };
+    assert_eq!(
+        Ensemble::theoretical_memory_bytes(&p, &CellData::default()),
+        Some(e.memory_bytes())
+    );
 }
 
 #[cfg(feature = "op-count")]
@@ -746,7 +821,7 @@ fn ensemble_ops_are_within_their_formulas() {
 mod eh_univmon {
     use super::*;
     use asap_sketchlib::ExponentialHistogramUnivMon;
-    use asap_sketchlib::analytics::{EhUnivMonData, EhUnivMonParams, UnivMonParams};
+    use asap_sketchlib::analytics::{EhUnivMonData, EhUnivMonParams, FlowData, UnivMonParams};
 
     type Ehu = ExponentialHistogramUnivMon;
 
@@ -793,13 +868,32 @@ mod eh_univmon {
         for (i, (k, rows, cols, layers)) in SIZES.into_iter().enumerate() {
             let p = params(k, 1500, rows, cols, layers);
             let mut eh = build(&p);
-            let mut most = EhUnivMonData::default();
+            let mut most = EhUnivMonData {
+                key_bytes: Some(0),
+                flow: FlowData {
+                    key_bytes: Some(0),
+                    ..FlowData::default()
+                },
+                ..EhUnivMonData::default()
+            };
             let mut rng = rng(111, i as u64);
             for t in 0..3000 {
                 eh.update_weighted(t, &DataInput::U64(rng.random_range(0..400)), 1);
                 observe(&eh, &mut most);
             }
-            let theory = Ehu::theoretical_memory_bytes(&p, &most);
+            let theory = Ehu::theoretical_memory_bytes(&p, &most).unwrap();
+            for unknown in [
+                EhUnivMonData {
+                    key_bytes: None,
+                    ..most
+                },
+                EhUnivMonData {
+                    flow: FlowData::default(),
+                    ..most
+                },
+            ] {
+                assert_eq!(Ehu::theoretical_memory_bytes(&p, &unknown), None);
+            }
             assert!(
                 theory >= eh.memory_bytes(),
                 "{theory} < {}",
@@ -859,7 +953,14 @@ mod eh_univmon {
         for (i, (k, rows, cols, layers)) in SIZES.into_iter().enumerate() {
             let p = params(k, 1500, rows, cols, layers);
             let mut eh = build(&p);
-            let mut most = EhUnivMonData::default();
+            let mut most = EhUnivMonData {
+                key_bytes: Some(0),
+                flow: FlowData {
+                    key_bytes: Some(0),
+                    ..FlowData::default()
+                },
+                ..EhUnivMonData::default()
+            };
             let mut rng = rng(113, i as u64);
             let updates = 3000;
             let mut counted = 0;

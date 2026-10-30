@@ -453,7 +453,14 @@ fn f2_rows<T: Counter>(counters: &[T], width: usize, depth: usize, rows: &mut Ve
     }
 }
 
-#[derive(Clone, Debug)]
+/// A clone of `heap` with the same capacity.
+fn clone_reserved<T: Clone + Ord>(heap: &BinaryHeap<T>) -> BinaryHeap<T> {
+    let mut clone = heap.clone();
+    clone.reserve_exact(heap.capacity() - clone.len());
+    clone
+}
+
+#[derive(Debug)]
 struct Layer {
     sketch: PackedCountSketch,
     candidate_scores: HashMap<u64, u64>,
@@ -462,6 +469,19 @@ struct Layer {
     /// Largest `candidate_scores.capacity()` seen, which gives its buckets.
     candidate_table_peak: usize,
     ever_evicted: bool,
+}
+
+impl Clone for Layer {
+    fn clone(&self) -> Self {
+        Self {
+            sketch: self.sketch.clone(),
+            candidate_scores: self.candidate_scores.clone(),
+            candidate_heap: clone_reserved(&self.candidate_heap),
+            candidate_capacity: self.candidate_capacity,
+            candidate_table_peak: self.candidate_table_peak,
+            ever_evicted: self.ever_evicted,
+        }
+    }
 }
 
 impl Layer {
@@ -598,7 +618,7 @@ impl Layer {
 /// `H` is the same pluggable hash abstraction used throughout Sketchlib. The
 /// default uses [`DefaultXxHasher`]. Values use `f64::total_cmp` ordering,
 /// including distinct `-0.0`/`0.0` and deterministic placement of NaNs.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct UnivMonQ<H: SketchHasher = DefaultXxHasher> {
     config: UnivMonQConfig,
     hash_layout: HashLayout,
@@ -610,6 +630,23 @@ pub struct UnivMonQ<H: SketchHasher = DefaultXxHasher> {
     next_sequence: u64,
     ordered_heap: BinaryHeap<OrderedOccurrence>,
     hasher: PhantomData<H>,
+}
+
+impl<H: SketchHasher> Clone for UnivMonQ<H> {
+    fn clone(&self) -> Self {
+        Self {
+            config: self.config,
+            hash_layout: self.hash_layout,
+            layers: self.layers.clone(),
+            count: self.count,
+            min: self.min,
+            max: self.max,
+            source_id: self.source_id,
+            next_sequence: self.next_sequence,
+            ordered_heap: clone_reserved(&self.ordered_heap),
+            hasher: PhantomData,
+        }
+    }
 }
 
 impl<'a, H: SketchHasher> UnivMonQQuery<'a, H> {

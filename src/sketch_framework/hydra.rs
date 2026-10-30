@@ -89,6 +89,7 @@ impl TryFrom<Vec<String>> for KeySchema {
             .map(|label| {
                 let mut escaped = String::with_capacity(label.len());
                 push_escaped(&mut escaped, label);
+                escaped.shrink_to_fit();
                 escaped
             })
             .collect();

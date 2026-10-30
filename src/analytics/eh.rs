@@ -61,8 +61,8 @@ impl SketchAnalytics for EhBucketSketch {
     type Params = EhCell;
     type Data = CellData;
 
-    fn theoretical_memory_bytes(params: &EhCell, data: &CellData) -> usize {
-        size_of::<Self>().saturating_add(params.cell().heap(data))
+    fn theoretical_memory_bytes(params: &EhCell, data: &CellData) -> Option<usize> {
+        Some(size_of::<Self>().saturating_add(params.cell().heap(data)?))
     }
 
     fn theoretical_update_ops(params: &EhCell, data: &CellData) -> f64 {
@@ -183,14 +183,14 @@ impl SketchAnalytics for ExponentialHistogram {
     type Params = EhParams;
     type Data = EhData;
 
-    fn theoretical_memory_bytes(params: &EhParams, data: &EhData) -> usize {
-        let Some(buckets) = bucket_bound(params, data) else {
-            return usize::MAX;
-        };
-        let heap = params.cell.cell().heap(&data.cell);
-        size_of::<Self>()
-            .saturating_add(bucket_slots(buckets).saturating_mul(size_of::<EhBucket>()))
-            .saturating_add((buckets + 1).saturating_mul(heap))
+    fn theoretical_memory_bytes(params: &EhParams, data: &EhData) -> Option<usize> {
+        let buckets = bucket_bound(params, data)?;
+        let heap = params.cell.cell().heap(&data.cell)?;
+        Some(
+            size_of::<Self>()
+                .saturating_add(bucket_slots(buckets).saturating_mul(size_of::<EhBucket>()))
+                .saturating_add((buckets + 1).saturating_mul(heap)),
+        )
     }
 
     /// Average per update.
@@ -353,19 +353,19 @@ mod eh_univmon {
         type Params = EhUnivMonParams;
         type Data = EhUnivMonData;
 
-        fn theoretical_memory_bytes(params: &EhUnivMonParams, data: &EhUnivMonData) -> usize {
-            let (Some(sketches), Some(exact), Some(keys)) =
-                (data.sketch_buckets, data.exact_buckets, data.exact_keys)
-            else {
-                return usize::MAX;
-            };
+        fn theoretical_memory_bytes(
+            params: &EhUnivMonParams,
+            data: &EhUnivMonData,
+        ) -> Option<usize> {
+            let (sketches, exact, keys) =
+                (data.sketch_buckets?, data.exact_buckets?, data.exact_keys?);
             let cell = Cell::UnivMon(&params.univmon);
-            let heap = cell.heap(&inner(data));
+            let heap = cell.heap(&inner(data))?;
             let pooled = params.pool_initial_size.max(sketches + 1);
             let free_slots = super::super::frameworks::vec_slots(params.pool_initial_size, pooled);
             let map = hash_map_bytes_after_inserts::<(OwnedDataInput, i64)>(keys)
-                .saturating_add(keys.saturating_mul(data.key_bytes.unwrap_or(0)));
-            size_of::<Self>()
+                .saturating_add(keys.saturating_mul(data.key_bytes?));
+            let bytes = size_of::<Self>()
                 .saturating_add(
                     bucket_slots(sketches).saturating_mul(size_of::<EhUnivMonSketchBucket>()),
                 )
@@ -374,7 +374,8 @@ mod eh_univmon {
                 )
                 .saturating_add(free_slots.saturating_mul(size_of::<UnivMon>()))
                 .saturating_add(pooled.saturating_mul(heap))
-                .saturating_add(exact.saturating_mul(map))
+                .saturating_add(exact.saturating_mul(map));
+            Some(bytes)
         }
 
         /// Average per update over the hashes.

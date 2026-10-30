@@ -426,18 +426,29 @@ fn loaded<P: Pyramid>(params: &P::Params, salt: u64, keys: usize) -> P {
 
 #[test]
 fn pyramid_memory_covers_the_state() {
+    let numeric = FlowData {
+        key_bytes: Some(0),
+        ..FlowData::default()
+    };
     for p in UNIVMON_SIZES {
         let mut sketch: UnivMon = loaded(&p, 5, 3000);
-        let bound =
-            <UnivMon as SketchAnalytics>::theoretical_memory_bytes(&p, &FlowData::default());
+        assert_eq!(
+            <UnivMon as SketchAnalytics>::theoretical_memory_bytes(&p, &FlowData::default()),
+            None
+        );
+        let bound = <UnivMon as SketchAnalytics>::theoretical_memory_bytes(&p, &numeric).unwrap();
         assert!(bound >= sketch.memory_bytes(), "{p:?}");
         Pyramid::merge(&mut sketch, &loaded(&p, 15, 3000));
         assert!(bound >= sketch.memory_bytes(), "{p:?} merged");
     }
     for p in TWO_TIER_SIZES {
         let mut sketch: UnivMonTwoTier = loaded(&p, 6, 3000);
+        assert_eq!(
+            <UnivMonTwoTier as SketchAnalytics>::theoretical_memory_bytes(&p, &FlowData::default()),
+            None
+        );
         let bound =
-            <UnivMonTwoTier as SketchAnalytics>::theoretical_memory_bytes(&p, &FlowData::default());
+            <UnivMonTwoTier as SketchAnalytics>::theoretical_memory_bytes(&p, &numeric).unwrap();
         assert!(bound >= sketch.memory_bytes(), "{p:?}");
         Pyramid::merge(&mut sketch, &loaded(&p, 16, 3000));
         assert!(bound >= sketch.memory_bytes(), "{p:?} merged");
@@ -778,11 +789,35 @@ fn loaded_q(config: UnivMonQConfig, salt: u64) -> UnivMonQ {
 fn univmonq_memory_covers_the_state() {
     for c in Q_SIZES {
         let bound =
-            <UnivMonQ as SketchAnalytics>::theoretical_memory_bytes(&c, &UnivMonQData::default());
+            <UnivMonQ as SketchAnalytics>::theoretical_memory_bytes(&c, &UnivMonQData::default())
+                .unwrap();
         let fresh = UnivMonQ::new(c).unwrap();
         assert!(bound >= fresh.memory_bytes());
         let sketch = loaded_q(c, 11);
         assert!(bound >= sketch.memory_bytes(), "{c:?}");
+    }
+}
+
+#[test]
+fn univmonq_memory_covers_cloned_and_decoded_partial_states() {
+    for c in Q_SIZES {
+        let bound = UnivMonQ::<asap_sketchlib::DefaultXxHasher>::theoretical_memory_bytes(c);
+        let mut rng = rng(13, c.heap_size as u64);
+        let mut partial = univmonq(c, &mut rng);
+        for i in 0..c.ordered_samples * 3 / 4 {
+            partial.update(&(i as f64));
+        }
+        let decoded = UnivMonQ::from_asapv1(&partial.to_asapv1().unwrap()).unwrap();
+        for mut state in [partial.clone(), decoded] {
+            for i in 0..20_000 {
+                state.update(&(i as f64));
+            }
+            assert!(
+                bound >= state.memory_bytes(),
+                "{c:?}: {bound} < {}",
+                state.memory_bytes()
+            );
+        }
     }
 }
 

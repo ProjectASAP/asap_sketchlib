@@ -598,6 +598,7 @@ impl UnivMon {
     }
 
     /// `C_in`: the cells a clone or clear copies, the heap bytes over 8.
+    #[cfg(feature = "op-count")]
     pub(crate) fn cells(&self) -> usize {
         use crate::analytics::frameworks::{InnerSketch, heap_cells};
         let cell = <Self as InnerSketch>::cell_bytes(&Default::default());
@@ -678,6 +679,7 @@ impl UnivMonPool {
 
     /// Returns a sketch to the pool for reuse. Resets all internal state.
     pub fn put(&mut self, mut sketch: UnivMon) {
+        #[cfg(feature = "op-count")]
         crate::analytics::ops::add(1 + sketch.cells());
         sketch.clear();
         self.free_list.push(sketch);

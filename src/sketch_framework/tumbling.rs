@@ -283,6 +283,7 @@ impl<S: TumblingWindowSketch> SketchPool<S> {
 
     /// Return a sketch to the pool after clearing it.
     pub fn put(&mut self, mut sketch: S) {
+        #[cfg(feature = "op-count")]
         crate::analytics::ops::add(1 + sketch.tumbling_cells());
         sketch.tumbling_clear();
         self.free_list.push(sketch);
@@ -406,6 +407,7 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
 
     /// Merge all closed windows + the active window into a single sketch.
     pub fn query_all(&self) -> S {
+        #[cfg(feature = "op-count")]
         crate::analytics::ops::add(self.active.tumbling_cells());
         let mut merged = self.active.clone();
         for cw in &self.closed {
@@ -419,6 +421,7 @@ impl<S: TumblingWindowSketch> TumblingWindow<S> {
     ///
     /// If `n >= closed_count()`, this is equivalent to `query_all()`.
     pub fn query_recent(&self, n: usize) -> S {
+        #[cfg(feature = "op-count")]
         crate::analytics::ops::add(self.active.tumbling_cells());
         let mut merged = self.active.clone();
         let start = self.closed.len().saturating_sub(n);

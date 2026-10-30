@@ -46,7 +46,7 @@ Each sketch type implements one trait in `src/analytics`, and frameworks call th
 pub trait SketchAnalytics {
     type Params;
     type Data: Default;
-    fn theoretical_memory_bytes(params: &Self::Params, data: &Self::Data) -> usize;
+    fn theoretical_memory_bytes(params: &Self::Params, data: &Self::Data) -> Option<usize>;
     fn theoretical_update_ops(params: &Self::Params, data: &Self::Data) -> f64;
     fn theoretical_query_ops(statistic: StatisticKind, params: &Self::Params, data: &Self::Data) -> Option<f64>;
     fn theoretical_merge_ops(params: &Self::Params, data: &Self::Data) -> Option<f64>;
@@ -64,7 +64,7 @@ pub struct ErrorBound {
 
 - `Params` holds the constructor's parameters, such as `CountMinParams { rows, cols }`.
 - `Data` holds the data inputs listed in the sketch's section, each as an `Option`.
-  When an input is unknown, memory and ops use its upper bound from the section, and `theoretical_error` and `params_for` return `None` if they need it.
+  When an input is unknown, ops use its upper bound from the section, memory uses that bound or returns `None` when the section gives none, and `theoretical_error` and `params_for` return `None` if they need it.
 - `StatisticKind` is the enum in `src/capability.rs`.
 - `theoretical_update_ops` is the cost of the plain `update` call, or of `update_weighted` for a sketch that has only that.
 - `theoretical_query_ops`, `theoretical_merge_ops` and `theoretical_error` return `None` for what the sketch does not do or has no formula for.
@@ -234,7 +234,7 @@ Data inputs: `I`, the updates per sub-window, the code's `items_per_sub_window` 
 
 `src/sketches/space_saving.rs`, Space-Saving on the Stream-Summary structure (Metwally et al. 2005).
 Parameter: `m` counters, the code's `capacity`.
-Data inputs: the bytes each key owns for memory, 0 when unknown, and the TopK size `k`, `m` when unknown.
+Data inputs: the bytes each key owns, and the TopK size `k`, `m` when unknown.
 
 | Item | Big O | Formula |
 |---|---|---|
@@ -266,7 +266,7 @@ Data inputs: the bytes each key owns for memory, 0 when unknown, and the TopK si
 
 `src/sketches/elastic.rs`.
 Parameters: `H` heavy buckets with one flow each, and a light Count-Min of `d × w` `i32` counters, the code's `bucket_count`, `light_rows` and `light_cols`.
-Data inputs: `D`, and the bytes each flow id owns for memory, 0 when unknown.
+Data inputs: `D`, and the bytes each flow id owns, the capacity of the `String` passed to `update`.
 
 | Item | Big O | Formula |
 |---|---|---|
@@ -296,7 +296,7 @@ Data inputs: `D`, and the bytes each flow id owns for memory, 0 when unknown.
 
 `src/sketches/coco.rs`.
 Parameters: `d` rows and `w` columns, the code's `rows` and `cols`.
-Data inputs: `D`, and the bytes each key owns for memory, 0 when unknown.
+Data inputs: `D`, and the bytes each key owns.
 
 | Item | Big O | Formula |
 |---|---|---|
@@ -322,7 +322,7 @@ Each section covers both bases, through `est(d)` and the base sketch's `δ`.
 
 `src/sketches/countminsketch_heap.rs` and `src/sketches/countsketch_heap.rs`.
 Parameters: `d` rows, `w` columns and heap capacity `k`, the code's `rows`, `cols` and `heap_size`, plus counter type and path.
-Data inputs: `D`, and the bytes each key owns for memory, 0 when unknown.
+Data inputs: `D`, and the bytes each key owns.
 
 | Item | Big O | Formula |
 |---|---|---|
@@ -347,7 +347,7 @@ Data inputs: `D`, and the bytes each key owns for memory, 0 when unknown.
 
 `src/sketches/countminsketch_space_saving.rs` and `src/sketches/countsketch_space_saving.rs`.
 Parameters: `d` rows, `w` columns and `m` Space-Saving counters, the code's `rows`, `cols` and `capacity`, plus counter type and path.
-Data inputs: `D`, and the bytes each key owns for memory, 0 when unknown.
+Data inputs: `D`, and the bytes each key owns.
 
 | Item | Big O | Formula |
 |---|---|---|
@@ -372,7 +372,7 @@ Data inputs: `D`, and the bytes each key owns for memory, 0 when unknown.
 `src/sketches/count_min_fold.rs` and `src/sketches/count_sketch_fold.rs`.
 Parameters: `d` rows, full width `W` (a power of two, at most 65536), fold level `F` and heap capacity `k`, the code's `rows`, `full_cols`, `fold_level` and `heap_size`.
 Each row stores `W/2^F` cells, and each cell is a short list of (full column, count) entries.
-Data inputs: `D`; `E`, the most entries one cell holds, at most `min(2^F, D)`; `S`, the entries in cells holding more than one, at most `d·min(W, D)`; and the bytes each key owns for memory, 0 when unknown.
+Data inputs: `D`; `E`, the most entries one cell holds, at most `min(2^F, D)`; `S`, the entries in cells holding more than one, at most `d·min(W, D)`; and the bytes each key owns.
 
 | Item | Big O | Formula |
 |---|---|---|
@@ -469,7 +469,7 @@ Data inputs: `D`, unbounded when unknown.
 
 `src/sketches/set_aggregator.rs`.
 No parameters.
-Data inputs: `D`, unbounded when unknown, and the mean key length `ℓ` in bytes, 0 when unknown.
+Data inputs: `D`, unbounded when unknown, and the mean key length `ℓ` in bytes.
 
 | Item | Big O | Formula |
 |---|---|---|
@@ -631,7 +631,7 @@ UnivMon keeps `L` layers, and an update goes to layer 0 and to each further laye
 
 `src/sketch_framework/univmon.rs`.
 Parameters: heap capacity `k`, `d` rows, `w` columns and `L ≤ 19` layers, the code's `heap_size`, `rows`, `cols` and `layers`; each layer is a `CountSketchWithL2Norm` and a heap of `k` keys.
-Data inputs: `D_max`, an upper bound on `D`, and the bytes each key owns for memory, 0 when unknown.
+Data inputs: `D_max`, an upper bound on `D`, and the bytes each key owns.
 `c = min(k, D_max)` is the most keys one layer's heap holds, and `k` when `D_max` is unknown.
 
 | Item | Big O | Formula |
@@ -707,6 +707,7 @@ Data inputs: `n`, and whether the ordered readouts' heavy set is empty.
   The heavy set is the frequent values the readout handles separately, and `ordered_query_diagnostics().heavy` reports it.
   It is empty on a stream where no value is frequent, and when it is not empty the error depends on the data.
 - FrequencyL2, Distinct and GSum come from candidate keys cut off by a threshold, so UnivMon's bounds do not carry over.
+- A clone or decoded state reserves the candidate tables, candidate heaps and ordered sample a built one does.
 - A `BinaryHeap` push into a heap that then holds `n` entries counts `3 + 2·⌊log2 n⌋`, and a pop from `n` entries counts `4 + 5·⌊log2 n⌋`, the most std's sifts move.
 - An update reads and increments the sequence number, adds to the count, min and max, adds to one counter per row in its layer, estimates the key, updates the candidate table and heap, and adds to the ordered sample.
 - An update of a key already in the candidate table costs `6 + 3d + d·lg d` plus the ordered sample, and the `k` term comes from re-queuing up to `k` stale heap entries when a new key enters a full layer.
@@ -753,7 +754,7 @@ A query takes the median over rows, which fails with probability `P_med(d, q·w/
 - `params_for` sizes ItemFrequency with Count-Min cells, Quantile and Rank with Kll, Distinct with HyperLogLog and FrequencyL2 with UnivMon, for the arity in `HydraData::arity`, 1 when unknown.
   It gives half of `ε` to collisions, `ε_in = (ε/2)/(1 + ε/2)` to the cells, and splits `δ` the same way.
   It sets `w` to the smallest power of two that keeps the collision term at most `ε/2`, `d` to the smallest odd depth with `P_med(d, 1/4) ≤ δ/2`, and the cells to the inner `params_for(ε_in, δ/(2d))`.
-- Memory: `size_of::<Hydra>() + d·w·size_of::<HydraCounter>() + (d·w + 1)·(mem_in − size_of::<Inner>()) + 2a·size_of::<String>() + 2·label bytes`, exact for Count-Min cells, where the label bytes include escapes.
+- Memory: `size_of::<Hydra>() + d·w·size_of::<HydraCounter>() + (d·w + 1)·(mem_in − size_of::<Inner>()) + 2a·size_of::<String>() + 2·label bytes`, where the label bytes include escapes, exact for Count-Min cells when no label needs escaping.
 - An update reads one cell per row for each subkey and updates it, `(2^a − 1)·d·(1 + U_in)`, and a Kll cell repeats its update once per unit of weight.
 - An update computes `(2^a − 1)` grid hashes, `d` each when the slices do not fit, plus the cells' own hashes, since each cell hashes the value again.
 - A query probes the prototype cell, reads one cell per row into a buffer and takes the median, `(d + 1)·Q_in + 2d + d·lg d`.
@@ -853,7 +854,7 @@ The Count-Min and Count Sketch parents hash on `RegularPath`, and the HyperLogLo
 `src/sketch_framework/tumbling.rs`.
 It keeps up to `max_windows` closed windows of an inner sketch, aligned to multiples of `window_size`, plus the active one, and takes sketches from a pool of `pool_initial_size`.
 Its analytics hold for inner types that implement `TumblingWindowSketch` and `InnerSketch`: `CountMinSketchFold`, `CountSketchFold`, `Kll` and `UnivMonQ`.
-Data inputs: `t` the closed windows a query merges, `max_windows` when unknown, and `b` the window boundaries one update crosses, 1 when unknown.
+Data inputs: `t` the closed windows a query merges, `max_windows` when unknown, and `b` the window boundaries one update crosses, unbounded when unknown.
 
 - A query merges the chosen windows, so its error is the inner bound over exactly their updates.
 - Kll windows get no bound, because a seeded `KllConfig` builds every window from one seed.
@@ -868,18 +869,18 @@ Data inputs: `t` the closed windows a query merges, `max_windows` when unknown, 
 
 `src/sketch_framework/hashlayer.rs`.
 A list of Count-Min, Count Sketch and HyperLogLog sketches that share one hash per insert.
-`EnsembleParams` lists the sketches and names `index`, the one the query and error functions read.
+`EnsembleParams` lists the sketches, with the counter bytes `c` of each Count-Min and Count Sketch, and names `index`, the one the query and error functions read.
 
 - Each sketch keeps its own bound, and a statement about several adds their `δ`, because they share a hash.
 - When the list holds a Count-Min or Count Sketch, its HyperLogLog reads a different hash than a standalone one, so the two do not merge.
-- Memory: `size_of::<Self>() + m·size_of::<EnsembleSketch>()` for `m` sketch slots, plus each boxed sketch's `mem_in` and each inline HyperLogLog's `mem_in − size_of::<Inner>()`, exact when the list was built at its length.
+- Memory: `size_of::<Self>() + m·size_of::<EnsembleSketch>()` for `m` sketch slots, plus each boxed sketch's `size_of::<Inner>() + d·w·c` and each inline HyperLogLog's `mem_in − size_of::<Inner>()`, exact when the list was built at its length and its Count-Min and Count Sketch use `Vector2D` storage.
 - An update reads each sketch and updates it, `Σ(1 + U_in)`, and computes one hash when the sketches' slices fit in it.
 - A query reads the sketch at `index`, `1 + Q_in`.
 
 ## Tests
 
 - **Memory.**
-  Each memory function is at least `memory_bytes()` after building with the same inputs, and equal where its section gives an exact formula.
+  Each memory function is at least `memory_bytes()` after building with the same inputs, equal where its section gives an exact formula, and `None` without an input that has no upper bound.
 - **Ops.**
   A build with the `op-count` feature counts the ops one call performs, and a test checks the count is at most the formula, at two or more parameter sizes.
 - **Error.**

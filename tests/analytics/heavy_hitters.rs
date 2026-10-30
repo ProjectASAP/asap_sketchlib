@@ -75,7 +75,13 @@ fn space_saving_memory_covers_the_summary() {
         }
         let other = numbers.clone();
         numbers.merge(&other);
-        let bound = <Ss as SketchAnalytics>::theoretical_memory_bytes(&p, &Default::default());
+        let unknown = <Ss as SketchAnalytics>::theoretical_memory_bytes(&p, &Default::default());
+        assert_eq!(unknown, None);
+        let data = SpaceSavingData {
+            key_bytes: Some(0),
+            top_k: None,
+        };
+        let bound = <Ss as SketchAnalytics>::theoretical_memory_bytes(&p, &data).unwrap();
         assert!(
             bound >= numbers.memory_bytes(),
             "{bound} < {}",
@@ -85,7 +91,7 @@ fn space_saving_memory_covers_the_summary() {
             key_bytes: Some(16),
             top_k: None,
         };
-        let bound = <Ss as SketchAnalytics>::theoretical_memory_bytes(&p, &data);
+        let bound = <Ss as SketchAnalytics>::theoretical_memory_bytes(&p, &data).unwrap();
         assert!(
             bound >= strings.memory_bytes(),
             "{bound} < {}",
@@ -102,13 +108,42 @@ fn elastic_memory_is_exact_once_every_bucket_holds_a_flow() {
             distinct: None,
             key_bytes: Some(16),
         };
-        let bound = <Elastic as SketchAnalytics>::theoretical_memory_bytes(&p, &data);
+        let bound = <Elastic as SketchAnalytics>::theoretical_memory_bytes(&p, &data).unwrap();
         assert!(bound >= sketch.memory_bytes());
         for id in 0..4000 {
             sketch.update(flow(id % 700));
         }
         assert!(sketch.heavy.iter().all(|b| !b.is_vacant()));
         assert_eq!(bound, sketch.memory_bytes());
+        let unknown = FlowData {
+            key_bytes: None,
+            ..data
+        };
+        assert_eq!(
+            <Elastic as SketchAnalytics>::theoretical_memory_bytes(&p, &unknown),
+            None
+        );
+    }
+}
+
+#[test]
+fn elastic_memory_counts_the_capacity_of_each_flow_id() {
+    let key = |id: u64| format!("flow-{id}");
+    let capacity = key(7).capacity();
+    assert!(capacity > key(7).len());
+    assert!((0..700).all(|id| key(id).capacity() == capacity));
+    for p in ELASTIC_SIZES {
+        let mut sketch = elastic(p);
+        for id in 0..4000 {
+            sketch.update(key(id % 700));
+        }
+        assert!(sketch.heavy.iter().all(|b| !b.is_vacant()));
+        let data = FlowData {
+            distinct: None,
+            key_bytes: Some(capacity),
+        };
+        let bound = <Elastic as SketchAnalytics>::theoretical_memory_bytes(&p, &data);
+        assert_eq!(bound, Some(sketch.memory_bytes()));
     }
 }
 
@@ -123,7 +158,7 @@ fn coco_memory_is_exact_once_every_bucket_holds_a_key() {
             distinct: Some(300),
             key_bytes: Some(16),
         };
-        let bound = <Coco as SketchAnalytics>::theoretical_memory_bytes(&p, &data);
+        let bound = <Coco as SketchAnalytics>::theoretical_memory_bytes(&p, &data).unwrap();
         assert!(bound >= sketch.memory_bytes());
         for id in 0..20_000 {
             sketch.update_weighted(&flow(id), 1);
@@ -134,7 +169,15 @@ fn coco_memory_is_exact_once_every_bucket_holds_a_key() {
             key_bytes: Some(16),
         };
         let bound = <Coco as SketchAnalytics>::theoretical_memory_bytes(&p, &data);
-        assert_eq!(bound, sketch.memory_bytes());
+        assert_eq!(bound, Some(sketch.memory_bytes()));
+        let unknown = FlowData {
+            key_bytes: None,
+            ..data
+        };
+        assert_eq!(
+            <Coco as SketchAnalytics>::theoretical_memory_bytes(&p, &unknown),
+            None
+        );
     }
 }
 

@@ -115,15 +115,16 @@ impl ErrorBound {
 /// Theoretical error, memory and ops of one sketch type.
 ///
 /// `Data` holds the data inputs a sketch's formulas read, each an `Option`.
-/// When one is unknown, memory and ops use its upper bound, and
-/// [`Self::theoretical_error`] and [`Self::params_for`] return `None` if they
-/// need it.
+/// When one is unknown, memory and ops use its upper bound, memory returns
+/// `None` when it has none, and [`Self::theoretical_error`] and
+/// [`Self::params_for`] return `None` if they need it.
 pub trait SketchAnalytics {
     type Params;
     type Data: Default;
 
-    /// Bytes a state with `params` holds after the updates `data` describes.
-    fn theoretical_memory_bytes(params: &Self::Params, data: &Self::Data) -> usize;
+    /// Bytes a state with `params` holds after the updates `data` describes;
+    /// `None` when it needs an unknown data input that has no upper bound.
+    fn theoretical_memory_bytes(params: &Self::Params, data: &Self::Data) -> Option<usize>;
 
     /// Most ops one plain update costs, or its average where the sketch's
     /// section marks it average.

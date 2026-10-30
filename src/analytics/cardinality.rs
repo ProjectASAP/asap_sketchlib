@@ -146,8 +146,8 @@ impl<R: HllRegisterStorage, H: SketchHasher> SketchAnalytics for HyperLogLogImpl
     type Params = HllParams;
     type Data = HllData;
 
-    fn theoretical_memory_bytes(params: &HllParams, _: &HllData) -> usize {
-        Self::theoretical_memory_bytes(params.precision)
+    fn theoretical_memory_bytes(params: &HllParams, _: &HllData) -> Option<usize> {
+        Some(Self::theoretical_memory_bytes(params.precision))
     }
 
     fn theoretical_update_ops(_: &HllParams, _: &HllData) -> f64 {
@@ -201,8 +201,8 @@ impl<R: HllRegisterStorage, H: SketchHasher> SketchAnalytics for HyperLogLogImpl
     type Params = HllParams;
     type Data = HllData;
 
-    fn theoretical_memory_bytes(params: &HllParams, _: &HllData) -> usize {
-        Self::theoretical_memory_bytes(params.precision)
+    fn theoretical_memory_bytes(params: &HllParams, _: &HllData) -> Option<usize> {
+        Some(Self::theoretical_memory_bytes(params.precision))
     }
 
     fn theoretical_update_ops(_: &HllParams, _: &HllData) -> f64 {
@@ -247,8 +247,8 @@ impl<R: HllRegisterStorage> SketchAnalytics for HyperLogLogHipImpl<R> {
     type Params = HllParams;
     type Data = ();
 
-    fn theoretical_memory_bytes(params: &HllParams, _: &()) -> usize {
-        Self::theoretical_memory_bytes(params.precision)
+    fn theoretical_memory_bytes(params: &HllParams, _: &()) -> Option<usize> {
+        Some(Self::theoretical_memory_bytes(params.precision))
     }
 
     fn theoretical_update_ops(_: &HllParams, _: &()) -> f64 {
@@ -360,11 +360,13 @@ impl<H: SketchHasher> SketchAnalytics for Kmv<H> {
     type Params = KmvParams;
     type Data = DistinctData;
 
-    fn theoretical_memory_bytes(params: &KmvParams, data: &DistinctData) -> usize {
+    fn theoretical_memory_bytes(params: &KmvParams, data: &DistinctData) -> Option<usize> {
         let distinct = data
             .distinct
             .map_or(usize::MAX, |d| usize::try_from(d).unwrap_or(usize::MAX));
-        Kmv::<DefaultXxHasher>::theoretical_memory_bytes(params.k, distinct)
+        Some(Kmv::<DefaultXxHasher>::theoretical_memory_bytes(
+            params.k, distinct,
+        ))
     }
 
     fn theoretical_update_ops(params: &KmvParams, _: &DistinctData) -> f64 {
@@ -432,18 +434,18 @@ impl SketchAnalytics for SetAggregator {
     type Params = ();
     type Data = SetData;
 
-    fn theoretical_memory_bytes(_: &(), data: &SetData) -> usize {
-        let distinct = data
-            .distinct
-            .map_or(usize::MAX, |d| usize::try_from(d).unwrap_or(usize::MAX));
-        let key_bytes = (distinct as f64 * data.mean_key_bytes.unwrap_or(0.0)).ceil();
-        size_of::<Self>()
-            .saturating_add(hash_map_bytes_after_inserts::<String>(distinct))
-            .saturating_add(if key_bytes >= usize::MAX as f64 {
-                usize::MAX
-            } else {
-                key_bytes as usize
-            })
+    fn theoretical_memory_bytes(_: &(), data: &SetData) -> Option<usize> {
+        let distinct = usize::try_from(data.distinct?).unwrap_or(usize::MAX);
+        let key_bytes = (distinct as f64 * data.mean_key_bytes?).ceil();
+        Some(
+            size_of::<Self>()
+                .saturating_add(hash_map_bytes_after_inserts::<String>(distinct))
+                .saturating_add(if key_bytes >= usize::MAX as f64 {
+                    usize::MAX
+                } else {
+                    key_bytes as usize
+                }),
+        )
     }
 
     fn theoretical_update_ops(_: &(), _: &SetData) -> f64 {
@@ -489,7 +491,7 @@ impl SketchAnalytics for SetAggregator {
 pub struct SetData {
     /// `D`, the distinct keys. Unknown counts as unbounded.
     pub distinct: Option<u64>,
-    /// `ℓ`, the mean key length in bytes. Unknown counts as 0.
+    /// `ℓ`, the mean key length in bytes.
     pub mean_key_bytes: Option<f64>,
 }
 
@@ -524,8 +526,8 @@ impl<Mode: HashPath, H: SketchHasher> SketchAnalytics for Bloom<Mode, H> {
     type Params = BloomParams;
     type Data = DistinctData;
 
-    fn theoretical_memory_bytes(params: &BloomParams, _: &DistinctData) -> usize {
-        Self::theoretical_memory_bytes(params.rows, params.cols)
+    fn theoretical_memory_bytes(params: &BloomParams, _: &DistinctData) -> Option<usize> {
+        Some(Self::theoretical_memory_bytes(params.rows, params.cols))
     }
 
     fn theoretical_update_ops(params: &BloomParams, _: &DistinctData) -> f64 {

@@ -557,8 +557,8 @@ fn heap_variant_memory_covers_the_state() {
         };
         let mut cm = CmHeap::build(&p);
         let mut cs = CsHeap::build(&p);
-        let cm_bound = <CmHeap as SketchAnalytics>::theoretical_memory_bytes(&p, &strings);
-        let cs_bound = <CsHeap as SketchAnalytics>::theoretical_memory_bytes(&p, &strings);
+        let cm_bound = <CmHeap as SketchAnalytics>::theoretical_memory_bytes(&p, &strings).unwrap();
+        let cs_bound = <CsHeap as SketchAnalytics>::theoretical_memory_bytes(&p, &strings).unwrap();
         for &id in &stream {
             let flow = flow(id);
             cm.add(&DataInput::Str(&flow), 1);
@@ -572,7 +572,16 @@ fn heap_variant_memory_covers_the_state() {
         }
         let other = numbers.clone();
         numbers.merge(&other);
-        let bound = <CmHeap as SketchAnalytics>::theoretical_memory_bytes(&p, &FlowData::default());
+        let unknown = FlowData::default();
+        assert_eq!(
+            <CmHeap as SketchAnalytics>::theoretical_memory_bytes(&p, &unknown),
+            None
+        );
+        let numeric = FlowData {
+            key_bytes: Some(0),
+            ..unknown
+        };
+        let bound = <CmHeap as SketchAnalytics>::theoretical_memory_bytes(&p, &numeric).unwrap();
         assert!(bound >= numbers.memory_bytes());
     }
 }
@@ -606,13 +615,17 @@ fn space_saving_variant_memory_covers_the_state() {
         }
         let other = cm.clone();
         cm.merge(&other);
-        let bound = <CmSs as SketchAnalytics>::theoretical_memory_bytes(&p, &strings);
+        assert_eq!(
+            <CmSs as SketchAnalytics>::theoretical_memory_bytes(&p, &FlowData::default()),
+            None
+        );
+        let bound = <CmSs as SketchAnalytics>::theoretical_memory_bytes(&p, &strings).unwrap();
         assert!(
             bound >= cm.memory_bytes(),
             "{bound} < {}",
             cm.memory_bytes()
         );
-        let bound = <CsSs as SketchAnalytics>::theoretical_memory_bytes(&p, &strings);
+        let bound = <CsSs as SketchAnalytics>::theoretical_memory_bytes(&p, &strings).unwrap();
         assert!(
             bound >= cs.memory_bytes(),
             "{bound} < {}",
@@ -652,12 +665,16 @@ fn fold_memory_covers_the_state() {
             key_bytes: Some(16),
             ..FoldData::default()
         };
+        assert_eq!(
+            <CmFold as SketchAnalytics>::theoretical_memory_bytes(&p, &FoldData::default()),
+            None
+        );
         let measured = FoldData {
             key_bytes: Some(16),
             ..fold_data(cm.cells(), keys.len())
         };
         for data in [measured, unknown] {
-            let bound = <CmFold as SketchAnalytics>::theoretical_memory_bytes(&p, &data);
+            let bound = <CmFold as SketchAnalytics>::theoretical_memory_bytes(&p, &data).unwrap();
             assert!(
                 bound >= cm.memory_bytes(),
                 "{data:?}: {bound} < {}",
@@ -669,7 +686,7 @@ fn fold_memory_covers_the_state() {
             ..fold_data(cs.cells(), keys.len())
         };
         for data in [measured, unknown] {
-            let bound = <CsFold as SketchAnalytics>::theoretical_memory_bytes(&p, &data);
+            let bound = <CsFold as SketchAnalytics>::theoretical_memory_bytes(&p, &data).unwrap();
             assert!(
                 bound >= cs.memory_bytes(),
                 "{data:?}: {bound} < {}",

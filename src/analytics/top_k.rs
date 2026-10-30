@@ -89,7 +89,7 @@ pub struct FoldData {
     /// `d·min(W, D)`.
     pub collided_entries: Option<usize>,
     /// Bytes each key owns: a string's or byte slice's length, 0 for a
-    /// number. Unknown counts as 0.
+    /// number.
     pub key_bytes: Option<usize>,
 }
 
@@ -185,9 +185,12 @@ fn top_k_params(
 }
 
 /// [`TopKHeap::theoretical_memory_bytes`] for keys owning `key_bytes` bytes.
-fn heap_memory<C: HeapCount>(heap_size: usize, key_bytes: Option<usize>) -> usize {
-    let key = vec![0u8; key_bytes.unwrap_or(0)];
-    TopKHeap::<C>::theoretical_memory_bytes(heap_size, &DataInput::Bytes(&key))
+fn heap_memory<C: HeapCount>(heap_size: usize, key_bytes: Option<usize>) -> Option<usize> {
+    let key = vec![0u8; key_bytes?];
+    Some(TopKHeap::<C>::theoretical_memory_bytes(
+        heap_size,
+        &DataInput::Bytes(&key),
+    ))
 }
 
 fn distinct(data: Option<u64>) -> Option<f64> {
@@ -211,18 +214,21 @@ macro_rules! matrix_with_heap {
             type Params = MatrixHeapParams;
             type Data = FlowData;
 
-            fn theoretical_memory_bytes(params: &MatrixHeapParams, data: &FlowData) -> usize {
-                (size_of::<Self>() - size_of::<TopKHeap<HeapCountOf<S>>>())
-                    .saturating_add(
-                        params
-                            .rows
-                            .saturating_mul(params.cols)
-                            .saturating_mul(size_of::<S::Counter>()),
-                    )
-                    .saturating_add(heap_memory::<HeapCountOf<S>>(
-                        params.heap_size,
-                        data.key_bytes,
-                    ))
+            fn theoretical_memory_bytes(
+                params: &MatrixHeapParams,
+                data: &FlowData,
+            ) -> Option<usize> {
+                let heap = heap_memory::<HeapCountOf<S>>(params.heap_size, data.key_bytes)?;
+                Some(
+                    (size_of::<Self>() - size_of::<TopKHeap<HeapCountOf<S>>>())
+                        .saturating_add(
+                            params
+                                .rows
+                                .saturating_mul(params.cols)
+                                .saturating_mul(size_of::<S::Counter>()),
+                        )
+                        .saturating_add(heap),
+                )
             }
 
             fn theoretical_update_ops(params: &MatrixHeapParams, _: &FlowData) -> f64 {
@@ -301,18 +307,19 @@ macro_rules! matrix_with_space_saving {
             fn theoretical_memory_bytes(
                 params: &MatrixSpaceSavingParams,
                 data: &FlowData,
-            ) -> usize {
-                (size_of::<Self>() - size_of::<SpaceSaving<H>>())
-                    .saturating_add(
-                        params
-                            .rows
-                            .saturating_mul(params.cols)
-                            .saturating_mul(size_of::<S::Counter>()),
-                    )
-                    .saturating_add(SpaceSaving::<H>::theoretical_memory_bytes(
-                        params.capacity,
-                        data.key_bytes.unwrap_or(0),
-                    ))
+            ) -> Option<usize> {
+                let summary =
+                    SpaceSaving::<H>::theoretical_memory_bytes(params.capacity, data.key_bytes?);
+                Some(
+                    (size_of::<Self>() - size_of::<SpaceSaving<H>>())
+                        .saturating_add(
+                            params
+                                .rows
+                                .saturating_mul(params.cols)
+                                .saturating_mul(size_of::<S::Counter>()),
+                        )
+                        .saturating_add(summary),
+                )
             }
 
             fn theoretical_update_ops(params: &MatrixSpaceSavingParams, _: &FlowData) -> f64 {
@@ -462,15 +469,18 @@ macro_rules! fold {
             type Params = FoldParams;
             type Data = FoldData;
 
-            fn theoretical_memory_bytes(params: &FoldParams, data: &FoldData) -> usize {
+            fn theoretical_memory_bytes(params: &FoldParams, data: &FoldData) -> Option<usize> {
                 let (_, collided) = fold_entries(params, data);
                 let cells = params
                     .rows
                     .saturating_mul(params.full_cols >> params.fold_level);
-                (size_of::<Self>() - size_of::<TopKHeap>())
-                    .saturating_add(cells.saturating_mul(size_of::<FoldCell>()))
-                    .saturating_add(collided.saturating_mul(2 * size_of::<FoldEntry>()))
-                    .saturating_add(heap_memory::<i64>(params.heap_size, data.key_bytes))
+                let heap = heap_memory::<i64>(params.heap_size, data.key_bytes)?;
+                Some(
+                    (size_of::<Self>() - size_of::<TopKHeap>())
+                        .saturating_add(cells.saturating_mul(size_of::<FoldCell>()))
+                        .saturating_add(collided.saturating_mul(2 * size_of::<FoldEntry>()))
+                        .saturating_add(heap),
+                )
             }
 
             fn theoretical_update_ops(params: &FoldParams, data: &FoldData) -> f64 {

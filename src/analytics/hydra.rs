@@ -157,14 +157,17 @@ impl SketchAnalytics for Hydra {
     type Params = HydraParams;
     type Data = HydraData;
 
-    fn theoretical_memory_bytes(params: &HydraParams, data: &HydraData) -> usize {
+    fn theoretical_memory_bytes(params: &HydraParams, data: &HydraData) -> Option<usize> {
         let cells = params.rows * params.cols;
-        let heap = params.cell.cell().heap(&data.cell);
-        let labels = 2 * params.arity * size_of::<String>() + 2 * data.label_bytes.unwrap_or(0);
-        size_of::<Self>()
-            .saturating_add(cells.saturating_mul(size_of::<HydraCounter>()))
-            .saturating_add((cells + 1).saturating_mul(heap))
-            .saturating_add(labels)
+        let heap = params.cell.cell().heap(&data.cell)?;
+        let labels = (2 * params.arity * size_of::<String>())
+            .saturating_add(data.label_bytes?.saturating_mul(2));
+        Some(
+            size_of::<Self>()
+                .saturating_add(cells.saturating_mul(size_of::<HydraCounter>()))
+                .saturating_add((cells + 1).saturating_mul(heap))
+                .saturating_add(labels),
+        )
     }
 
     fn theoretical_update_ops(params: &HydraParams, data: &HydraData) -> f64 {

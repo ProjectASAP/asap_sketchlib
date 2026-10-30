@@ -230,15 +230,15 @@ impl SketchAnalytics for UnivMon {
     type Params = UnivMonParams;
     type Data = FlowData;
 
-    fn theoretical_memory_bytes(params: &UnivMonParams, data: &FlowData) -> usize {
-        let key = vec![0u8; data.key_bytes.unwrap_or(0)];
-        UnivMon::theoretical_memory_bytes(
+    fn theoretical_memory_bytes(params: &UnivMonParams, data: &FlowData) -> Option<usize> {
+        let key = vec![0u8; data.key_bytes?];
+        Some(UnivMon::theoretical_memory_bytes(
             params.heap_size,
             params.rows,
             params.cols,
             params.layers,
             &DataInput::Bytes(&key),
-        )
+        ))
     }
 
     fn theoretical_update_ops(params: &UnivMonParams, _: &FlowData) -> f64 {
@@ -321,9 +321,9 @@ impl SketchAnalytics for UnivMonTwoTier {
     type Params = TwoTierParams;
     type Data = FlowData;
 
-    fn theoretical_memory_bytes(params: &TwoTierParams, data: &FlowData) -> usize {
-        let key = vec![0u8; data.key_bytes.unwrap_or(0)];
-        UnivMonTwoTier::theoretical_memory_bytes(
+    fn theoretical_memory_bytes(params: &TwoTierParams, data: &FlowData) -> Option<usize> {
+        let key = vec![0u8; data.key_bytes?];
+        Some(UnivMonTwoTier::theoretical_memory_bytes(
             params.heap_size,
             params.elephant_layers,
             params.elephant_rows,
@@ -332,7 +332,7 @@ impl SketchAnalytics for UnivMonTwoTier {
             params.mouse_cols,
             params.layers,
             &DataInput::Bytes(&key),
-        )
+        ))
     }
 
     fn theoretical_update_ops(params: &TwoTierParams, _: &FlowData) -> f64 {
@@ -487,8 +487,8 @@ impl<H: SketchHasher> SketchAnalytics for UnivMonQ<H> {
     type Params = UnivMonQConfig;
     type Data = UnivMonQData;
 
-    fn theoretical_memory_bytes(config: &UnivMonQConfig, _: &UnivMonQData) -> usize {
-        UnivMonQ::<H>::theoretical_memory_bytes(*config)
+    fn theoretical_memory_bytes(config: &UnivMonQConfig, _: &UnivMonQData) -> Option<usize> {
+        Some(UnivMonQ::<H>::theoretical_memory_bytes(*config))
     }
 
     fn theoretical_update_ops(config: &UnivMonQConfig, _: &UnivMonQData) -> f64 {

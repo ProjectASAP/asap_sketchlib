@@ -153,8 +153,11 @@ impl<S: MatrixStorage, Mode: HashPath, H: SketchHasher> SketchAnalytics
     type Params = MatrixParams;
     type Data = ();
 
-    fn theoretical_memory_bytes(params: &MatrixParams, _: &()) -> usize {
-        CountMinSketch::<S, Mode>::theoretical_memory_bytes(params.rows, params.cols)
+    fn theoretical_memory_bytes(params: &MatrixParams, _: &()) -> Option<usize> {
+        Some(CountMinSketch::<S, Mode>::theoretical_memory_bytes(
+            params.rows,
+            params.cols,
+        ))
     }
 
     fn theoretical_update_ops(params: &MatrixParams, _: &()) -> f64 {
@@ -214,8 +217,11 @@ impl<S: MatrixStorage, Mode: HashPath, H: SketchHasher> SketchAnalytics
     type Params = MatrixParams;
     type Data = ();
 
-    fn theoretical_memory_bytes(params: &MatrixParams, _: &()) -> usize {
-        CountSketch::<S, Mode>::theoretical_memory_bytes(params.rows, params.cols)
+    fn theoretical_memory_bytes(params: &MatrixParams, _: &()) -> Option<usize> {
+        Some(CountSketch::<S, Mode>::theoretical_memory_bytes(
+            params.rows,
+            params.cols,
+        ))
     }
 
     fn theoretical_update_ops(params: &MatrixParams, _: &()) -> f64 {
@@ -301,10 +307,12 @@ impl<H: SketchHasher> SketchAnalytics for CountSketchWithL2Norm<H> {
     type Params = MatrixParams;
     type Data = ();
 
-    fn theoretical_memory_bytes(params: &MatrixParams, _: &()) -> usize {
-        CountSketchWithL2Norm::<crate::DefaultXxHasher>::theoretical_memory_bytes(
-            params.rows,
-            params.cols,
+    fn theoretical_memory_bytes(params: &MatrixParams, _: &()) -> Option<usize> {
+        Some(
+            CountSketchWithL2Norm::<crate::DefaultXxHasher>::theoretical_memory_bytes(
+                params.rows,
+                params.cols,
+            ),
         )
     }
 
@@ -393,8 +401,8 @@ mod experimental {
         type Params = CountMinHllParams;
         type Data = ();
 
-        fn theoretical_memory_bytes(params: &CountMinHllParams, _: &()) -> usize {
-            size_of::<Self>() + ((params.rows * params.cols) << params.precision)
+        fn theoretical_memory_bytes(params: &CountMinHllParams, _: &()) -> Option<usize> {
+            Some(size_of::<Self>() + ((params.rows * params.cols) << params.precision))
         }
 
         fn theoretical_update_ops(params: &CountMinHllParams, _: &()) -> f64 {
@@ -459,8 +467,8 @@ mod experimental {
         type Params = MicroCmParams;
         type Data = MicroCmData;
 
-        fn theoretical_memory_bytes(params: &MicroCmParams, _: &MicroCmData) -> usize {
-            size_of::<Self>() + 4 * params.rows * params.cols * (params.t + 7).div_ceil(4)
+        fn theoretical_memory_bytes(params: &MicroCmParams, _: &MicroCmData) -> Option<usize> {
+            Some(size_of::<Self>() + 4 * params.rows * params.cols * (params.t + 7).div_ceil(4))
         }
 
         fn theoretical_update_ops(params: &MicroCmParams, data: &MicroCmData) -> f64 {

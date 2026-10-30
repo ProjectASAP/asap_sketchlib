@@ -32,17 +32,17 @@ fn memory_is_exact_for_vector_storage() {
         let cm = CmRegular::with_dimensions(p.rows, p.cols);
         assert_eq!(
             <CmRegular as SketchAnalytics>::theoretical_memory_bytes(&p, &()),
-            cm.memory_bytes()
+            Some(cm.memory_bytes())
         );
         let cs = CsFast::with_dimensions(p.rows, p.cols);
         assert_eq!(
             <CsFast as SketchAnalytics>::theoretical_memory_bytes(&p, &()),
-            cs.memory_bytes()
+            Some(cs.memory_bytes())
         );
         let l2 = CsL2::with_dimensions(p.rows, p.cols);
         assert_eq!(
             <CsL2 as SketchAnalytics>::theoretical_memory_bytes(&p, &()),
-            l2.memory_bytes()
+            Some(l2.memory_bytes())
         );
     }
 }
@@ -432,7 +432,7 @@ mod experimental {
             let sketch = Hll::with_dimensions(p.rows, p.cols, p.precision);
             assert_eq!(
                 <Hll as SketchAnalytics>::theoretical_memory_bytes(&p, &()),
-                sketch.memory_bytes()
+                Some(sketch.memory_bytes())
             );
         }
         for (p, per) in MICRO_SIZES {
@@ -442,7 +442,7 @@ mod experimental {
             };
             assert_eq!(
                 <Micro as SketchAnalytics>::theoretical_memory_bytes(&p, &data),
-                sketch.memory_bytes()
+                Some(sketch.memory_bytes())
             );
         }
     }

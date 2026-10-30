@@ -50,6 +50,7 @@ pub fn l2(keys: &[(u64, u64)]) -> f64 {
 #[cfg(feature = "op-count")]
 #[track_caller]
 pub fn assert_ops_within<R>(what: &str, bound: f64, f: impl FnOnce() -> R) -> R {
+    assert!(bound.is_finite(), "{what}: formula is {bound}");
     let (result, ops) = asap_sketchlib::analytics::ops::count(f);
     assert!(
         ops as f64 <= bound,

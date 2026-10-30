@@ -407,6 +407,7 @@ impl ExponentialHistogramUnivMon {
         // Three cases
         if to_bucket < s_count {
             // Case 1: Both in sketch tier
+            #[cfg(feature = "op-count")]
             crate::analytics::ops::add(self.sketch_buckets[from_bucket].sketch.cells());
             let mut merged = self.sketch_buckets[from_bucket].sketch.clone();
             for i in (from_bucket + 1)..=to_bucket {
@@ -434,6 +435,7 @@ impl ExponentialHistogramUnivMon {
         } else {
             // Case 3: Hybrid — from in sketch, to in map
             let mut merged = UnivMon::new(self.heap_size, self.rows, self.cols, self.layers);
+            #[cfg(feature = "op-count")]
             crate::analytics::ops::add(merged.cells());
             for i in from_bucket..s_count {
                 crate::analytics::ops::add(1);

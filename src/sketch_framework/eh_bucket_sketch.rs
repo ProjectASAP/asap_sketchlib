@@ -84,6 +84,7 @@ impl EhBucketSketch {
 
     /// `C_in`: the cells a clone of this sketch copies, its heap bytes over
     /// its cell bytes.
+    #[cfg(feature = "op-count")]
     pub(crate) fn cells(&self) -> usize {
         use crate::analytics::frameworks::{InnerSketch, heap_cells};
         let heap = self.memory_bytes() - size_of::<Self>();

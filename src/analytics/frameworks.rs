@@ -29,11 +29,12 @@ pub trait InnerSketch: SketchAnalytics + Sized {
     /// `C_in`: the cells a clone or clear of one state touches, its heap
     /// bytes over [`Self::cell_bytes`].
     fn theoretical_cells(params: &Self::Params, data: &Self::Data) -> f64 {
-        let bytes = Self::theoretical_memory_bytes(params, data);
-        if bytes == usize::MAX {
-            return f64::INFINITY;
+        match Self::theoretical_memory_bytes(params, data) {
+            Some(bytes) if bytes < usize::MAX => {
+                bytes.saturating_sub(size_of::<Self>()) as f64 / Self::cell_bytes(params) as f64
+            }
+            _ => f64::INFINITY,
         }
-        bytes.saturating_sub(size_of::<Self>()) as f64 / Self::cell_bytes(params) as f64
     }
 
     /// Whether merging states cloned from one prototype or built from one
@@ -246,17 +247,11 @@ macro_rules! on_cell {
 }
 
 impl Cell<'_> {
-    /// `mem_in`.
-    pub(crate) fn memory(self, data: &CellData) -> usize {
+    /// `mem_in − size_of::<Inner>()`, the heap bytes of one state.
+    pub(crate) fn heap(self, data: &CellData) -> Option<usize> {
         on_cell!(self, data, |T, p, d| {
             <T as SketchAnalytics>::theoretical_memory_bytes(p, d)
-        })
-    }
-
-    /// `mem_in − size_of::<Inner>()`, the heap bytes of one state.
-    pub(crate) fn heap(self, data: &CellData) -> usize {
-        on_cell!(self, data, |T, p, d| {
-            <T as SketchAnalytics>::theoretical_memory_bytes(p, d).saturating_sub(size_of::<T>())
+                .map(|bytes| bytes.saturating_sub(size_of::<T>()))
         })
     }
 
@@ -378,8 +373,9 @@ impl<S: NitroInner> SketchAnalytics for NitroBatch<S> {
     type Params = NitroParams;
     type Data = NitroData;
 
-    fn theoretical_memory_bytes(params: &NitroParams, _: &NitroData) -> usize {
-        size_of::<Self>() + S::theoretical_memory_bytes(&params.inner, &()) - size_of::<S>()
+    fn theoretical_memory_bytes(params: &NitroParams, _: &NitroData) -> Option<usize> {
+        let inner = S::theoretical_memory_bytes(&params.inner, &())?;
+        Some(size_of::<Self>() + inner - size_of::<S>())
     }
 
     /// Average per update of a batch.
@@ -465,7 +461,7 @@ impl<P: Default> Default for TumblingParams<P> {
 pub struct TumblingData<D> {
     /// `t`, the closed windows a query merges; `max_windows` when unknown.
     pub windows: Option<usize>,
-    /// `b`, the window boundaries one update crosses; 1 when unknown.
+    /// `b`, the window boundaries one update crosses; unbounded when unknown.
     pub boundaries: Option<u64>,
     /// The inner data of each window's state.
     pub inner: D,
@@ -494,22 +490,24 @@ where
     type Params = TumblingParams<S::Params>;
     type Data = TumblingData<S::Data>;
 
-    fn theoretical_memory_bytes(params: &Self::Params, data: &Self::Data) -> usize {
+    fn theoretical_memory_bytes(params: &Self::Params, data: &Self::Data) -> Option<usize> {
         let states = tumbling_states(params);
         let heap =
-            S::theoretical_memory_bytes(&params.inner, &data.inner).saturating_sub(size_of::<S>());
+            S::theoretical_memory_bytes(&params.inner, &data.inner)?.saturating_sub(size_of::<S>());
         let closed_slots = vec_slots(params.max_windows, params.max_windows + 1);
         let free_slots = vec_slots(params.pool_initial_size, states);
-        size_of::<Self>()
-            .saturating_add(
-                closed_slots.saturating_mul(crate::tumbling::closed_window_bytes::<S>()),
-            )
-            .saturating_add(free_slots.saturating_mul(size_of::<S>()))
-            .saturating_add(states.saturating_mul(heap))
+        Some(
+            size_of::<Self>()
+                .saturating_add(
+                    closed_slots.saturating_mul(crate::tumbling::closed_window_bytes::<S>()),
+                )
+                .saturating_add(free_slots.saturating_mul(size_of::<S>()))
+                .saturating_add(states.saturating_mul(heap)),
+        )
     }
 
     fn theoretical_update_ops(params: &Self::Params, data: &Self::Data) -> f64 {
-        let boundaries = data.boundaries.unwrap_or(1) as f64;
+        let boundaries = data.boundaries.map_or(f64::INFINITY, |b| b as f64);
         let boundary = 4.0
             + 2.0 * params.max_windows as f64
             + S::theoretical_cells(&params.inner, &data.inner);
@@ -562,8 +560,16 @@ where
 /// One sketch of a HashSketchEnsemble and its parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnsembleCell {
-    CountMin(MatrixParams),
-    CountSketch(MatrixParams),
+    /// A Count-Min on `Vector2D` storage of `counter_bytes`-byte counters.
+    CountMin {
+        shape: MatrixParams,
+        counter_bytes: usize,
+    },
+    /// A Count Sketch on `Vector2D` storage of `counter_bytes`-byte counters.
+    CountSketch {
+        shape: MatrixParams,
+        counter_bytes: usize,
+    },
     HllErtl(HllParams),
     HllClassic(HllParams),
     HllHip(HllParams),
@@ -572,17 +578,32 @@ pub enum EnsembleCell {
 impl EnsembleCell {
     fn cell(&self) -> Cell<'_> {
         match self {
-            Self::CountMin(p) => Cell::CountMin(p),
-            Self::CountSketch(p) => Cell::CountSketch(p),
+            Self::CountMin { shape, .. } => Cell::CountMin(shape),
+            Self::CountSketch { shape, .. } => Cell::CountSketch(shape),
             Self::HllErtl(p) => Cell::HllErtl(p),
             Self::HllClassic(p) => Cell::HllClassic(p),
             Self::HllHip(p) => Cell::HllHip(p),
         }
     }
 
-    /// Whether the ensemble boxes this sketch.
-    fn boxed(&self) -> bool {
-        matches!(self, Self::CountMin(_) | Self::CountSketch(_))
+    /// Bytes this sketch holds beyond its `EnsembleSketch` slot: a boxed
+    /// matrix's struct and counters, or an inline HyperLogLog's heap.
+    fn bytes(&self, data: &CellData) -> Option<usize> {
+        let matrix = |inline: usize, shape: &MatrixParams, counter_bytes: usize| {
+            let counters = shape.rows.saturating_mul(shape.cols);
+            Some(inline.saturating_add(counters.saturating_mul(counter_bytes)))
+        };
+        match self {
+            Self::CountMin {
+                shape,
+                counter_bytes,
+            } => matrix(size_of::<CmCell>(), shape, *counter_bytes),
+            Self::CountSketch {
+                shape,
+                counter_bytes,
+            } => matrix(size_of::<CsCell>(), shape, *counter_bytes),
+            _ => self.cell().heap(data),
+        }
     }
 }
 
@@ -597,7 +618,10 @@ pub struct EnsembleParams {
 impl Default for EnsembleParams {
     fn default() -> Self {
         Self {
-            sketches: vec![EnsembleCell::CountMin(MatrixParams::default())],
+            sketches: vec![EnsembleCell::CountMin {
+                shape: MatrixParams::default(),
+                counter_bytes: size_of::<i32>(),
+            }],
             index: 0,
         }
     }
@@ -609,17 +633,10 @@ impl<H: SketchHasher<HashType = crate::MatrixHash> + 'static> SketchAnalytics
     type Params = EnsembleParams;
     type Data = CellData;
 
-    fn theoretical_memory_bytes(params: &EnsembleParams, data: &CellData) -> usize {
-        params.sketches.iter().fold(
+    fn theoretical_memory_bytes(params: &EnsembleParams, data: &CellData) -> Option<usize> {
+        params.sketches.iter().try_fold(
             size_of::<Self>() + params.sketches.len() * size_of::<crate::EnsembleSketch>(),
-            |bytes, sketch| {
-                let cell = sketch.cell();
-                bytes.saturating_add(if sketch.boxed() {
-                    cell.memory(data)
-                } else {
-                    cell.heap(data)
-                })
-            },
+            |bytes, sketch| Some(bytes.saturating_add(sketch.bytes(data)?)),
         )
     }
 

@@ -109,10 +109,10 @@ fn kll_memory_bounds_memory_bytes<S: KllLike>() {
                 };
                 let held = sketch.bytes();
                 assert!(
-                    S::theoretical_memory_bytes(&p, &stream(n)) >= held,
+                    S::theoretical_memory_bytes(&p, &stream(n)).unwrap() >= held,
                     "{p:?} n={n} parts={parts}"
                 );
-                assert!(S::theoretical_memory_bytes(&p, &StreamData::default()) >= held);
+                assert!(S::theoretical_memory_bytes(&p, &StreamData::default()).unwrap() >= held);
             }
         }
     }
@@ -480,14 +480,12 @@ fn ddsketch_memory_bounds_memory_bytes() {
             for merged in [false, true] {
                 let sketch = dd_state(alpha, &values, merged);
                 let p = DdParams { alpha };
-                assert!(
-                    <DdSketch as SketchAnalytics>::theoretical_memory_bytes(&p, &dd_data(&values))
-                        >= sketch.memory_bytes()
-                );
-                assert!(
-                    <DdSketch as SketchAnalytics>::theoretical_memory_bytes(&p, &DdData::default())
-                        >= sketch.memory_bytes()
-                );
+                let known =
+                    <DdSketch as SketchAnalytics>::theoretical_memory_bytes(&p, &dd_data(&values));
+                assert!(known.unwrap() >= sketch.memory_bytes());
+                let unknown =
+                    <DdSketch as SketchAnalytics>::theoretical_memory_bytes(&p, &DdData::default());
+                assert!(unknown.unwrap() >= sketch.memory_bytes());
             }
         }
     }
@@ -595,13 +593,16 @@ mod uniform {
                 let alone = sampler.clone();
                 sampler.merge(&other).unwrap();
                 for (sampler, n) in [(sampler, n), (alone, n - n.div_ceil(3))] {
+                    let bound =
+                        UniformSampling::theoretical_memory_bytes(&p, &StreamData { n: Some(n) });
                     assert!(
-                        UniformSampling::theoretical_memory_bytes(&p, &StreamData { n: Some(n) })
-                            >= sampler.memory_bytes(),
+                        bound.unwrap() >= sampler.memory_bytes(),
                         "rho={sample_rate} n={n}"
                     );
                 }
             }
+            let unknown = UniformSampling::theoretical_memory_bytes(&p, &StreamData::default());
+            assert_eq!(unknown, None);
         }
     }
 

@@ -28,7 +28,8 @@ signals a backwards-compatible change.
   `EnsembleSketch`, and `SpaceSaving::theoretical_memory_bytes`,
   `Bloom::theoretical_memory_bytes(rows, cols)`,
   `UnivMonTwoTier::theoretical_memory_bytes` and
-  `UnivMonQ::theoretical_memory_bytes(config)`.
+  `UnivMonQ::theoretical_memory_bytes(config)`, which also bounds a cloned
+  or decoded `UnivMonQ`.
 - **`SetAggregator::contains`**: whether a key is in the set.
 - **`TumblingWindowSketch::tumbling_memory_bytes` and `tumbling_cells`**,
   provided methods `TumblingWindow::memory_bytes` and the `op-count`

@@ -218,8 +218,12 @@ impl<T: NumericalValue> SketchAnalytics for Kll<T> {
     type Params = KllParams;
     type Data = StreamData;
 
-    fn theoretical_memory_bytes(params: &KllParams, data: &StreamData) -> usize {
-        Kll::<T>::theoretical_memory_bytes(params.k, params.m, data.n().unwrap_or(usize::MAX))
+    fn theoretical_memory_bytes(params: &KllParams, data: &StreamData) -> Option<usize> {
+        Some(Kll::<T>::theoretical_memory_bytes(
+            params.k,
+            params.m,
+            data.n().unwrap_or(usize::MAX),
+        ))
     }
 
     fn theoretical_update_ops(params: &KllParams, data: &StreamData) -> f64 {
@@ -264,13 +268,15 @@ impl<T: NumericalValue> SketchAnalytics for KllDynamic<T> {
     type Data = StreamData;
 
     /// `size_of::<Self>() + size_of::<T>()·max(3k, 2(R̂ + 1)) + 16·(L̂ + 1)`.
-    fn theoretical_memory_bytes(params: &KllParams, data: &StreamData) -> usize {
+    fn theoretical_memory_bytes(params: &KllParams, data: &StreamData) -> Option<usize> {
         let (k, _) = normalized_k_m(params.k, params.m);
         let shape = KllShape::new(params, data.n());
         let items = (3 * k).max(2 * (shape.retained.saturating_add(1)));
-        size_of::<Self>()
-            .saturating_add(items.saturating_mul(size_of::<T>()))
-            .saturating_add(2 * (shape.levels + 1) * size_of::<usize>())
+        Some(
+            size_of::<Self>()
+                .saturating_add(items.saturating_mul(size_of::<T>()))
+                .saturating_add(2 * (shape.levels + 1) * size_of::<usize>()),
+        )
     }
 
     fn theoretical_update_ops(params: &KllParams, data: &StreamData) -> f64 {
@@ -339,11 +345,11 @@ const DD_INTERPOLATED_ABSOLUTE_CONTRACT: &str = "ddsketch_interpolated_absolute_
 
 /// `B`, the most bucket slots both stores of one state hold.
 fn dd_slots(params: &DdParams, data: &DdData) -> f64 {
-    let bytes = <DdSketch as SketchAnalytics>::theoretical_memory_bytes(params, data);
-    if bytes == usize::MAX {
-        f64::INFINITY
-    } else {
-        ((bytes - size_of::<DdSketch>()) / size_of::<u64>()) as f64
+    match <DdSketch as SketchAnalytics>::theoretical_memory_bytes(params, data) {
+        Some(bytes) if bytes < usize::MAX => {
+            ((bytes - size_of::<DdSketch>()) / size_of::<u64>()) as f64
+        }
+        _ => f64::INFINITY,
     }
 }
 
@@ -351,15 +357,15 @@ impl SketchAnalytics for DdSketch {
     type Params = DdParams;
     type Data = DdData;
 
-    fn theoretical_memory_bytes(params: &DdParams, data: &DdData) -> usize {
-        DdSketch::theoretical_memory_bytes(
+    fn theoretical_memory_bytes(params: &DdParams, data: &DdData) -> Option<usize> {
+        Some(DdSketch::theoretical_memory_bytes(
             params.alpha,
             data.n
                 .map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX)),
             data.min_magnitude.unwrap_or(0.0),
             data.max_magnitude.unwrap_or(f64::INFINITY),
             data.negatives.unwrap_or(true),
-        )
+        ))
     }
 
     fn theoretical_update_ops(_: &DdParams, _: &DdData) -> f64 {
@@ -459,14 +465,15 @@ mod uniform {
         type Data = StreamData;
 
         /// `size_of::<Self>() + 16·max(4, 2s)`.
-        fn theoretical_memory_bytes(params: &UniformParams, data: &StreamData) -> usize {
+        fn theoretical_memory_bytes(params: &UniformParams, data: &StreamData) -> Option<usize> {
+            data.n?;
             let slots = (2.0 * sample_size(params, data)).max(4.0);
             let bytes = size_of::<Self>() as f64 + 16.0 * slots;
-            if bytes >= usize::MAX as f64 {
+            Some(if bytes >= usize::MAX as f64 {
                 usize::MAX
             } else {
                 bytes as usize
-            }
+            })
         }
 
         fn theoretical_update_ops(params: &UniformParams, data: &StreamData) -> f64 {
