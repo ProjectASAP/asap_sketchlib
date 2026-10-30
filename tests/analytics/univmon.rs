@@ -149,6 +149,7 @@ fn distinct_trials<P: Pyramid>(salt: u64, params: &P::Params, keys: usize, delta
     let data = distinct(keys as u64);
     let bound = P::theoretical_error(StatisticKind::Distinct, params, &data, Some(delta)).unwrap();
     assert_eq!(bound.metric, ErrorMetric::Relative);
+    assert!(bound.epsilon < 0.15, "{bound:?}");
     let trials = 150;
     let mut failures = 0;
     for trial in 0..trials {
@@ -205,12 +206,12 @@ fn l2_trials<P: Pyramid>(salt: u64, params: &P::Params) {
 #[test]
 fn univmon_distinct_is_within_relative_epsilon_with_probability_one_minus_delta() {
     let params = UnivMonParams {
-        heap_size: 32,
+        heap_size: 256,
         rows: 3,
         cols: 256,
         layers: 7,
     };
-    distinct_trials::<UnivMon>(1, &params, 1000, 0.3);
+    distinct_trials::<UnivMon>(1, &params, 4000, 0.3);
 }
 
 #[test]
@@ -235,7 +236,7 @@ fn univmon_l2_is_within_relative_epsilon_with_probability_one_minus_delta() {
 #[test]
 fn two_tier_distinct_is_within_relative_epsilon_with_probability_one_minus_delta() {
     let params = TwoTierParams {
-        heap_size: 32,
+        heap_size: 256,
         elephant_layers: 2,
         elephant_rows: 3,
         elephant_cols: 256,
@@ -243,7 +244,7 @@ fn two_tier_distinct_is_within_relative_epsilon_with_probability_one_minus_delta
         mouse_cols: 64,
         layers: 7,
     };
-    distinct_trials::<UnivMonTwoTier>(3, &params, 1000, 0.3);
+    distinct_trials::<UnivMonTwoTier>(3, &params, 4000, 0.3);
 }
 
 #[test]
@@ -512,7 +513,7 @@ fn univmonq(config: UnivMonQConfig, rng: &mut StdRng) -> UnivMonQ {
 
 const ITEM_CONFIG: UnivMonQConfig = UnivMonQConfig {
     layers: 2,
-    top_layer_cols: 16,
+    top_layer_cols: 128,
     cols_halving_period: 0,
     rows: 3,
     counter_bits: 32,
@@ -521,9 +522,11 @@ const ITEM_CONFIG: UnivMonQConfig = UnivMonQConfig {
     seed_index: 5,
 };
 
+/// The two heaviest keys each carry more than `ε·‖f‖₂`, and 12000 unit keys
+/// put about 47 updates in every column of each layer.
 #[test]
 fn univmonq_item_frequency_is_off_by_at_most_epsilon_l2_with_probability_one_minus_delta() {
-    let delta = 0.05;
+    let delta = 0.2;
     let bound = UnivMonQ::<asap_sketchlib::DefaultXxHasher>::theoretical_error(
         StatisticKind::ItemFrequency,
         &ITEM_CONFIG,
@@ -532,12 +535,12 @@ fn univmonq_item_frequency_is_off_by_at_most_epsilon_l2_with_probability_one_min
     )
     .unwrap();
     assert_eq!(bound.metric, ErrorMetric::L2);
-    assert!((bound.epsilon - (1.0 / 16.0 / max_row_failure(3, delta)).sqrt()).abs() < 1e-12);
+    assert!((bound.epsilon - (1.0 / 128.0 / max_row_failure(3, delta)).sqrt()).abs() < 1e-12);
     let trials = 150;
     let mut failures = 0;
     for trial in 0..trials {
         let mut rng = rng(8, trial);
-        let values = mixed_keys(&mut rng, 30, 200, 12_000);
+        let values = mixed_keys(&mut rng, 30, 100, 12_000);
         let mut sketch = univmonq(ITEM_CONFIG, &mut rng);
         for &(id, count) in &values {
             let value = id as f64;
@@ -545,7 +548,8 @@ fn univmonq_item_frequency_is_off_by_at_most_epsilon_l2_with_probability_one_min
                 sketch.update(&value);
             }
         }
-        let (target, truth) = values[(trial % 30) as usize];
+        let (target, truth) = values[(trial % 2) as usize];
+        assert!(truth as f64 > 1.5 * bound.epsilon * l2(&values));
         let estimate = sketch.estimate_frequency(target as f64) as f64;
         if (estimate - truth as f64).abs() > bound.epsilon * l2(&values) {
             failures += 1;
@@ -569,11 +573,14 @@ const SAMPLE_CONFIG: UnivMonQConfig = UnivMonQConfig {
     seed_index: 5,
 };
 
-/// Distinct uniform values, so no value is frequent, `F̂₂ ≤ 2n` and the
-/// heavy set is empty.
+/// Distinct values in [0, 1) that arrive in increasing order, so no value is
+/// frequent, `F̂₂ ≤ 2n`, the heavy set is empty, and a sample biased toward
+/// any part of the stream misses the quantiles.
 fn diffuse(rng: &mut StdRng, n: usize) -> (UnivMonQ, Vec<f64>) {
     let mut sketch = univmonq(SAMPLE_CONFIG, rng);
-    let values: Vec<f64> = (0..n).map(|_| rng.random::<f64>()).collect();
+    let values: Vec<f64> = (0..n)
+        .map(|i| (i as f64 + rng.random::<f64>()) / n as f64)
+        .collect();
     for value in &values {
         sketch.update(value);
     }
@@ -669,7 +676,10 @@ fn univmonq_bounds_need_their_conditions() {
         ..c
     };
     for statistic in [StatisticKind::Quantile, StatisticKind::Rank] {
-        assert!(Q::theoretical_error(statistic, &c, &full, None).is_some());
+        // Rounding to a count, or to the rank ⌈qn⌉, adds 1/n.
+        let bound = Q::theoretical_error(statistic, &c, &full, None).unwrap();
+        let sampled = ((2.0f64 / 0.01).ln() / 512.0).sqrt();
+        assert!((bound.epsilon - sampled - 1e-4).abs() < 1e-12, "{bound:?}");
         assert!(Q::theoretical_error(statistic, &c, &concentrated, None).is_some());
         assert_eq!(
             Q::theoretical_error(statistic, &more_samples, &concentrated, None),
@@ -762,7 +772,8 @@ fn univmonq_sizing_meets_the_target_and_one_step_smaller_does_not() {
             );
         }
     }
-    // M = 150 at (0.1, 0.1): `F̂₂·M < n² = 10^8` needs `F̂₂ < 666 667`.
+    // M = ⌈ln 20/(2·0.0999²)⌉ = 151 at (0.1, 0.1) and n = 10^4:
+    // `F̂₂·M < n² = 10^8` needs `F̂₂ < 662 252`.
     let sized = |f2: f64| {
         let data = UnivMonQData {
             n: Some(10_000),
@@ -772,8 +783,8 @@ fn univmonq_sizing_meets_the_target_and_one_step_smaller_does_not() {
         assert!(Q::theoretical_error(StatisticKind::Quantile, &c, &data, Some(0.1)).is_some());
         Some(c.ordered_samples)
     };
-    assert_eq!(sized(600_000.0), Some(150));
-    assert_eq!(sized(666_667.0), None);
+    assert_eq!(sized(600_000.0), Some(151));
+    assert_eq!(sized(662_252.0), None);
 }
 
 const Q_SIZES: [UnivMonQConfig; 2] = [

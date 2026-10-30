@@ -176,12 +176,12 @@ fn layer_update_ops(rows: usize, heap_size: usize) -> f64 {
 }
 
 /// One layer's share of a merge: the counters, the two flags, both heaps
-/// read into a set, the heap cleared, each of up to `2c` keys re-estimated
-/// into it, and the flag written.
+/// read into a set, the heap's `c` residents cleared, each of up to `2c` keys
+/// re-estimated into it, and the flag written.
 fn layer_merge_ops(rows: usize, cols: usize, heap_size: usize, keys: f64) -> f64 {
     (3 * rows * cols + rows) as f64
-        + 6.0
-        + keys * (4.0 + 2.0 * (1.0 + est_count_sketch(rows) + heap_update_ops(heap_size)))
+        + 3.0
+        + keys * (6.0 + 2.0 * (1.0 + est_count_sketch(rows) + heap_update_ops(heap_size)))
 }
 
 /// The readouts both pyramids share, from layer 0's dimensions.
@@ -444,8 +444,8 @@ fn heavy_set_empty(samples: usize, data: &UnivMonQData) -> Option<bool> {
     Some(f2 >= 0.0 && f2 * (samples as f64) < n * n)
 }
 
-/// Quantile and Rank: `ε = √(ln(2/δ)/(2·min(M, n)))`, `δ` chosen, when
-/// `F̂₂·M < n²`.
+/// Quantile and Rank: `ε = √(ln(2/δ)/(2·min(M, n))) + 1/n`, `δ` chosen,
+/// when `F̂₂·M < n²`.
 fn sample_error(
     metric: ErrorMetric,
     config: &UnivMonQConfig,
@@ -453,11 +453,12 @@ fn sample_error(
     delta: Option<f64>,
 ) -> Option<ErrorBound> {
     (config.ordered_samples > 0 && heavy_set_empty(config.ordered_samples, data)?).then_some(())?;
-    let sampled = (config.ordered_samples as f64).min(data.n? as f64);
+    let n = data.n? as f64;
+    let sampled = (config.ordered_samples as f64).min(n);
     let delta = delta.unwrap_or(DEFAULT_DELTA);
     (sampled > 0.0 && delta > 0.0 && delta <= 1.0).then(|| ErrorBound {
         metric,
-        epsilon: ((2.0 / delta).ln() / (2.0 * sampled)).sqrt(),
+        epsilon: ((2.0 / delta).ln() / (2.0 * sampled)).sqrt() + 1.0 / n,
         delta: Some(delta),
         contract: SAMPLE_CONTRACT,
     })
@@ -503,11 +504,11 @@ impl<H: SketchHasher> SketchAnalytics for UnivMonQ<H> {
         let k = config.heap_size as f64;
         let levels = floor_log2(config.heap_size);
         let sample = if config.ordered_samples > 0 {
-            8.0 + 7.0 * floor_log2(config.ordered_samples)
+            11.0 + 7.0 * floor_log2(config.ordered_samples)
         } else {
             0.0
         };
-        18.0 + d + est_count_sketch(config.rows) + 7.0 * levels + k * (9.0 + 7.0 * levels) + sample
+        21.0 + d + est_count_sketch(config.rows) + 7.0 * levels + k * (12.0 + 7.0 * levels) + sample
     }
 
     fn theoretical_query_ops(
@@ -530,7 +531,7 @@ impl<H: SketchHasher> SketchAnalytics for UnivMonQ<H> {
             + 2.0 * lg(k)
             + 2.0 * floor_log2(config.heap_size);
         let layers = config.layers as f64 * (4.0 + k * per_key);
-        let samples = m * (9.0 + 7.0 * floor_log2(config.ordered_samples));
+        let samples = m * (12.0 + 7.0 * floor_log2(config.ordered_samples));
         Some(6.0 + counters + layers + samples)
     }
 
@@ -562,10 +563,11 @@ impl<H: SketchHasher> SketchAnalytics for UnivMonQ<H> {
         match statistic {
             StatisticKind::ItemFrequency => univmonq_item_params_for(epsilon, delta),
             StatisticKind::Quantile | StatisticKind::Rank => {
-                if !is_positive(epsilon) || !is_positive(delta) {
+                let room = epsilon - 1.0 / data.n? as f64;
+                if !is_positive(room) || !is_positive(delta) {
                     return None;
                 }
-                let samples = ((2.0 / delta).ln() / (2.0 * epsilon * epsilon)).ceil();
+                let samples = ((2.0 / delta).ln() / (2.0 * room * room)).ceil();
                 if !samples.is_finite() || samples > u32::MAX as f64 {
                     return None;
                 }

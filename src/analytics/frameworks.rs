@@ -835,14 +835,26 @@ mod octo {
             )
     }
 
+    /// `τ_min`: the smallest threshold a worker holds, the initial one or the
+    /// adaptive floor, within `[1, 127]`.
+    pub fn octo_min_threshold(config: &OctoConfig) -> u32 {
+        let initial = config.threshold.get();
+        config
+            .adaptive
+            .as_ref()
+            .map_or(initial, |adaptive| {
+                initial.min(
+                    adaptive
+                        .min_threshold
+                        .clamp(1, OCTO_MAX_PROMOTION_THRESHOLD),
+                )
+            })
+            .clamp(1, OCTO_MAX_PROMOTION_THRESHOLD)
+    }
+
     /// Worker ops of one update: `d` counter writes; the parent receives at
     /// most `d/τ_min` writes per update on average.
     pub fn octo_update_ops(rows: usize, config: &OctoConfig) -> (f64, f64) {
-        let min = config
-            .adaptive
-            .as_ref()
-            .map_or(config.threshold.get(), |adaptive| adaptive.min_threshold)
-            .max(1);
-        (rows as f64, rows as f64 / min as f64)
+        (rows as f64, rows as f64 / octo_min_threshold(config) as f64)
     }
 }

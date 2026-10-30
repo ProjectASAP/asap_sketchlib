@@ -7,6 +7,7 @@ use asap_sketchlib::{
     CountMinSketch, CountSketch, CountSketchWithL2Norm, DataInput, ErrorMetric, FastPath,
     RegularPath, SketchAnalytics, StatisticKind, Vector2D,
 };
+use rand::Rng;
 
 type CmRegular = CountMinSketch<Vector2D<i64>, RegularPath>;
 type CmFast = CountMinSketch<Vector2D<i64>, FastPath>;
@@ -168,6 +169,80 @@ fn l2_norm_is_within_relative_epsilon_with_probability_one_minus_delta() {
     );
 }
 
+/// The fraction of key pairs that share a column of a one-row `FastPath`
+/// Count-Min of `cols` columns: `Σ c_j(c_j − 1)` over `K(K − 1)`, where the
+/// estimates of the `K` unit keys sum to `Σ c_j²`.
+fn fast_path_pair_collision_rate(cols: usize, salt: u64) -> f64 {
+    let keys = 20_000u64;
+    let mut rng = rng(salt, cols as u64);
+    let ids: Vec<u64> = (0..keys).map(|_| rng.random()).collect();
+    let mut sketch = CmFast::with_dimensions(1, cols);
+    for &id in &ids {
+        sketch.update_weighted(&key(id), 1);
+    }
+    let squares: i64 = ids.iter().map(|&id| sketch.estimate(&key(id))).sum();
+    (squares as f64 - keys as f64) / (keys as f64 * (keys - 1) as f64)
+}
+
+#[test]
+fn fast_path_non_power_of_two_widths_collide_more_than_one_over_w() {
+    // At w = 48 a 6-bit slice modulo 48 puts 16 columns at twice the rate,
+    // so the pair collision rate is (w + 3r)/(w + r)² = 9/(8w), above 1/w.
+    for cols in [48usize, 40, 100] {
+        let w = cols as f64;
+        let r = (cols.next_power_of_two() - cols) as f64;
+        let rate = fast_path_pair_collision_rate(cols, 4);
+        let exact = (w + 3.0 * r) / ((w + r) * (w + r));
+        assert!(
+            (rate / exact - 1.0).abs() < 0.03,
+            "w={cols}: {rate} vs {exact}"
+        );
+        let q = asap_sketchlib::analytics::count_matrix::collision_probability(cols, true);
+        assert!(rate <= q * 1.03, "w={cols}: {rate} above q={q}");
+        let p = MatrixParams { rows: 3, cols };
+        let bound = CmFast::theoretical_error(StatisticKind::ItemFrequency, &p, &(), None).unwrap();
+        assert!(
+            (bound.epsilon - std::f64::consts::E * exact).abs() < 1e-12,
+            "w={cols}: {bound:?}"
+        );
+        assert!(bound.epsilon >= std::f64::consts::E * rate / 1.03);
+    }
+    let rate = fast_path_pair_collision_rate(48, 5);
+    assert!(rate > 1.08 / 48.0, "{rate}");
+    assert_eq!(
+        asap_sketchlib::analytics::count_matrix::collision_probability(48, true),
+        9.0 / (8.0 * 48.0)
+    );
+}
+
+#[test]
+fn fast_path_count_min_at_a_non_power_of_two_width_overcounts_by_at_most_epsilon_n() {
+    let p = MatrixParams { rows: 2, cols: 48 };
+    let bound = CmFast::theoretical_error(StatisticKind::ItemFrequency, &p, &(), None).unwrap();
+    let delta = bound.delta.unwrap();
+    let trials = 600;
+    let mut failures = 0;
+    for trial in 0..trials {
+        let mut rng = rng(6, trial);
+        let keys = mixed_keys(&mut rng, 50, 64, 3000);
+        let (target, truth) = keys[(trial % 50) as usize];
+        let mut sketch = CmFast::with_dimensions(p.rows, p.cols);
+        for &(id, w) in &keys {
+            sketch.update_weighted(&key(id), w as i64);
+        }
+        let estimate = sketch.estimate(&key(target));
+        assert!(estimate >= truth as i64, "Count-Min undercounted");
+        if (estimate - truth as i64) as f64 > bound.epsilon * l1(&keys) {
+            failures += 1;
+        }
+    }
+    assert!(
+        failures <= allowed_failures(trials as usize, delta),
+        "{failures}/{trials} beyond eps={} at delta={delta}",
+        bound.epsilon
+    );
+}
+
 #[test]
 fn count_min_sizing_meets_the_target_and_one_step_smaller_does_not() {
     for (epsilon, delta) in [(0.1, 0.1), (0.01, 0.01), (0.001, 1e-4)] {
@@ -198,9 +273,14 @@ fn count_min_sizing_meets_the_target_and_one_step_smaller_does_not() {
                 cols: if fast { p.cols / 2 } else { p.cols - 1 },
                 ..p
             };
-            let wider_error =
-                CmRegular::theoretical_error(StatisticKind::ItemFrequency, &narrower, &(), None)
-                    .unwrap();
+            let error = |q: &MatrixParams, delta| {
+                if fast {
+                    CmFast::theoretical_error(StatisticKind::ItemFrequency, q, &(), delta)
+                } else {
+                    CmRegular::theoretical_error(StatisticKind::ItemFrequency, q, &(), delta)
+                }
+            };
+            let wider_error = error(&narrower, None).unwrap();
             assert!(wider_error.epsilon > epsilon, "{p:?} is wider than needed");
             if p.rows > 1 {
                 let shallower = MatrixParams {
@@ -208,13 +288,7 @@ fn count_min_sizing_meets_the_target_and_one_step_smaller_does_not() {
                     ..p
                 };
                 assert!(
-                    CmRegular::theoretical_error(
-                        StatisticKind::ItemFrequency,
-                        &shallower,
-                        &(),
-                        Some(delta)
-                    )
-                    .is_none(),
+                    error(&shallower, Some(delta)).is_none(),
                     "{p:?} is deeper than needed"
                 );
             }

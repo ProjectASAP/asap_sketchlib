@@ -165,13 +165,13 @@ signals a backwards-compatible change.
 
 ### Fixed
 
-- **`CountMinSketchFold::new` and `CountSketchFold::new` panic for
-  `full_cols` above 65536** (`MAX_FULL_COLS`). A full column is stored as
+- **Breaking: `CountMinSketchFold::new` and `CountSketchFold::new` panic
+  for `full_cols` above 65536** (`MAX_FULL_COLS`). A full column is stored as
   `u16`, and a wider sketch folded distinct columns together.
 - **`CountMinSketch` Total is `AsIfBuiltOverUnion` in the capability
   table**, not `Exact`: with Nitro sampling enabled it is an unbiased
   estimate.
-- **`Bloom::dimensions_for` meets its target.** It returns
+- **Breaking: `Bloom::dimensions_for` meets its target.** It returns
   `Option<(usize, usize)>`, widens the slices until the exact rate
   `(1 - (1 - 1/cols)^n)^rows` is at most the target, and returns `None` when
   that needs more than `BLOOM_MAX_BITS`, where it used to return the widest

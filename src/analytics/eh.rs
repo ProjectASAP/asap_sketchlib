@@ -118,8 +118,6 @@ impl Default for EhParams {
 pub struct EhData {
     /// `N_w`, the arrivals in the window.
     pub window_arrivals: Option<u64>,
-    /// `D_w`, a lower bound on the distinct keys in the window.
-    pub window_distinct: Option<u64>,
     /// `G`, the most buckets the histogram keeps; from `N_w` when unknown
     /// and merging by count.
     pub buckets: Option<usize>,
@@ -241,17 +239,6 @@ impl SketchAnalytics for ExponentialHistogram {
                     metric: ErrorMetric::L1,
                     epsilon: boundary + inner.epsilon * (1.0 + boundary),
                     delta: inner.delta,
-                    contract: EH_COUNT_CONTRACT,
-                })
-            }
-            (EhCell::Hll(_), StatisticKind::Distinct) => {
-                let boundary = eh_count_epsilon(params.k);
-                let inner = cell.error(statistic, &data.cell, None)?;
-                let share = data.window_arrivals? as f64 / data.window_distinct?.max(1) as f64;
-                Some(ErrorBound {
-                    metric: ErrorMetric::Relative,
-                    epsilon: inner.epsilon + (1.0 + inner.epsilon) * boundary * share,
-                    delta: None,
                     contract: EH_COUNT_CONTRACT,
                 })
             }

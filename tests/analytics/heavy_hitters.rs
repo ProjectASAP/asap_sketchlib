@@ -256,6 +256,19 @@ fn elastic_overcounts_by_at_most_epsilon_n_with_probability_one_minus_delta() {
         for id in unit_stream(&mut rng, &keys) {
             sketch.update(ids[&id].clone());
         }
+        let truths: HashMap<&str, u64> =
+            keys.iter().map(|&(id, w)| (ids[&id].as_str(), w)).collect();
+        for bucket in sketch
+            .heavy
+            .iter()
+            .filter(|b| !b.is_vacant() && !b.eviction)
+        {
+            assert_eq!(
+                sketch.estimate(bucket.flow_id.clone()) as u64,
+                truths[bucket.flow_id.as_str()],
+                "a never-evicted resident is counted exactly"
+            );
+        }
         let (target, truth) = if trial % 2 == 0 {
             keys[(trial / 2 % 50) as usize]
         } else {

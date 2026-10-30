@@ -1693,15 +1693,23 @@ fn validate_config(config: UnivMonQConfig) -> Result<(), UnivMonQError> {
 /// the final write.
 #[inline(always)]
 fn count_binary_heap_push(len: usize) {
-    crate::analytics::ops::add(3 + 2 * binary_heap_levels(len));
+    crate::analytics::ops::add(binary_heap_push_ops(len));
 }
 
-/// Ops a `BinaryHeap` pop counts from `len` entries: the last slot, the root,
-/// its re-read and the final write, plus two child reads and a move per level
-/// down and a parent read and a move per level back up.
+fn binary_heap_push_ops(len: usize) -> usize {
+    3 + 2 * binary_heap_levels(len)
+}
+
+/// Ops a `BinaryHeap` pop counts from `len` entries: the last slot, the root
+/// read and written, two hole reads and two hole writes, two child reads and
+/// a move per level down, and a parent read and a move per level back up.
 #[inline(always)]
 fn count_binary_heap_pop(len: usize) {
-    crate::analytics::ops::add(4 + 5 * binary_heap_levels(len));
+    crate::analytics::ops::add(binary_heap_pop_ops(len));
+}
+
+fn binary_heap_pop_ops(len: usize) -> usize {
+    7 + 5 * binary_heap_levels(len)
 }
 
 #[inline(always)]
@@ -2755,5 +2763,97 @@ mod tests {
         assert!(sketch.is_empty());
         assert_eq!(sketch.config(), tiny_config());
         assert_eq!(sketch.quantile(0.5), None);
+    }
+
+    /// Accesses std's `BinaryHeap::push` makes, one per slot read or write
+    /// and one per hole move, on a max-heap mirrored step by step.
+    fn mirrored_push(data: &mut Vec<u32>, item: u32) -> usize {
+        data.push(item);
+        let mut pos = data.len() - 1;
+        let mut ops = 2;
+        while pos > 0 {
+            let parent = (pos - 1) / 2;
+            ops += 1;
+            if item <= data[parent] {
+                break;
+            }
+            data[pos] = data[parent];
+            ops += 1;
+            pos = parent;
+        }
+        data[pos] = item;
+        ops + 1
+    }
+
+    /// Accesses std's `BinaryHeap::pop` makes: `sift_down_to_bottom`, then
+    /// `sift_up` from where the hole stopped.
+    fn mirrored_pop(data: &mut Vec<u32>) -> usize {
+        let mut item = data.pop().unwrap();
+        let mut ops = 1;
+        if data.is_empty() {
+            return ops;
+        }
+        std::mem::swap(&mut item, &mut data[0]);
+        ops += 3;
+        let (end, element) = (data.len(), data[0]);
+        let (mut pos, mut child) = (0, 1);
+        while child + 2 <= end {
+            ops += 2;
+            child += usize::from(data[child] <= data[child + 1]);
+            data[pos] = data[child];
+            ops += 1;
+            pos = child;
+            child = 2 * pos + 1;
+        }
+        if child + 1 == end {
+            data[pos] = data[child];
+            ops += 1;
+            pos = child;
+        }
+        ops += 2;
+        while pos > 0 {
+            let parent = (pos - 1) / 2;
+            ops += 1;
+            if element <= data[parent] {
+                break;
+            }
+            data[pos] = data[parent];
+            ops += 1;
+            pos = parent;
+        }
+        data[pos] = element;
+        ops + 1
+    }
+
+    #[test]
+    fn binary_heap_op_models_bound_std_push_and_pop() {
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % 64) as u32
+        };
+        let mut worst_pop_slack = usize::MAX;
+        for len in 1..200 {
+            for _ in 0..50 {
+                let mut heap = BinaryHeap::new();
+                let mut mirror = Vec::new();
+                for _ in 0..len {
+                    let item = next();
+                    let ops = mirrored_push(&mut mirror, item);
+                    heap.push(item);
+                    assert!(ops <= binary_heap_push_ops(mirror.len()));
+                }
+                assert_eq!(heap.as_slice(), mirror.as_slice());
+                let ops = mirrored_pop(&mut mirror);
+                heap.pop();
+                assert_eq!(heap.as_slice(), mirror.as_slice());
+                let model = binary_heap_pop_ops(len);
+                assert!(ops <= model, "pop from {len} made {ops}, model {model}");
+                worst_pop_slack = worst_pop_slack.min(model - ops);
+            }
+        }
+        assert!(worst_pop_slack <= 1, "pop model slack {worst_pop_slack}");
     }
 }

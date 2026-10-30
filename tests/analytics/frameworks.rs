@@ -102,10 +102,12 @@ fn hydra_memory_covers_escaped_labels_and_needs_label_bytes() {
     );
 }
 
+/// The three heaviest keys each carry more than `ε·N`, and a Zipf head and
+/// a weighted tail spread colliding mass over every column.
 #[test]
 fn hydra_count_min_frequency_is_within_epsilon_n_with_probability_one_minus_delta() {
-    let (rows, cols, arity) = (3, 64, 2);
-    let cell = MatrixParams { rows: 4, cols: 32 };
+    let (rows, cols, arity) = (3, 512, 1);
+    let cell = MatrixParams { rows: 3, cols: 256 };
     let p = hydra_params(rows, cols, arity, cell);
     let bound = Hydra::theoretical_error(
         StatisticKind::ItemFrequency,
@@ -117,19 +119,21 @@ fn hydra_count_min_frequency_is_within_epsilon_n_with_probability_one_minus_delt
     assert_eq!(bound.metric, ErrorMetric::L1);
     let delta = bound.delta.unwrap();
     let value = DataInput::U64(1);
-    let trials = 300;
+    let trials = 200;
     let mut failures = 0;
     for trial in 0..trials {
         let mut rng = rng(101, trial);
-        let flows = mixed_keys(&mut rng, 30, 40, 1500);
+        let mut flows = zipf_keys(&mut rng, 30, 6000);
+        flows.extend((0..2000).map(|_| (rng.random(), 5)));
         let mut h = hydra(rows, cols, arity, cell);
         for &(id, w) in &flows {
             hydra_update(&mut h, id, arity, &value, w as i32);
         }
-        let (target, truth) = flows[(trial % 30) as usize];
+        let (target, truth) = flows[(trial % 3) as usize];
+        assert!(truth as f64 > 2.0 * bound.epsilon * l1(&flows));
         let values = flow_values(target, arity);
         let estimate = h
-            .query_frequency(&[Some(values[0].as_str()), None], &value)
+            .query_frequency(&[Some(values[0].as_str())], &value)
             .unwrap();
         if (estimate - truth as f64).abs() > bound.epsilon * l1(&flows) {
             failures += 1;
@@ -218,6 +222,25 @@ fn hydra_hll_distinct_has_no_bound() {
         Hydra::params_for(StatisticKind::Distinct, 0.3, 0.1, &data),
         None
     );
+}
+
+#[test]
+fn eh_hll_distinct_has_no_bound() {
+    let p = EhParams {
+        k: 8,
+        window: 1000,
+        cell: EhCell::Hll(HllParams::default()),
+    };
+    let data = EhData {
+        window_arrivals: Some(1000),
+        ..EhData::default()
+    };
+    for delta in [None, Some(0.1)] {
+        assert_eq!(
+            ExponentialHistogram::theoretical_error(StatisticKind::Distinct, &p, &data, delta),
+            None
+        );
+    }
 }
 
 #[test]
@@ -1141,6 +1164,28 @@ mod octo {
         );
         assert_eq!(
             frameworks::octo_max_threshold(&config(4, 31, OctoPartition::HashByKey)),
+            31
+        );
+    }
+
+    #[test]
+    fn octo_min_threshold_is_the_smallest_a_worker_holds() {
+        let adaptive = |min_threshold| asap_sketchlib::OctoAdaptiveThreshold {
+            min_threshold,
+            ..asap_sketchlib::OctoAdaptiveThreshold::default()
+        };
+        let with = |tau, floor| OctoConfig {
+            adaptive: Some(adaptive(floor)),
+            ..config(4, tau, OctoPartition::HashByKey)
+        };
+        let parent_writes = |cfg: &OctoConfig| frameworks::octo_update_ops(3, cfg).1;
+        assert_eq!(frameworks::octo_min_threshold(&with(2, 16)), 2);
+        assert_eq!(parent_writes(&with(2, 16)), 1.5);
+        assert_eq!(frameworks::octo_min_threshold(&with(31, 16)), 16);
+        assert_eq!(frameworks::octo_min_threshold(&with(31, 0)), 1);
+        assert_eq!(frameworks::octo_min_threshold(&with(200, 300)), 127);
+        assert_eq!(
+            frameworks::octo_min_threshold(&config(4, 31, OctoPartition::HashByKey)),
             31
         );
     }

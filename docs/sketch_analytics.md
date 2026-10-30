@@ -15,7 +15,7 @@ Each op formula is the most one call can cost, unless its section marks it avera
 - `n` is the number of updates a state has received, `N` their total weight, and `D` the distinct keys among them.
 - `f(x)` is the total weight of key `x`, and `‖f‖₂` is the square root of the sum of `f(x)²` over all keys.
 - For a sketch with `d` rows, estimating one key costs `est(d)` ops: `d` for Count-Min, which takes the minimum of `d` counters, and `2d + d·lg d` for Count Sketch, which copies them into a buffer and takes their median.
-- A `TopKHeap` update costs `h(k) = 8 + 14·⌊log2 k⌋` for a heap of capacity `k`.
+- A `TopKHeap` update costs `h(k) = 8 + 14·⌊log2 k⌋` for a heap of capacity `k`, plus one probe when the key's 64-bit digest matches a resident's, with probability at most `k·2^−64`.
   It probes the heap's index, reads the root, and gives the root's slot, digest and index entries to the new key in 8 ops, or rescores a resident's slot in fewer.
   It then moves the key at most `⌊log2 k⌋` levels, and each level reads both children, swaps two slots, reads and swaps their digests, and repoints two index entries.
 
@@ -27,7 +27,7 @@ Counter matrices pick a column per row in one of two ways.
 - `q` is the probability that two keys share a column.
   It is at most `1/w + 2^−32` on `RegularPath`.
   On `FastPath` it is `1/w` when `w` is a power of two, and at most `9/(8w)` otherwise, because a slice taken modulo `w` picks some columns twice as often.
-  Count-Min bounds use `1/w`, as ASAPPlanner does.
+  Count-Min bounds use `1/w`, as ASAPPlanner does, except on `FastPath` with `w` not a power of two, where they use the collision rate `(w + 3r)/(w + r)²` with `r = 2^(lg w) − w`.
 - A median over `d` rows is wrong only when at least half the rows are wrong.
   With each row wrong independently with probability `β`, that happens with probability `P_med(d, β) = P(Binomial(d, β) ≥ ⌈d/2⌉)`.
 
@@ -133,7 +133,7 @@ Data inputs: none.
 | Item | Big O | Formula |
 |---|---|---|
 | ItemFrequency error | | `Absolute(L1)`, `ε = e/w`, `δ = e^−d` fixed; contract `count_min_l1_markov_v1` |
-| ItemFrequency sizing | | `w = ⌈e/ε⌉`, `d = max(1, ⌈ln(1/δ)⌉)`; on `FastPath`, `w` rounded up to a power of two |
+| ItemFrequency sizing | | `w = ⌈e/ε⌉`, `d = max(1, ⌈ln(1/δ)⌉)`; on `FastPath`, `w` rounded up to a power of two; `None` when `d > 20`, the ASAPv1 row limit `MATRIX_MAX_ROWS` |
 | Total error | | exact; contract `exact_v1` |
 | Memory | `O(dw)` | `size_of::<Self>() + d·w·size_of::<Counter>()` |
 | Update | `O(d)` | `d` |
@@ -166,7 +166,8 @@ Data inputs: none.
 
 - A row is off by more than `ε·‖f‖₂` with probability at most `q/ε²` (Charikar, Chen and Farach-Colton 2002, Section 3).
   Setting that to `β` gives `ε = √(q/β)`, and the median is wrong only when `⌈d/2⌉` rows are.
-- At `δ = 0.01` the sizing takes `d = 5` and `w ≈ 9.5/ε²`.
+- On `RegularPath` at `δ = 0.01` the sizing takes `d = 5` and `w ≈ 9.5/ε²`.
+  On `FastPath` rounding `w` up to a power of two moves the best `d`, which ranges from 3 to 9 for `ε` from 0.001 to 0.1.
 - An update adds the weight with a random sign to one counter per row, and a query copies those counters into a buffer and takes their median.
 
 ### CountSketchWithL2Norm
@@ -337,12 +338,13 @@ Data inputs: `D`, and the bytes each key owns.
 | Update | `O(est(d) + log k)` | `d + est(d) + h(k)` |
 | Query ItemFrequency | `O(est(d))` | `est(d)` |
 | Query TopK | `O(k)` | `k` |
-| Merge | `O(dw + k(est(d) + log k))` | `2dw + 3 + u·(3 + est(d) + h(k))`, with `u ≤ 2·min(k, D)` the two heaps' sizes summed |
+| Merge | `O(dw + k(est(d) + log k))` | `2dw + u·(4 + est(d) + h(k))`, with `u ≤ 2·min(k, D)` the two heaps' sizes summed |
 
 - On `Vector2D` storage the memory formula is the inherent `theoretical_memory_bytes(rows, cols, heap_size, key)`.
 - An update adds to `d` counters, estimates the key from them, then updates the heap.
 - TopK returns the heap's `k` entries unsorted.
 - A merge adds the counters, copies both heaps' keys into a buffer, clears the heap, then re-estimates each key into it at this state's capacity.
+- Clearing a `TopKHeap` drops each resident and its index entry, 2 ops per resident.
 - A key's stored count is its estimate at its own last update, and its true count has not changed since, so the stored count keeps the base sketch's bound.
 - CountSketchWithHeap over integer counters stores the median truncated to an integer, which adds up to 0.5 to a reported count's error for even `d`.
 
@@ -653,7 +655,7 @@ Data inputs: `D_max`, an upper bound on `D`, and the bytes each key owns.
 | Query Total | `O(1)` | 1 |
 | Query FrequencyL2 | `O(d log d)` | `2d + d·lg d` |
 | Query Distinct, GSum, FrequencyEntropy | `O(min(Lk, LD)·d log d)` | `4 + 2L + L·c·(1 + 2d + d·lg d)` |
-| Merge | `O(L(dw + k(d log d + log k)))` | `2 + L·(3dw + d + 6 + c·(22 + 4d + 2d·lg d + 28·⌊log2 k⌋))` |
+| Merge | `O(L(dw + k(d log d + log k)))` | `2 + L·(3dw + d + 3 + c·(24 + 4d + 2d·lg d + 28·⌊log2 k⌋))` |
 
 - Distinct uses a Chebyshev bound on the heap estimator, whose variance is at most `1.35·D²/k`.
 - `ψ` is the probability that the top layer sees more than `k` keys: 0 when `D_max ≤ k`, `(e/4)^(k/2)` when `L ≥ lg(D_max/k) + 2`, and 1 otherwise.
@@ -697,24 +699,26 @@ Data inputs: `n`, and `F̂₂`, an upper bound on the state's `estimate_f2()`.
 |---|---|---|
 | ItemFrequency error | | `Absolute(L2)`, `ε = √(q/β)` with `β` the largest per-row failure probability with `P_med(d, β) ≤ δ`, `δ` chosen; contract `univmonq_terminal_count_sketch_l2_median_chosen_row_rate_v1` |
 | ItemFrequency sizing | | the odd `d` and power-of-two `W`, with `P = 0`, that meet `(ε, δ)` with the fewest counters `d·W` and fit the 128-bit hash |
-| Quantile error | | `Rank`, `ε = √(ln(2/δ)/(2·min(M, n)))`, `δ` chosen, when `F̂₂·M < n²`; contract `univmonq_rank_diffuse_occurrence_hoeffding_v1`; `None` without `n` or `F̂₂` |
+| Quantile error | | `Rank`, `ε = √(ln(2/δ)/(2·min(M, n))) + 1/n`, `δ` chosen, when `F̂₂·M < n²`; contract `univmonq_rank_diffuse_occurrence_hoeffding_v1`; `None` without `n` or `F̂₂` |
 | Rank error | | `Absolute(L1)`, the same `ε`, condition and contract |
-| Quantile, Rank sizing | | `M = ⌈ln(2/δ)/(2ε²)⌉`; `None` without `n` or `F̂₂`, or when `n < M` or `F̂₂·M ≥ n²` |
+| Quantile, Rank sizing | | `M = ⌈ln(2/δ)/(2(ε − 1/n)²)⌉`; `None` without `n` or `F̂₂`, or when `ε ≤ 1/n`, `n < M` or `F̂₂·M ≥ n²` |
 | FrequencyL2, Distinct, GSum, FrequencyEntropy, TopK error | | none |
 | Memory | `O(d·Σw_j + Lk + M)` | `theoretical_memory_bytes(config)`: `size_of::<Self>() + L·size_of::<Layer>() + d·(b/8)·Σw_j + L·(T(k) + 16k) + 24M`, with `T(k)` the bytes of a churned hash table of `k` `(u64, u64)` entries |
-| Update | `O(d log d + k log k + log M)` | `18 + 3d + d·lg d + 7·⌊log2 k⌋ + k·(9 + 7·⌊log2 k⌋) + (8 + 7·⌊log2 M⌋ when M > 0)` |
+| Update | `O(d log d + k log k + log M)` | `21 + 3d + d·lg d + 7·⌊log2 k⌋ + k·(12 + 7·⌊log2 k⌋) + (11 + 7·⌊log2 M⌋ when M > 0)` |
 | Query ItemFrequency | `O(d log d)` | `1 + 2d + d·lg d` |
 | Query every other readout | as the summary | none; it rebuilds every layer's candidate keys first |
-| Merge | as the summary | `6 + 2d·Σw_j + L·(4 + k·(15 + 4d + 2d·lg d + 2·lg k + 2·⌊log2 k⌋)) + M·(9 + 7·⌊log2 M⌋)` |
+| Merge | as the summary | `6 + 2d·Σw_j + L·(4 + k·(15 + 4d + 2d·lg d + 2·lg k + 2·⌊log2 k⌋)) + M·(12 + 7·⌊log2 M⌋)` |
 
 - The count, min and max are exact, and UnivMonQ's capability row does not list Total, so they have no rows.
 - ItemFrequency reads only the layer the key went to, whose columns are `lg W` hash bits modulo `w_j`.
 - Rank and Quantile read a uniform sample of `M` updates, so Hoeffding's inequality for sampling without replacement gives the bound.
+  `rank` rounds to a count and `quantile` targets the rank `⌈qn⌉`, which adds the `1/n`.
   The heavy set is the frequent values the readout handles separately, and `ordered_query_diagnostics().heavy` reports it.
   The readout leaves it empty when its F2 estimate is below `n²/M`, and when it is not empty the error depends on the data.
 - FrequencyL2, Distinct and GSum come from candidate keys cut off by a threshold, so UnivMon's bounds do not carry over.
 - A clone or decoded state reserves the candidate tables, candidate heaps and ordered sample a built one does.
-- A `BinaryHeap` push into a heap that then holds `n` entries counts `3 + 2·⌊log2 n⌋`, and a pop from `n` entries counts `4 + 5·⌊log2 n⌋`, the most std's sifts move.
+- A `BinaryHeap` push into a heap that then holds `n` entries counts `3 + 2·⌊log2 n⌋`.
+- A pop from `n` entries counts `7 + 5·⌊log2 n⌋`: std moves the last entry to the root, sifts the hole to the bottom, and sifts it back up.
 - An update reads and increments the sequence number, adds to the count, min and max, adds to one counter per row in its layer, estimates the key, updates the candidate table and heap, and adds to the ordered sample.
 - An update of a key already in the candidate table costs `6 + 3d + d·lg d` plus the ordered sample, and the `k` term comes from re-queuing up to `k` stale heap entries when a new key enters a full layer.
 - A merge adds the counts, mins and maxes, then per layer adds the counters, reads both candidate tables into a set, re-estimates and sorts the set, and refills the table and heap with its top `k`; it then adds each of the other state's samples to the ordered sample.
@@ -775,18 +779,18 @@ A query takes the median over rows, which fails with probability `P_med(d, q·w/
 It keeps an inner sketch per bucket over a sliding window and merges older buckets together.
 Parameters: `k` and the window length, the code's `k` and `window` (in time units, where the paper's `N` counts elements).
 It merges buckets by their L2 mass when the inner sketch is `CountSketchWithL2Norm` or `UnivMon`, and by their arrival count otherwise.
-Data inputs: `N_w` the arrivals in the window, `D_w` the distinct keys in the window, and `G` the most buckets the histogram keeps.
+Data inputs: `N_w` the arrivals in the window and `G` the most buckets the histogram keeps.
 
 | Readout | Bound | δ | Contract |
 |---|---|---|---|
 | Count-Min or Count Sketch ItemFrequency, by count | `Absolute(L1)`, `ε = ε_EH + ε_in(1 + ε_EH)` | `δ_in` | `eh_l1_boundary_bucket_v1` |
-| HyperLogLog Distinct, by count | `Relative`, `ε = ε_in + (1 + ε_in)·ε_EH·N_w/D_w` | unknown | `eh_l1_boundary_bucket_v1` |
 | FrequencyL2, by mass | `Relative`, `ε = ε_EH2 + ε₂(1 + ε_EH2)` | `(G + 2)·δ_mass + δ_in` | `eh_l2_boundary_bucket_mass_v1` |
-| Kll; DdSketch; CocoSketch; ElasticSketch; UniformSampling | none | | |
+| HyperLogLog Distinct; Kll; DdSketch; CocoSketch; ElasticSketch; UniformSampling | none | | |
 
 - Merging by count, the oldest bucket holds at most `ε_EH = 2/(⌈k/2⌉ + 1)` of the window, about `4/k`, and it is kept or dropped whole.
   This counts arrivals, so these bounds require unit-weight updates.
 - Merging by mass compares squared L2 estimates, so `ε_EH2 = ((1 + ε₂)/(1 − ε₂))·√(2/k)`, where `ε₂` is layer 0's L2 estimate error and `δ_mass` its failure probability, which is also `δ_in`.
+- A HyperLogLog bucket's `Ertl` bound is a standard error with no `δ`, and the boundary bucket's term is a worst case, so no one `(ε, δ)` states both.
 - Every bucket starts as a clone of one prototype, so Kll buckets get no bound.
 - The bounds hold for windows that end at the newest arrival, and a query endpoint that falls in a gap between two buckets selects the wrong bucket.
 - Merging by count keeps at most `G ≤ (⌊k/2⌋ + 2)(⌊log2(2N_w)⌋ + 1)` buckets, which the functions use when `G` is unknown; merging by mass needs `G`.
@@ -838,7 +842,7 @@ Data inputs: `N`.
 `src/sketch_framework/octo.rs`, behind the `octo-runtime` feature.
 `K` workers keep 1-byte counters and send a cell's count to a parent sketch when it reaches a threshold, which adapts between `τ_min` and `τ_max ≤ 127`.
 `K` is the code's `num_workers` and the paper's `k`, and `K'` is 1 when `partition` splits keys by hash and `K` when it goes round robin.
-`τ_min` is `min_threshold`, or the fixed `threshold` without `adaptive`.
+`τ_min` is the smaller of the initial `threshold` and `min_threshold`, each within [1, 127], or the fixed `threshold` without `adaptive`.
 `τ_max` is the larger of the initial `threshold` and `max_threshold` raised to at least `min_threshold`, each within [1, 127], or the fixed `threshold` without `adaptive`.
 A runtime has no one sketch type, so its analytics are the functions `octo_error`, `octo_memory_bytes` and `octo_update_ops` in `analytics::frameworks`, over an `OctoConfig` and an `OctoParent`.
 The Count-Min and Count Sketch parents hash on `RegularPath`, and the HyperLogLog parent is `Classic`.

@@ -252,8 +252,8 @@ macro_rules! matrix_with_heap {
 
             fn theoretical_merge_ops(params: &MatrixHeapParams, data: &FlowData) -> Option<f64> {
                 let keys = 2.0 * held(params.heap_size, data.distinct);
-                let per_key = 3.0 + $base.est(params.rows) + heap_update_ops(params.heap_size);
-                Some(2.0 * (params.rows * params.cols) as f64 + 3.0 + keys * per_key)
+                let per_key = 4.0 + $base.est(params.rows) + heap_update_ops(params.heap_size);
+                Some(2.0 * (params.rows * params.cols) as f64 + keys * per_key)
             }
 
             fn theoretical_error(

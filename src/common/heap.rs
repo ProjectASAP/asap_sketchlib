@@ -204,7 +204,7 @@ impl<C: HeapCount> TopKHeap<C> {
 
     /// Clears the heap.
     pub fn clear(&mut self) {
-        crate::analytics::ops::add(3);
+        crate::analytics::ops::add(2 * self.heap.len());
         self.heap.clear();
         self.slots.clear();
         self.positions.clear();

@@ -809,6 +809,18 @@ mod ops {
         }
     }
 
+    #[test]
+    fn a_clear_costs_two_per_resident() {
+        for k in [1, 5, 64] {
+            let mut heap = TopKHeap::<i64>::new(k);
+            for id in 0..2 * k as u64 {
+                heap.update(&key(id), id as i64 + 1);
+            }
+            let ((), ops) = ops::count(|| heap.clear());
+            assert_eq!(ops, 2 * k as u64, "k={k}");
+        }
+    }
+
     const HEAP_SIZES: [MatrixHeapParams; 2] = [
         MatrixHeapParams {
             rows: 3,
