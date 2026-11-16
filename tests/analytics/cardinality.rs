@@ -704,6 +704,48 @@ mod ops {
         }
     }
 
+    /// An update costs `O(log k)` ops and a merge `O(k)`, whatever `k` and
+    /// however many hashes the sketch already keeps. The bounds are fixed
+    /// here, apart from the formulas, so a formula that grows with `k` fails
+    /// too. Each stream repeats every key once, so half the updates are
+    /// duplicates, which reach the membership check whether or not the
+    /// sketch is full.
+    #[test]
+    fn kmv_update_is_logarithmic_and_merge_linear_in_k() {
+        for k in [1_000usize, 100_000] {
+            let log2_k = (k as f64).log2();
+            let update_bound = 16.0 + 8.0 * log2_k;
+            let merge_bound = 64.0 * k as f64;
+            // Filling: 2k updates over k distinct keys, the sketch never full.
+            // Saturated: 4k updates over 2k distinct keys, the sketch full
+            // from the k-th distinct key on.
+            for (phase, distinct) in [("filling", k as u64), ("saturated", 2 * k as u64)] {
+                let mut sketch: Kmv = Kmv::new(k);
+                let ((), ops) = asap_sketchlib::analytics::ops::count(|| {
+                    for id in (0..distinct).chain(0..distinct) {
+                        sketch.update(&key(id));
+                    }
+                });
+                let per_update = ops as f64 / (2 * distinct) as f64;
+                assert!(
+                    per_update <= update_bound,
+                    "k={k} {phase}: {per_update:.1} ops per update over the bound {update_bound:.1}"
+                );
+            }
+            let mut a: Kmv = Kmv::new(k);
+            let mut b: Kmv = Kmv::new(k);
+            for id in 0..2 * k as u64 {
+                a.update(&key(id));
+                b.update(&key(id + k as u64));
+            }
+            let ((), ops) = asap_sketchlib::analytics::ops::count(|| a.merge(&b));
+            assert!(
+                ops as f64 <= merge_bound,
+                "k={k}: a merge counted {ops} ops, over the bound {merge_bound}"
+            );
+        }
+    }
+
     #[test]
     fn set_aggregator() {
         for d in [10u64, 1000] {

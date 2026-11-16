@@ -1,4 +1,4 @@
-//! Throughput micro-benchmark probe for core sketches (CountMinSketch, CountSketch, KLL).
+//! Throughput micro-benchmark probe for core sketches (CountMinSketch, CountSketch, KLL, KMV).
 //!
 //! Prints machine-readable `BENCH` lines (median ns/item and Mitems/s) suitable
 //! for parsing by scripts. Deterministic output across runs: inline xorshift64*
@@ -11,7 +11,7 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use asap_sketchlib::{
-    CountMinSketch, CountSketch, DataInput, FastPath, Kll, RegularPath, Vector2D,
+    CountMinSketch, CountSketch, DataInput, FastPath, Kll, Kmv, RegularPath, Vector2D,
 };
 
 const N_ITEMS: usize = 200_000;
@@ -23,6 +23,11 @@ const ROWS: usize = 3;
 const COLS: usize = 4096;
 const ZIPF_DOMAIN: usize = 8192;
 const ZIPF_EXPONENT: f64 = 1.1;
+/// KMV bounds: the default, and the bound a 5% relative target per group
+/// sizes for a planner with many groups.
+const KMV_KS: [usize; 2] = [4_323, 106_263];
+/// KMV stream: every key arrives twice, so half the updates are duplicates.
+const KMV_DISTINCT: usize = 300_000;
 
 struct Xorshift(u64);
 
@@ -202,4 +207,48 @@ fn main() {
         std::hint::black_box(acc);
         elapsed
     });
+
+    // KMV: insert a stream whose keys each arrive twice (in two shuffled
+    // halves), then merge two sketches built over overlapping key ranges. Per-item
+    // time of a merge is per hash of the other sketch.
+    let kmv_keys: Vec<u64> = {
+        let mut rng = Xorshift::new(0x6B6D_7631);
+        let first: Vec<u64> = (0..KMV_DISTINCT).map(|_| rng.next_u64()).collect();
+        let mut second = first.clone();
+        for i in (1..second.len()).rev() {
+            second.swap(i, (rng.next_u64() % (i as u64 + 1)) as usize);
+        }
+        first.into_iter().chain(second).collect()
+    };
+    for k in KMV_KS {
+        bench(&format!("kmv_insert_k{k}"), kmv_keys.len(), || {
+            let mut sk: Kmv = Kmv::new(k);
+            let start = Instant::now();
+            for &key in &kmv_keys {
+                sk.update(&DataInput::U64(key));
+            }
+            let elapsed = start.elapsed();
+            std::hint::black_box(sk.estimate());
+            elapsed
+        });
+
+        // Two sketches over the first and the last two thirds of the
+        // distinct keys, overlapping in the middle third.
+        let mut left: Kmv = Kmv::new(k);
+        let mut right: Kmv = Kmv::new(k);
+        for &key in &kmv_keys[..KMV_DISTINCT * 2 / 3] {
+            left.update(&DataInput::U64(key));
+        }
+        for &key in &kmv_keys[KMV_DISTINCT / 3..KMV_DISTINCT] {
+            right.update(&DataInput::U64(key));
+        }
+        bench(&format!("kmv_merge_k{k}"), k, || {
+            let mut sk = left.clone();
+            let start = Instant::now();
+            sk.merge(&right);
+            let elapsed = start.elapsed();
+            std::hint::black_box(sk.estimate());
+            elapsed
+        });
+    }
 }
