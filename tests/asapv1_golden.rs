@@ -1858,7 +1858,7 @@ fn kmv_k8_matches_golden() {
 
     let decoded: Kmv = Kmv::from_asapv1(&want).expect("decode");
     assert_eq!(decoded.k, 8);
-    let mut held: Vec<u64> = decoded.retained_hashes.iter().copied().collect();
+    let mut held: Vec<u64> = decoded.retained_hashes().iter().copied().collect();
     held.sort_unstable();
     assert_eq!(held, digests);
     assert_eq!(decoded.to_asapv1().expect("re-serialize"), want);

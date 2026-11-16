@@ -13,15 +13,32 @@ use crate::{
 
 use std::marker::PhantomData;
 
+mod retained_index;
 mod wire;
+
+use retained_index::RetainedIndex;
 
 // expect error bound to be less than 2%
 pub(crate) const KMV_DEFAULT_K: usize = 4096_usize;
 
+/// Index slots per heap slot: the index keeps twice the heap's allocated
+/// slots, so its load stays at most one half and a lookup probes about 1.5
+/// slots on average.
+const INDEX_SLOTS_PER_HEAP_SLOT: usize = 2;
+
+/// Keeps the `k` smallest distinct 64-bit hashes of its inputs.
+///
+/// The hashes sit twice: in a bounded max-heap, whose root is the largest
+/// retained hash (the estimate's `U(k)` and the one evicted next), and in an
+/// index that answers "is this hash already retained" in expected `O(1)`. An
+/// update therefore costs `O(1)` plus one heap sift, `O(log k)`, and a merge
+/// `O(k)`. Both are private so they cannot drift apart; read the heap through
+/// [`Self::retained_hashes`].
 #[derive(Clone, Debug)]
 pub struct Kmv<H: SketchHasher = DefaultXxHasher> {
     pub k: usize,
-    pub retained_hashes: CommonHeap<u64, RetainSmallest>,
+    retained_hashes: CommonHeap<u64, RetainSmallest>,
+    retained_index: RetainedIndex,
     _hasher: PhantomData<H>,
 }
 
@@ -33,11 +50,28 @@ impl Default for Kmv {
 
 impl<H: SketchHasher> Kmv<H> {
     pub fn new(k: usize) -> Self {
+        Self::from_heap(CommonHeap::new_max(k))
+    }
+
+    /// Wraps a heap of retained hashes (distinct, at most its capacity) and
+    /// indexes them.
+    fn from_heap(retained_hashes: CommonHeap<u64, RetainSmallest>) -> Self {
+        let retained_index = RetainedIndex::with_slots(
+            INDEX_SLOTS_PER_HEAP_SLOT * retained_hashes.allocated_slots(),
+            retained_hashes.as_slice(),
+        );
         Self {
-            k,
-            retained_hashes: CommonHeap::new_max(k),
+            k: retained_hashes.capacity(),
+            retained_hashes,
+            retained_index,
             _hasher: PhantomData,
         }
+    }
+
+    /// The retained hashes, the largest at the root. Read-only: the sketch
+    /// keeps an index beside the heap that every change must update.
+    pub fn retained_hashes(&self) -> &CommonHeap<u64, RetainSmallest> {
+        &self.retained_hashes
     }
 
     pub fn update(&mut self, item: &DataInput) {
@@ -46,22 +80,48 @@ impl<H: SketchHasher> Kmv<H> {
     }
 
     pub fn update_with_hash(&mut self, hash_value: u64) {
+        let full = self.retained_hashes.is_full();
         // A full sketch keeps only hashes below its largest retained one.
-        if self.retained_hashes.is_full()
-            && self.retained_hashes.peek().is_some_and(|max| {
-                crate::analytics::ops::add(1);
-                hash_value >= *max
-            })
-        {
+        if full {
+            match self.retained_hashes.peek() {
+                Some(max) => {
+                    crate::analytics::ops::add(1);
+                    if hash_value >= *max {
+                        return;
+                    }
+                }
+                // A bound of 0 keeps nothing.
+                None => return,
+            }
+        }
+        if self.retained_index.contains(hash_value) {
             return;
         }
-        if self.retained_hashes.iter().any(|value| {
-            crate::analytics::ops::add(1);
-            *value == hash_value
-        }) {
-            return;
+        if full {
+            let evicted = self
+                .retained_hashes
+                .replace_root_with(hash_value, &mut |_, _| {});
+            self.retained_index.remove(evicted);
+            self.retained_index.insert(hash_value);
+        } else {
+            self.retained_hashes
+                .push_back_with(hash_value, &mut |_, _| {});
+            self.index_pushed(hash_value);
         }
-        self.retained_hashes.push(hash_value);
+    }
+
+    /// Indexes `hash_value`, just pushed onto the heap. When the push grew the
+    /// heap's allocation, the index grows with it (a rebuild, amortized `O(1)`
+    /// per push since the heap doubles), so its size depends only on the
+    /// heap's and the memory stays exact.
+    fn index_pushed(&mut self, hash_value: u64) {
+        let slot_count = INDEX_SLOTS_PER_HEAP_SLOT * self.retained_hashes.allocated_slots();
+        if slot_count == self.retained_index.slot_count() {
+            self.retained_index.insert(hash_value);
+        } else {
+            self.retained_index =
+                RetainedIndex::with_slots(slot_count, self.retained_hashes.as_slice());
+        }
     }
 
     /// `(k - 1) / U(k)`, where `U(k)` is the k-th smallest hash's position in
@@ -80,22 +140,53 @@ impl<H: SketchHasher> Kmv<H> {
         (self.k - 1) as f64 / mapped
     }
 
+    /// Keeps the `k` smallest distinct hashes of both sketches, in `O(k)`:
+    /// the other sketch's hashes that are new and below this one's bound join
+    /// this sketch's, the `k` smallest are selected, heapified and indexed.
     pub fn merge(&mut self, other: &Kmv<H>) {
         assert_eq!(
             self.k, other.k,
             "Two KMV sketch have different k size, not mergeable"
         );
+        let bound = if self.retained_hashes.is_full() {
+            self.retained_hashes.peek().copied()
+        } else {
+            None
+        };
+        let mut union: Vec<u64> = Vec::new();
         for &value in other.retained_hashes.iter() {
             crate::analytics::ops::add(1);
-            self.update_with_hash(value);
+            if bound.is_some_and(|max| value >= max) || self.retained_index.contains(value) {
+                continue;
+            }
+            if union.is_empty() {
+                union.reserve(self.retained_hashes.len() + other.retained_hashes.len());
+                union.extend_from_slice(self.retained_hashes.as_slice());
+            }
+            union.push(value);
         }
+        if union.is_empty() {
+            return;
+        }
+        if union.len() > self.k {
+            crate::analytics::ops::add(union.len());
+            union.select_nth_unstable(self.k - 1);
+            union.truncate(self.k);
+        }
+        *self = Self::from_heap(CommonHeap::from_unordered_vec(
+            union,
+            self.k,
+            RetainSmallest,
+        ));
     }
 
-    /// Bytes this sketch holds: the struct plus the hash slots its heap has
-    /// allocated (up to 1024 at construction, growing toward `k`).
+    /// Bytes this sketch holds: the struct, the hash slots its heap has
+    /// allocated (up to 1024 at construction, growing toward `k`), and the
+    /// index's slots, twice the heap's.
     pub fn memory_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
-            + self.retained_hashes.allocated_slots() * std::mem::size_of::<u64>()
+            + (self.retained_hashes.allocated_slots() + self.retained_index.slot_count())
+                * std::mem::size_of::<u64>()
     }
 }
 
@@ -104,14 +195,17 @@ impl Kmv {
     /// Bytes a sketch of `k`, built, decoded or cloned, holds after `distinct`
     /// distinct inputs, merges included: [`Self::memory_bytes`] exactly, and an
     /// upper bound when fewer arrive. The heap reserves `min(k, 1024)` slots
-    /// and doubles toward `k`. Saturates at `usize::MAX`.
+    /// and doubles toward `k`; the index holds twice the heap's slots.
+    /// Saturates at `usize::MAX`.
     pub fn theoretical_memory_bytes(k: usize, distinct: usize) -> usize {
         let slots = vec_slots_after_pushes(
             k.min(PREALLOCATED_SLOTS),
             k.min(distinct),
             std::mem::size_of::<u64>(),
         );
-        std::mem::size_of::<Self>().saturating_add(slots.saturating_mul(std::mem::size_of::<u64>()))
+        let heap_and_index_slots = slots.saturating_mul(1 + INDEX_SLOTS_PER_HEAP_SLOT);
+        std::mem::size_of::<Self>()
+            .saturating_add(heap_and_index_slots.saturating_mul(std::mem::size_of::<u64>()))
     }
 }
 
@@ -153,8 +247,23 @@ mod tests {
         let empty: Kmv = Kmv::new(k);
         let full = build(k, 0..20_000);
         assert_eq!(full.retained_hashes.len(), k);
-        assert_eq!(empty.memory_bytes(), std::mem::size_of::<Kmv>() + 1024 * 8);
-        assert!(full.memory_bytes() >= std::mem::size_of::<Kmv>() + k * 8);
+        // 1,024 heap slots and twice as many index slots, 8 bytes each.
+        assert_eq!(
+            empty.memory_bytes(),
+            std::mem::size_of::<Kmv>() + (1024 + 2 * 1024) * 8
+        );
+        assert!(full.memory_bytes() >= std::mem::size_of::<Kmv>() + 3 * k * 8);
+        // Built, merged or decoded, the same retained set holds the same bytes,
+        // the theoretical figure.
+        let mut merged = build(k, 0..12_000);
+        merged.merge(&build(k, 8_000..20_000));
+        let decoded = Kmv::from_asapv1(&full.to_asapv1().unwrap()).unwrap();
+        for sketch in [&full, &merged, &decoded, &full.clone()] {
+            assert_eq!(
+                sketch.memory_bytes(),
+                Kmv::theoretical_memory_bytes(k, 20_000)
+            );
+        }
         let mut again = full.clone();
         let before = again.memory_bytes();
         again.update(&DataInput::U64(7));

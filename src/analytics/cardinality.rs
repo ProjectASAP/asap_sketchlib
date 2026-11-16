@@ -420,7 +420,7 @@ impl<H: SketchHasher> SketchAnalytics for Kmv<H> {
     }
 
     fn theoretical_update_ops(params: &KmvParams, _: &DistinctData) -> f64 {
-        params.k as f64 + 3.0 + 6.0 * floor_log2(params.k)
+        5.0 + 6.0 * floor_log2(params.k)
     }
 
     fn theoretical_query_ops(
@@ -432,8 +432,7 @@ impl<H: SketchHasher> SketchAnalytics for Kmv<H> {
     }
 
     fn theoretical_merge_ops(params: &KmvParams, _: &DistinctData) -> Option<f64> {
-        let k = params.k as f64;
-        Some(k * (k + 4.0 + 6.0 * floor_log2(params.k)))
+        Some(12.0 * params.k as f64)
     }
 
     fn theoretical_error(

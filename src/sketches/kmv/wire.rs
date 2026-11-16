@@ -4,8 +4,9 @@
 //! serialization (the metadata/payload DTOs, the kind_id constant, and the
 //! `to_asapv1` / `from_asapv1` impls) while the algorithm
 //! lives in the parent module file. Being a descendant module, it reads the
-//! sketch's private `_hasher` field and constructs the struct directly, without
-//! widening any field visibility. See `docs/asapv1_wire_format.md`.
+//! sketch's private retained heap and rebuilds the sketch through the parent's
+//! private constructor, which indexes the decoded hashes, without widening any
+//! visibility. See `docs/asapv1_wire_format.md`.
 //!
 //! KMV is one algorithm — a single kind_id `0x0e 0x00`. Its one structural
 //! parameter is the retention bound `k`, which is construction config and lives
@@ -26,7 +27,6 @@
 
 use rmp_serde::{decode::Error as RmpDecodeError, encode::Error as RmpEncodeError};
 use serde::{Deserialize, Serialize};
-use std::marker::PhantomData;
 
 use crate::asapv1::envelope;
 use crate::asapv1::kind;
@@ -88,7 +88,7 @@ fn rebuild_heap(k: usize, ascending: Vec<u64>) -> CommonHeap<u64, RetainSmallest
 }
 
 // Wire serialization for KMV. `wire` is a descendant of the sketch module, so
-// this impl constructs the struct with its private field directly.
+// this impl reads the private heap and rebuilds through `Kmv::from_heap`.
 impl<H: SketchHasher + HashProfile> Kmv<H> {
     /// Serializes the sketch into an ASAPv1 MessagePack envelope
     /// (kind_id `0x0e 0x00`). The metadata is derived from the hasher's
@@ -173,11 +173,7 @@ impl<H: SketchHasher + HashProfile> Kmv<H> {
                 "KMV hashes are not strictly ascending".to_string(),
             ));
         }
-        Ok(Kmv {
-            k,
-            retained_hashes: rebuild_heap(k, decoded.hashes),
-            _hasher: PhantomData,
-        })
+        Ok(Kmv::from_heap(rebuild_heap(k, decoded.hashes)))
     }
 
     /// The retained hashes in emitted order, ascending. Independent of the
@@ -194,6 +190,7 @@ mod tests {
     use super::*;
     use crate::{DEFAULT_CANONICAL_SEED_INDEX, DataInput, DefaultXxHasher, OwnedDataInput};
     use rmp_serde::from_slice;
+    use std::marker::PhantomData;
 
     fn populated(k: usize, keys: u64) -> Kmv {
         let mut sketch: Kmv = Kmv::new(k);
@@ -473,6 +470,7 @@ mod tests {
         let sketch: Kmv = Kmv {
             k: 1 << 40,
             retained_hashes: CommonHeap::new_max(1),
+            retained_index: Default::default(),
             _hasher: PhantomData,
         };
         let problem = sketch
@@ -495,6 +493,7 @@ mod tests {
         let mut over: Kmv = Kmv {
             k: 1,
             retained_hashes: CommonHeap::new_max(4),
+            retained_index: Default::default(),
             _hasher: PhantomData,
         };
         over.update_with_hash(3);
@@ -527,6 +526,7 @@ mod tests {
         let narrower: Kmv = Kmv {
             k: 1,
             retained_hashes: CommonHeap::new_max(4),
+            retained_index: Default::default(),
             _hasher: PhantomData,
         };
         let problem = narrower

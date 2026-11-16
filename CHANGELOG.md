@@ -79,6 +79,13 @@ signals a backwards-compatible change.
   estimates, by estimate descending, ties by flow id.
 ### Changed
 
+- **`Kmv` update is `O(log k)` and merge `O(k)`** (were `O(k)` and `O(k²)`):
+  an index beside the heap answers whether a hash is already kept, and a
+  merge selects and heapifies the `k` smallest of the union. The kept hashes,
+  the estimate and the ASAPv1 bytes are unchanged; `memory_bytes` and
+  `theoretical_memory_bytes` grow by the index, twice the heap's slots.
+  Breaking: `Kmv::retained_hashes` is a method returning `&CommonHeap`, no
+  longer a public field.
 - **Breaking: `CountMinFastOps` and `CountSketchFastOps` require
   `memory_bytes`**, which `HashSketchEnsemble::memory_bytes` reads.
 - **`estimated_memory_bytes` is renamed `theoretical_memory_bytes`** on

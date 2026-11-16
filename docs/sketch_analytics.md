@@ -111,7 +111,7 @@ Query is the sketch's main readout, and each row's symbols are defined in that s
 | Count-Min or Count Sketch fold | as the base sketch | `O(d(W/2^F + min(W, D)) + k)` | `O(dE + est(d) + log k)` | `O(dE + est(d))` | `O(d(W/2^F + min(W, D)·E) + k(dE + est(d) + log k))` | `2d + 1` |
 | HyperLogLog | `ε = β_m/√m`, `Relative` | `O(m)` | `O(1)` | `O(m)` | `O(m)` | 1 |
 | HyperLogLogHip | `ε = 0.833/√m`, `Relative` | `O(m)` | `O(1)` | `O(1)` | none | 1 |
-| Kmv | `δ = e^(−Θ(ε²k))`, `Relative` | `O(k)` | `O(k)` | `O(1)` | `O(k²)` | 1 |
+| Kmv | `δ = e^(−Θ(ε²k))`, `Relative` | `O(k)` | `O(log k)` | `O(1)` | `O(k)` | 1 |
 | SetAggregator | exact | `O(Dℓ)` | `O(ℓ)` | `O(1)` | `O(D)` | 1 |
 | Bloom | false-positive rate | `O(rc)` bits | `O(r)` | `O(r)` | `O(rc)` | `r`, or 1 |
 | Kll | `ε = 2.296/k^0.9723`, `Rank` | `O(k + m log(n/k))` | `O(log k)` average | `O(R log R)` | `O(R + B log B)` | 0 |
@@ -457,19 +457,21 @@ Data inputs: `D`, unbounded when unknown.
 | Distinct error | | `Relative`; `ε = δ = 0` for a known `D < k`; otherwise `δ` chosen and `ε` the smallest with `exp(−ε²(k − 1)/((1 + ε)(2 + ε))) + exp(−ε²(k − 1)/(2(1 − ε))) ≤ δ`, the second term 0 for `ε ≥ 1`; `None` for a NaN or negative `δ`, and for `δ = 0` unless `D < k`; contract `kmv_exact_below_k_chernoff_v1` |
 | Distinct sizing | | the smallest `k` meeting `(ε, δ)`, such as 4323 at `ε = 0.05`, `δ = 0.01`, or `D + 1` for a known `D` when smaller |
 | Memory | `O(k)` | `theoretical_memory_bytes(k, D)` |
-| Update | `O(k)` | `k + 3 + 6·⌊log2 k⌋` |
+| Update | `O(log k)` | `5 + 6·⌊log2 k⌋` |
 | Query Distinct | `O(1)` | 1 |
-| Merge | `O(k²)` | `k·(k + 4 + 6·⌊log2 k⌋)` |
+| Merge | `O(k)` | `12k` |
 
 - The sketch keeps the `k` smallest hashes, and the estimate is `k − 1` divided by the largest of them scaled to (0, 1) (Beyer et al. 2007), or the count of kept hashes while fewer than `k` are kept.
   The two terms of `δ` are Chernoff bounds on overestimating and underestimating by more than `ε`.
+- The kept hashes sit in a max-heap and again in an index (open addressing, at most half full) that answers membership in one op.
 - An update reads the largest kept hash when the sketch is full, and stops if the new hash is not smaller.
-  Otherwise it reads the kept hashes one by one looking for a duplicate, then pushes the hash.
-  A full heap re-reads and replaces its root and sifts it down at 6 ops per level, and a heap with room appends the hash and sifts it up at 5 per level.
-- With every key equally frequent and arriving in random order, the duplicate scan reads about `D/2` hashes on average when `D ≤ k` and about `k²/(2D)` when `D > k`.
+  Otherwise it looks the hash up in the index (1 op) and stops on a duplicate.
+  A full heap replaces its root and sifts it down at 6 ops per level, then removes the evicted hash from the index and adds the new one (2 ops); a heap with room appends the hash and sifts it up at 5 per level, then adds it to the index (1 op).
+- A merge reads each of the other sketch's hashes and, below this sketch's bound, looks it up (2 ops each).
+  When any is new, it selects the `k` smallest of the union (at most `2k` ops), heapifies them bottom-up (at most `7k`) and indexes them (`k`).
 - A query reads the largest kept hash, or nothing while fewer than `k` are kept.
-- The heap starts at `min(k, 1024)` slots and doubles, so it can hold up to about `2k`.
-- A merge reads each of the other state's hashes and offers it as an update, and inputs may overlap.
+- The heap starts at `min(k, 1024)` slots and doubles, so it can hold up to about `2k`; the index holds twice the heap's slots, so the memory is three times the heap's `8` bytes per slot.
+- Inputs of a merge may overlap.
 
 ### SetAggregator
 

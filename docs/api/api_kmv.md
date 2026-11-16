@@ -30,11 +30,19 @@ fn update_with_hash(&mut self, hash_value: u64)
 
 ```rust
 fn estimate(&self) -> f64
+fn retained_hashes(&self) -> &CommonHeap<u64, RetainSmallest>
 fn memory_bytes(&self) -> usize
 ```
 
-`memory_bytes` is the struct plus the hash slots the heap has allocated: up to
-1024 at construction, growing toward `k` as distinct hashes arrive.
+`retained_hashes` reads the kept hashes, the largest at the root; the heap is
+private because an index beside it must change with it.
+
+An update costs `O(1)` plus one heap sift (`O(log k)`): the index answers
+whether a hash is already kept. A merge costs `O(k)`.
+
+`memory_bytes` is the struct plus the hash slots the heap has allocated (up to
+1024 at construction, growing toward `k` as distinct hashes arrive) and the
+index's slots, twice the heap's.
 
 ## Merge
 
