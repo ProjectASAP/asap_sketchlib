@@ -115,7 +115,7 @@ fn within_a_few_ulps(a: f64, b: f64) -> bool {
 /// The retained hashes, ascending. The heap's array order follows the arrivals,
 /// so the set is read sorted.
 fn retained(sketch: &Kmv) -> Vec<u64> {
-    let mut hashes: Vec<u64> = sketch.retained_hashes.iter().copied().collect();
+    let mut hashes: Vec<u64> = sketch.retained_hashes().iter().copied().collect();
     hashes.sort_unstable();
     hashes
 }
@@ -163,7 +163,7 @@ proptest! {
             k,
             stream.len()
         );
-        prop_assert_eq!(sketch.retained_hashes.capacity(), k);
+        prop_assert_eq!(sketch.retained_hashes().capacity(), k);
     }
 
     #[test]
@@ -240,7 +240,7 @@ proptest! {
         (k, stream, raise) in full_stream(),
     ) {
         let sketch = from_hashes(k, &stream);
-        prop_assert_eq!(sketch.retained_hashes.len(), k);
+        prop_assert_eq!(sketch.retained_hashes().len(), k);
         let hashes = retained(&sketch);
         let kth = *hashes.last().expect("a full sketch retains k hashes");
 
@@ -283,7 +283,7 @@ proptest! {
         for hash in hashes[..k - 1].iter().chain(std::iter::once(&raised)) {
             taller.update_with_hash(*hash);
         }
-        prop_assert_eq!(taller.retained_hashes.len(), k);
+        prop_assert_eq!(taller.retained_hashes().len(), k);
         prop_assert!(
             taller.estimate() <= estimate,
             "k {}: raising the k-th minimum from {} to {} raised the estimate from {} to {}",
@@ -333,7 +333,7 @@ proptest! {
     ) {
         let sketch = from_hashes(k, &stream);
 
-        prop_assert_eq!(sketch.retained_hashes.len(), distinct.len());
+        prop_assert_eq!(sketch.retained_hashes().len(), distinct.len());
         prop_assert_eq!(
             sketch.estimate(),
             distinct.len() as f64,
@@ -353,8 +353,8 @@ proptest! {
     ) {
         let lower_sketch = from_hashes(k, &lower);
         let higher_sketch = from_hashes(k, &higher);
-        prop_assert_eq!(lower_sketch.retained_hashes.len(), k);
-        prop_assert_eq!(higher_sketch.retained_hashes.len(), k);
+        prop_assert_eq!(lower_sketch.retained_hashes().len(), k);
+        prop_assert_eq!(higher_sketch.retained_hashes().len(), k);
 
         let (near, far) = (lower_sketch.estimate(), higher_sketch.estimate());
         prop_assert!(
@@ -390,7 +390,7 @@ proptest! {
             left.len(),
             right.len()
         );
-        prop_assert_eq!(a.retained_hashes.capacity(), k);
+        prop_assert_eq!(a.retained_hashes().capacity(), k);
         prop_assert_eq!(retained(&b), read_before, "the merge changed the operand it read");
     }
 
