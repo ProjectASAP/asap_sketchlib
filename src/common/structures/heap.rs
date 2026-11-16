@@ -109,6 +109,16 @@ impl<T, O: CommonHeapOrder<T>> CommonHeap<T, O> {
         }
     }
 
+    /// Heapifies `data`, in any order, bottom-up in `O(len)`, holding the
+    /// slots [`Self::from_heap_vec`] holds.
+    pub(crate) fn from_unordered_vec(data: Vec<T>, capacity: usize, order: O) -> Self {
+        let mut heap = Self::from_heap_vec(data, capacity, order);
+        for idx in (0..heap.data.len() / 2).rev() {
+            heap.bubble_down(idx);
+        }
+        heap
+    }
+
     /// Replaces the contents with `other`'s, keeping this heap's allocation and
     /// growing it as pushes would.
     pub(crate) fn assign_from(&mut self, other: &Self)
