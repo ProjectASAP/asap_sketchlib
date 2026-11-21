@@ -25,6 +25,8 @@ pub mod sketch_framework;
 pub mod sketches;
 #[cfg(test)]
 pub mod test_utils;
+/// Zero-copy view layouts of stored sketches.
+pub mod views;
 
 pub use asapv1::envelope::peek_kind_id;
 pub use capability::{

@@ -424,6 +424,106 @@ where
 /// Count-Min sketch with floating-point counters (no integer rounding).
 pub type CountMinF64<H = DefaultXxHasher> = CountMinSketch<Vector2D<f64>, RegularPath, H>;
 
+const CMS_VIEW_MAGIC: [u8; 4] = *b"CMV1";
+
+/// A read-only Count-Min sketch with `f64` counters over a borrowed grid:
+/// a stored sketch used in place (from [`CountMinSketch::to_view_bytes`]
+/// bytes). Merges into an owned sketch as the owned sketch would; its point
+/// estimates are those of the sketch it was written from (same hasher).
+#[derive(Debug, Clone, Copy)]
+pub struct CountMinF64View<'a> {
+    rows: usize,
+    cols: usize,
+    admission_rate: f64,
+    /// Row-major counters, `rows * cols` of them.
+    grid: &'a [f64],
+}
+
+impl<'a> CountMinF64View<'a> {
+    /// The view of bytes written by [`CountMinSketch::to_view_bytes`],
+    /// borrowed in place; `bytes` must start 8-byte aligned.
+    pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, crate::views::ViewError> {
+        let mut reader = crate::views::ViewReader::new(bytes, CMS_VIEW_MAGIC)?;
+        let rows = reader.u64()? as usize;
+        let cols = reader.u64()? as usize;
+        let admission_rate = reader.f64()?;
+        let cells = rows
+            .checked_mul(cols)
+            .ok_or_else(|| crate::views::ViewError("Count-Min grid too large".into()))?;
+        let grid = reader.f64s(cells)?;
+        Ok(Self {
+            rows,
+            cols,
+            admission_rate,
+            grid,
+        })
+    }
+
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    /// An owned sketch with this view's counters.
+    pub fn to_owned_sketch(&self) -> CountMinF64 {
+        let mut sketch = CountMinF64::with_dimensions(self.rows, self.cols)
+            .with_admission_rate(self.admission_rate);
+        sketch
+            .merge_view(self)
+            .expect("a view merges into an empty sketch of its shape");
+        sketch
+    }
+
+    /// The counters' first slot, for checking where a view reads from.
+    pub fn grid_ptr(&self) -> *const f64 {
+        self.grid.as_ptr()
+    }
+
+    /// The point estimate of `value`, as the owned sketch answers it.
+    pub fn estimate<H: SketchHasher>(&self, value: &DataInput) -> f64 {
+        (0..self.rows)
+            .map(|r| {
+                let col = ((H::hash64_seeded(r, value) & LOWER_32_MASK) as usize) % self.cols;
+                self.grid[r * self.cols + col]
+            })
+            .fold(f64::INFINITY, f64::min)
+    }
+}
+
+impl<H: SketchHasher> CountMinSketch<Vector2D<f64>, RegularPath, H> {
+    /// This sketch in its zero-copy view layout (see [`crate::views`]):
+    /// `CMV1`, version, `rows`, `cols`, `admission_rate`, then the counters
+    /// `[f64; rows * cols]`, row by row.
+    pub fn to_view_bytes(&self) -> Vec<u8> {
+        let mut writer = crate::views::ViewWriter::new(CMS_VIEW_MAGIC);
+        writer
+            .u64(self.counts.rows() as u64)
+            .u64(self.counts.cols() as u64)
+            .f64(self.admission_rate)
+            .f64s(self.counts.as_slice());
+        writer.finish()
+    }
+
+    /// Merges a view into this sketch, as [`Self::merge`] merges an owned
+    /// one (counter-wise sum). `Err` when the shape or admission rate
+    /// differs.
+    pub fn merge_view(&mut self, other: &CountMinF64View<'_>) -> Result<(), String> {
+        if (self.counts.rows(), self.counts.cols()) != (other.rows, other.cols) {
+            return Err("dimension mismatch while merging Count-Min sketches".into());
+        }
+        if self.admission_rate != other.admission_rate {
+            return Err("admission rate mismatch while merging Count-Min sketches".into());
+        }
+        for (cell, &value) in self.counts.as_mut_slice().iter_mut().zip(other.grid) {
+            *cell += value;
+        }
+        Ok(())
+    }
+}
+
 // Checked updates for f64 counters.
 impl<H: SketchHasher> CountMinSketch<Vector2D<f64>, RegularPath, H> {
     /// Checks a weight [`Self::try_update_weighted`] accepts: finite and

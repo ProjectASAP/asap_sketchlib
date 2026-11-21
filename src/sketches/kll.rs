@@ -15,6 +15,7 @@ use rand::{Rng, rng};
 use crate::common::heap::vec_minimum_slots;
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
+use crate::views::{ViewError, ViewReader, ViewWriter};
 use crate::{DataInput, Vector1D};
 
 #[cfg(test)]
@@ -638,42 +639,9 @@ impl<T: NumericalValue> Kll<T> {
 
     /// Builds and returns the cumulative distribution function (CDF) from the current sketch state.
     pub fn cdf(&self) -> Cdf {
-        let mut cdf = Cdf {
-            entries: Vector1D::with_capacity(self.buffer_size()),
-        };
-        let mut total_w = 0usize;
-
-        for h in 0..self.num_levels {
-            let start = self.levels[h];
-            let end = self.levels[h + 1];
-            let weight = 1 << h;
-            for &value in &self.items[start..end] {
-                cdf.entries.push(CdfEntry {
-                    value: value.to_f64(),
-                    quantile: weight as f64,
-                });
-            }
-            total_w += (end - start) * weight;
-        }
-
-        if total_w == 0 {
-            return cdf;
-        }
-
-        // Stability is irrelevant: entries sharing a value contribute the same
-        // weight either way, so the unstable sort's reordering cannot change
-        // any prefix sum. `total_cmp` also avoids `partial_cmp`'s NaN branch.
-        cdf.entries
-            .as_mut_slice()
-            .sort_unstable_by(|a, b| a.value.total_cmp(&b.value));
-
-        let mut cur_w = 0.0;
-        for entry in cdf.entries.as_mut_slice() {
-            cur_w += entry.quantile;
-            entry.quantile = cur_w / total_w as f64;
-        }
-
-        cdf
+        cdf_of_levels(self.num_levels, self.buffer_size(), |h| {
+            &self.items[self.levels[h]..self.levels[h + 1]]
+        })
     }
 
     /// Returns the CDF, rebuilding it only if the sketch changed since the
@@ -720,15 +688,25 @@ impl<T: NumericalValue> Kll<T> {
         if let Err(problem) = self.check_mergeable(other) {
             panic!("{problem}");
         }
-        let other_start = other.levels[0];
-        let other_end = other.levels[other.num_levels];
-        if other_end == other_start {
+        self.merge_levels(other.num_levels, |h| {
+            &other.items[other.levels[h]..other.levels[h + 1]]
+        });
+    }
+
+    /// [`Self::merge`] of a sketch given by its `num_levels` levels'
+    /// retained items (`level(h)`: level 0 unsorted, the others sorted), of
+    /// the same `k` and `m` (checked by the caller).
+    fn merge_levels<'b>(&mut self, other_num_levels: usize, level: impl Fn(usize) -> &'b [T])
+    where
+        T: 'b,
+    {
+        if (0..other_num_levels).all(|h| level(h).is_empty()) {
             return; // `other` is empty: nothing to merge.
         }
         self.invalidate_cdf_cache();
         self.restore_level_slots();
 
-        let target_num_levels = self.num_levels.max(other.num_levels);
+        let target_num_levels = self.num_levels.max(other_num_levels);
 
         // work[h] holds level h's combined (not-yet-compacted) retained
         // items. +1 slack so `work[h + 1]` is always valid while cascading.
@@ -740,12 +718,10 @@ impl<T: NumericalValue> Kll<T> {
             work[h].extend_from_slice(&self.items[s..e]);
         }
         let mut merge_buf: Vec<T> = Vec::new();
-        #[allow(clippy::needless_range_loop)] // `h` also indexes other.levels/other.items
-        for h in 0..other.num_levels {
-            let s = other.levels[h];
-            let e = other.levels[h + 1];
+        #[allow(clippy::needless_range_loop)] // `h` also indexes `level`
+        for h in 0..other_num_levels {
             let self_len = work[h].len();
-            work[h].extend_from_slice(&other.items[s..e]);
+            work[h].extend_from_slice(level(h));
             // Levels >= 1 are individually sorted in both operands already;
             // normalize the concatenation into one sorted run up front so
             // the cascade below can treat every level >= 1 as sorted, same
@@ -1053,6 +1029,179 @@ impl Kll<f64> {
             let value = data_input_to_f64(v)?;
             self.push_value(value);
         }
+        Ok(())
+    }
+}
+
+/// The CDF of a sketch given by its levels' retained items (level `h`
+/// weighs `2^h`), `len` items in all.
+fn cdf_of_levels<'b, T: NumericalValue + 'b>(
+    num_levels: usize,
+    len: usize,
+    level: impl Fn(usize) -> &'b [T],
+) -> Cdf {
+    let mut cdf = Cdf {
+        entries: Vector1D::with_capacity(len),
+    };
+    let mut total_w = 0usize;
+
+    for h in 0..num_levels {
+        let weight = 1 << h;
+        let items = level(h);
+        for &value in items {
+            cdf.entries.push(CdfEntry {
+                value: value.to_f64(),
+                quantile: weight as f64,
+            });
+        }
+        total_w += items.len() * weight;
+    }
+
+    if total_w == 0 {
+        return cdf;
+    }
+
+    // Stability is irrelevant: entries sharing a value contribute the same
+    // weight either way, so the unstable sort's reordering cannot change
+    // any prefix sum. `total_cmp` also avoids `partial_cmp`'s NaN branch.
+    cdf.entries
+        .as_mut_slice()
+        .sort_unstable_by(|a, b| a.value.total_cmp(&b.value));
+
+    let mut cur_w = 0.0;
+    for entry in cdf.entries.as_mut_slice() {
+        cur_w += entry.quantile;
+        entry.quantile = cur_w / total_w as f64;
+    }
+
+    cdf
+}
+
+const KLL_VIEW_MAGIC: [u8; 4] = *b"KLV1";
+
+/// A read-only KLL sketch (`f64` items) over borrowed levels: a stored
+/// sketch used in place (from [`Kll::to_view_bytes`] bytes). Answers as the
+/// owned sketch, and merges into one as the owned sketch would.
+#[derive(Debug, Clone, Copy)]
+pub struct KllView<'a> {
+    k: usize,
+    m: usize,
+    num_levels: usize,
+    /// Level boundaries into `items`, `num_levels + 1` of them.
+    levels: &'a [u32],
+    items: &'a [f64],
+}
+
+impl<'a> KllView<'a> {
+    /// The view of bytes written by [`Kll::to_view_bytes`], borrowed in
+    /// place; `bytes` must start 8-byte aligned.
+    pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, ViewError> {
+        let mut reader = ViewReader::new(bytes, KLL_VIEW_MAGIC)?;
+        let k = reader.u64()? as usize;
+        let m = reader.u64()? as usize;
+        let num_levels = reader.u64()? as usize;
+        let len = reader.u64()? as usize;
+        if num_levels == 0 || num_levels > MAX_LEVELS {
+            return Err(ViewError(format!("KLL with {num_levels} levels")));
+        }
+        let levels = reader.u32s(num_levels + 1)?;
+        if levels[0] != 0
+            || levels[num_levels] as usize != len
+            || levels.windows(2).any(|pair| pair[0] > pair[1])
+        {
+            return Err(ViewError("KLL level boundaries out of order".into()));
+        }
+        let items = reader.f64s(len)?;
+        Ok(Self {
+            k,
+            m,
+            num_levels,
+            levels,
+            items,
+        })
+    }
+
+    fn level(&self, h: usize) -> &'a [f64] {
+        &self.items[self.levels[h] as usize..self.levels[h + 1] as usize]
+    }
+
+    /// The configured compactor capacity `k`.
+    pub fn k(&self) -> usize {
+        self.k
+    }
+
+    /// The total (weighted) number of items ingested.
+    pub fn count(&self) -> usize {
+        (0..self.num_levels)
+            .map(|h| self.level(h).len() * (1 << h))
+            .sum()
+    }
+
+    /// The CDF, as [`Kll::cdf`] builds it.
+    pub fn cdf(&self) -> Cdf {
+        cdf_of_levels(self.num_levels, self.items.len(), |h| self.level(h))
+    }
+
+    /// The estimated value at quantile `q`, as [`Kll::quantile`].
+    pub fn quantile(&self, q: f64) -> f64 {
+        self.cdf().value_at(q)
+    }
+
+    /// The configured `m`.
+    pub fn m(&self) -> usize {
+        self.m
+    }
+
+    /// An owned sketch holding this view's items (an accumulator to merge
+    /// further views into): `Kll::new(k, m)` merged with this view.
+    pub fn to_owned_sketch(&self) -> Kll<f64> {
+        let mut sketch = Kll::new(self.k, self.m);
+        sketch
+            .merge_view(self)
+            .expect("a view merges into an empty sketch of its k and m");
+        sketch
+    }
+
+    /// The retained items' first slot, for checking where a view reads from.
+    pub fn items_ptr(&self) -> *const f64 {
+        self.items.as_ptr()
+    }
+}
+
+impl Kll<f64> {
+    /// This sketch in its zero-copy view layout (see [`crate::views`]):
+    /// `KLV1`, version, `k`, `m`, `num_levels`, the retained item count,
+    /// the level boundaries `[u32; num_levels + 1]` (from 0) and the items
+    /// `[f64]`, lowest level first, each level as held.
+    pub fn to_view_bytes(&self) -> Vec<u8> {
+        let start = self.levels[0];
+        let levels: Vec<u32> = self.levels[..=self.num_levels]
+            .iter()
+            .map(|&level| (level - start) as u32)
+            .collect();
+        let items = &self.items[start..self.levels[self.num_levels]];
+        let mut writer = ViewWriter::new(KLL_VIEW_MAGIC);
+        writer
+            .u64(self.k as u64)
+            .u64(self.m as u64)
+            .u64(self.num_levels as u64)
+            .u64(items.len() as u64)
+            .u32s(&levels)
+            .f64s(items);
+        writer.finish()
+    }
+
+    /// Merges a view (a stored sketch read in place) into this one, exactly
+    /// as [`Self::merge`] merges the owned sketch it was written from.
+    /// `Err` when `k` or `m` differs.
+    pub fn merge_view(&mut self, other: &KllView<'_>) -> Result<(), String> {
+        if (self.k, self.m) != (other.k, other.m) {
+            return Err(format!(
+                "k/m mismatch while merging KLL sketches: (k={}, m={}) vs (k={}, m={})",
+                self.k, self.m, other.k, other.m
+            ));
+        }
+        self.merge_levels(other.num_levels, |h| other.level(h));
         Ok(())
     }
 }
