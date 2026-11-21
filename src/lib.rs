@@ -23,6 +23,8 @@ pub mod common;
 pub mod sketch_framework;
 /// Core sketch implementations such as Count-Min, HyperLogLog, KLL, and DDSketch.
 pub mod sketches;
+/// Zero-copy view layouts of stored sketches.
+pub mod views;
 #[cfg(test)]
 pub mod test_utils;
 
