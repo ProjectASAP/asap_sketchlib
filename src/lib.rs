@@ -18,6 +18,8 @@ pub mod capability;
 /// Shared primitives used across sketches, including input wrappers, hashers,
 /// storage backends, and reusable utilities.
 pub mod common;
+/// Every sample of one series in one window, compressed (Gorilla, or decimal + zstd).
+mod compressed_samples;
 /// Higher-level composition layers such as Hydra, UnivMon, tumbling windows,
 /// and batch/parallel execution helpers.
 pub mod sketch_framework;
@@ -31,5 +33,8 @@ pub use capability::{
     FamilyCapability, MergeInputRule, MergedError, SketchAlgorithm, StatisticKind,
 };
 pub use common::*;
+pub use compressed_samples::{
+    CompressedSamples, CompressedSamplesFormatError, SampleCodec, SamplesIter,
+};
 pub use sketch_framework::*;
 pub use sketches::*;
