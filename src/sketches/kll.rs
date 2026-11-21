@@ -599,6 +599,7 @@ impl<T: NumericalValue> Kll<T> {
     }
 
     fn add_new_top_level(&mut self) {
+        self.restore_level_slots();
         let sentinel = self.levels[self.num_levels];
         self.num_levels += 1;
         self.levels[self.num_levels] = sentinel;
@@ -725,6 +726,7 @@ impl<T: NumericalValue> Kll<T> {
             return; // `other` is empty: nothing to merge.
         }
         self.invalidate_cdf_cache();
+        self.restore_level_slots();
 
         let target_num_levels = self.num_levels.max(other.num_levels);
 
@@ -877,6 +879,43 @@ impl<T: NumericalValue> Kll<T> {
             None => Coin::new(),
         };
         self.rebuild_capacity_cache();
+    }
+
+    /// Frees the memory this sketch holds only for future inserts, merges
+    /// and queries: the level array beyond the levels in use, the free front
+    /// of the item buffer, the compaction scratch space and a memoized CDF.
+    /// For a sketch that stops receiving inserts, such as the sketch of a
+    /// closed window that is kept for queries.
+    ///
+    /// The retained items, their levels, `k`, `m` and the coin are
+    /// unchanged, so every answer, merge and encoding is the same as
+    /// before. The sketch stays usable: a later insert or merge grows the
+    /// buffers again as a new sketch grows them, with the same retained
+    /// items and coin tosses.
+    pub fn shrink_to_fit(&mut self) {
+        self.cdf_cache = None;
+        self.merge_buf = Vec::new();
+        let start = self.levels[0];
+        let end = self.levels[self.num_levels];
+        if start > 0 || end < self.items.len() {
+            self.items = self.items[start..end].into();
+            for level in self.levels[..=self.num_levels].iter_mut() {
+                *level -= start;
+            }
+        }
+        if self.levels.len() > self.num_levels + 1 {
+            self.levels = self.levels[..=self.num_levels].into();
+        }
+    }
+
+    /// Gives the level array a slot for every level a sketch can reach,
+    /// after [`Self::shrink_to_fit`] cut it to the levels in use.
+    fn restore_level_slots(&mut self) {
+        if self.levels.len() < MAX_LEVELS + 1 {
+            let mut levels = vec![self.levels[self.num_levels]; MAX_LEVELS + 1];
+            levels[..=self.num_levels].copy_from_slice(&self.levels[..=self.num_levels]);
+            self.levels = levels.into_boxed_slice();
+        }
     }
 
     /// Prints compactor contents for debugging.
@@ -1228,6 +1267,109 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// Quantile bits, count, ranks, items, level bounds, coin, encoding.
+    type Observation = (
+        Vec<u64>,
+        usize,
+        Vec<usize>,
+        Vec<f64>,
+        Vec<u32>,
+        (u64, u64, u32),
+        Vec<u8>,
+    );
+
+    /// Everything a reader can observe of a sketch: its answers, its
+    /// retained items by level, its coin and its encoding.
+    fn observed(sk: &Kll<f64>) -> Observation {
+        let quantiles = (0..=100)
+            .map(|i| sk.quantile(f64::from(i) / 100.0).to_bits())
+            .collect();
+        let ranks = (-10..=10).map(|i| sk.rank(f64::from(i) * 1e5)).collect();
+        (
+            quantiles,
+            sk.count(),
+            ranks,
+            sk.items_top_down(),
+            sk.level_bounds_top_down(),
+            sk.coin_state(),
+            sk.to_asapv1().expect("encodes"),
+        )
+    }
+
+    /// `shrink_to_fit` frees memory and changes no answer, merge, later
+    /// insert or encoding, at sizes from empty to many levels.
+    #[test]
+    fn shrink_to_fit_frees_memory_and_changes_no_answer() {
+        for n in [0usize, 1, 15, 200, 1_000, 100_000] {
+            let values = if n == 0 {
+                Vec::new()
+            } else {
+                sample_uniform_f64(-1e6, 1e6, n, 7 + n as u64)
+            };
+            let mut original = Kll::<f64>::with_seed(132, 8, 11);
+            original.update_batch(&values);
+            // A memoized CDF is freed too.
+            let _ = original.cdf_cached();
+            let mut shrunk = original.clone();
+            shrunk.shrink_to_fit();
+            let context = format!("n={n}");
+            assert_eq!(observed(&shrunk), observed(&original), "{context}");
+            assert!(
+                shrunk.memory_bytes() < original.memory_bytes(),
+                "{context}: {} >= {}",
+                shrunk.memory_bytes(),
+                original.memory_bytes()
+            );
+            assert_eq!(
+                shrunk.memory_bytes(),
+                std::mem::size_of::<Kll<f64>>()
+                    + 8 * shrunk.items_top_down().len()
+                    + 8 * (shrunk.num_levels() as usize + 1),
+                "{context}: holds just the retained items and used levels"
+            );
+
+            // Merging a shrunk sketch into another, and another into a
+            // shrunk one, matches merging the originals.
+            let other_values = sample_uniform_f64(0.0, 5e5, n / 2 + 20, 99 + n as u64);
+            let mut other = Kll::<f64>::with_seed(132, 8, 12);
+            other.update_batch(&other_values);
+            let mut into_original = other.clone();
+            into_original.merge(&original);
+            let mut into_shrunk_source = other.clone();
+            into_shrunk_source.merge(&shrunk);
+            assert_eq!(
+                observed(&into_shrunk_source),
+                observed(&into_original),
+                "{context}"
+            );
+            let mut original_target = original.clone();
+            original_target.merge(&other);
+            let mut shrunk_target = shrunk.clone();
+            shrunk_target.merge(&other);
+            assert_eq!(
+                observed(&shrunk_target),
+                observed(&original_target),
+                "{context}"
+            );
+
+            // Inserts after shrinking retain the same items with the same
+            // coin tosses, through new levels.
+            let more = sample_uniform_f64(-5e5, 5e5, 3 * n + 500, 5 + n as u64);
+            original.update_batch(&more);
+            shrunk.update_batch(&more);
+            assert_eq!(
+                observed(&shrunk),
+                observed(&original),
+                "{context} then inserts"
+            );
+            shrunk.clear();
+            original.clear();
+            shrunk.update_batch(&values);
+            original.update_batch(&values);
+            assert_eq!(observed(&shrunk), observed(&original), "{context} cleared");
         }
     }
 
