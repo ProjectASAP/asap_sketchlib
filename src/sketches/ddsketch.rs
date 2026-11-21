@@ -472,9 +472,11 @@ impl DdSketch {
     /// (stores grow 128 slots at a time). For a sketch that stops receiving
     /// inserts, such as the sketch of a closed window kept for queries.
     ///
-    /// Every bucket count, the count, sum, minimum and maximum are
+    /// Every bucket count and the count are
     /// unchanged, so every answer and merge is the same as before; the
-    /// sketch stays usable and grows again on a later insert.
+    /// sketch stays usable and grows again on a later insert. Its ASAPv1
+    /// bytes are shorter (the stores' empty end slots are not written), and
+    /// decode to a sketch with the same answers.
     pub fn shrink_to_fit(&mut self) {
         self.positive_store.shrink_to_fit();
         self.negative_store.shrink_to_fit();
@@ -725,6 +727,23 @@ mod tests {
         };
         assert_eq!(answers(&shrunk), answers(&full));
         assert_eq!(shrunk.get_count(), full.get_count());
+        // The encoding drops the empty slots (shorter bytes) and decodes to
+        // a sketch with the same answers (q = 0 and 1 are its min and max)
+        // and count; decoding the
+        // full sketch's bytes and shrinking it gives the shrunk bytes.
+        let shrunk_bytes = shrunk.to_asapv1().unwrap();
+        let full_bytes = full.to_asapv1().unwrap();
+        assert!(shrunk_bytes.len() < full_bytes.len());
+        let decoded = DdSketch::from_asapv1(&shrunk_bytes).unwrap();
+        assert_eq!(answers(&decoded), answers(&full));
+        assert_eq!(decoded.get_count(), full.get_count());
+        let mut decoded_full = DdSketch::from_asapv1(&full_bytes).unwrap();
+        decoded_full.shrink_to_fit();
+        assert_eq!(decoded_full.to_asapv1().unwrap(), shrunk_bytes);
+        // Shrinking twice changes nothing.
+        let mut twice = shrunk.clone();
+        twice.shrink_to_fit();
+        assert_eq!(twice.to_asapv1().unwrap(), shrunk_bytes);
         let other = sketch_of(0.05, &[0.5, 1e4, 2.0, -3e3]);
         let (mut merged_full, mut merged_shrunk) = (full.clone(), shrunk.clone());
         merged_full.merge(&other).unwrap();
