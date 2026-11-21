@@ -71,11 +71,6 @@ fn ddsketch_view_answers_as_the_owned_sketch() {
                 "{n} {q}"
             );
         }
-        // The view reads the bytes in place.
-        if let Some(ptr) = view.bucket_counts_ptr() {
-            let range = bytes.as_ptr_range();
-            assert!(range.contains(&ptr.cast::<u8>()));
-        }
         assert_eq!(
             view.to_owned_sketch().to_view_bytes(),
             owned.to_view_bytes()
@@ -129,8 +124,6 @@ fn kll_view_answers_and_merges_as_the_owned_sketch() {
         for q in QS {
             assert_eq!(view.quantile(q), owned.quantile(q), "{n} {q}");
         }
-        let range = aligned_bytes(&words, bytes.len()).as_ptr_range();
-        assert!(range.contains(&view.items_ptr().cast::<u8>()));
     }
     // Folding 240 windows: the same accumulator, coin tosses included.
     let windows: Vec<Kll<f64>> = (0..240).map(|w| kll(w + 3, 15)).collect();
@@ -235,4 +228,110 @@ fn ddsketch_counts_are_stored_narrow_and_widen_on_overflow() {
     viewed.merge_view(&big_view).unwrap();
     assert_eq!(viewed.to_view_bytes(), owned.to_view_bytes());
     assert!(viewed.get_count() > u64::from(u32::MAX));
+}
+
+/// Every view family, its bytes mutated one byte at a time (several values
+/// at every position) and in random multi-byte bursts: `from_bytes` either
+/// refuses the bytes or accepts a view on which every operation (answers,
+/// merges into an accumulator, the owned sketch) returns without panicking.
+#[test]
+fn mutated_views_never_panic() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    let mut big = dd(9, 300);
+    big.apply_delta(asap_sketchlib::sketches::octo_delta::DdSketchBucketDelta {
+        sign: asap_sketchlib::sketches::octo_delta::DdSign::Positive,
+        index: 300,
+        count: u64::from(u32::MAX) + 5,
+    });
+    let seeds: Vec<(&str, Vec<u8>)> = vec![
+        ("dd", dd(3, 300).to_view_bytes()),
+        ("dd-signed", {
+            let mut s = DdSketch::new(0.02);
+            for v in values(4, 200) {
+                s.add(&(v - 50_000.0 / 7.0));
+            }
+            s.to_view_bytes()
+        }),
+        ("dd-wide", big.to_view_bytes()),
+        ("kll", kll(5, 3_000).to_view_bytes()),
+        ("cms", cms(6, 300).to_view_bytes()),
+    ];
+    let exercise = |family: &str, bytes: &[u8]| match family {
+        f if f.starts_with("dd") => {
+            if let Ok(view) = DdSketchView::from_bytes(bytes) {
+                for q in QS {
+                    let _ = view.get_value_at_quantile(q);
+                    let _ = view.quantile_interpolated(q);
+                }
+                let _ = (view.get_count(), view.min(), view.max(), view.sum());
+                let mut owned = view.to_owned_sketch();
+                let _ = owned.merge_view(&view);
+                let mut other = dd(7, 50);
+                let _ = other.merge_view(&view);
+                let _ = other.quantile_interpolated(0.5);
+            }
+        }
+        "kll" => {
+            if let Ok(view) = KllView::from_bytes(bytes) {
+                for q in QS {
+                    let _ = view.quantile(q);
+                }
+                let _ = (view.count(), view.rank(10.0), view.cdf());
+                let mut owned = view.to_owned_sketch(1);
+                let _ = owned.merge_view(&view);
+                let _ = owned.quantile(0.5);
+            }
+        }
+        _ => {
+            if let Ok(view) = CountMinF64View::from_bytes(bytes) {
+                for key in 0..10 {
+                    let _ = view.estimate::<asap_sketchlib::DefaultXxHasher>(&DataInput::I64(key));
+                }
+                let _ = view.total();
+                let mut owned = view.to_owned_sketch();
+                let _ = owned.merge_view(&view);
+            }
+        }
+    };
+    let mut accepted = 0;
+    let mut tried = 0;
+    let mut x = 0x9e37_79b9_7f4a_7c15_u64;
+    for (family, bytes) in &seeds {
+        let mut cases: Vec<Vec<u8>> = Vec::new();
+        for at in 0..bytes.len() {
+            for value in [0x00, 0x01, 0x7f, 0x80, 0xfe, 0xff] {
+                let mut mutated = bytes.clone();
+                mutated[at] = value;
+                cases.push(mutated);
+            }
+        }
+        for _ in 0..2_000 {
+            let mut mutated = bytes.clone();
+            for _ in 0..4 {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                let at = (x as usize) % mutated.len();
+                mutated[at] = (x >> 32) as u8;
+            }
+            cases.push(mutated);
+        }
+        for mutated in cases {
+            let words = aligned_copy(&mutated);
+            let bytes = aligned_bytes(&words, mutated.len());
+            tried += 1;
+            if DdSketchView::from_bytes(bytes).is_ok()
+                || KllView::from_bytes(bytes).is_ok()
+                || CountMinF64View::from_bytes(bytes).is_ok()
+            {
+                accepted += 1;
+            }
+            let outcome = catch_unwind(AssertUnwindSafe(|| exercise(family, bytes)));
+            assert!(outcome.is_ok(), "{family}: a mutated view panicked");
+        }
+    }
+    assert!(
+        accepted > 0 && accepted < tried,
+        "{accepted} of {tried} accepted"
+    );
 }

@@ -403,26 +403,38 @@ where
     /// Returns the frequency estimate for the provided value.
     #[inline(always)]
     pub fn estimate(&self, value: &DataInput) -> S::Counter {
-        let rows = self.counts.rows();
-        let cols = self.counts.cols();
         // Seed the running minimum from row 0's probed cell, then fold in the
         // rest. Mirrors the fast path's `fast_query_min`.
-        let col0 = ((H::hash64_seeded(0, value) & LOWER_32_MASK) as usize) % cols;
-        let mut min = self.counts.query_one_counter(0, col0);
-        for r in 1..rows {
-            let hashed = H::hash64_seeded(r, value);
-            let col = ((hashed & LOWER_32_MASK) as usize) % cols;
-            let v = self.counts.query_one_counter(r, col);
-            if v < min {
-                min = v;
-            }
-        }
-        min
+        probe_min::<S::Counter, H>(self.counts.rows(), self.counts.cols(), value, |row, col| {
+            self.counts.query_one_counter(row, col)
+        })
     }
 }
 
 /// Count-Min sketch with floating-point counters (no integer rounding).
 pub type CountMinF64<H = DefaultXxHasher> = CountMinSketch<Vector2D<f64>, RegularPath, H>;
+
+/// The regular-path point estimate: the minimum of the counters `value`
+/// hashes to in each row, row 0's first (one code path for the owned sketch
+/// and its view, so both answer alike, NaN counters included).
+fn probe_min<T: PartialOrd + Copy, H: SketchHasher>(
+    rows: usize,
+    cols: usize,
+    value: &DataInput,
+    counter: impl Fn(usize, usize) -> T,
+) -> T {
+    let col0 = ((H::hash64_seeded(0, value) & LOWER_32_MASK) as usize) % cols;
+    let mut min = counter(0, col0);
+    for r in 1..rows {
+        let hashed = H::hash64_seeded(r, value);
+        let col = ((hashed & LOWER_32_MASK) as usize) % cols;
+        let v = counter(r, col);
+        if v < min {
+            min = v;
+        }
+    }
+    min
+}
 
 const CMS_VIEW_MAGIC: [u8; 4] = *b"CMV1";
 
@@ -451,6 +463,10 @@ impl<'a> CountMinF64View<'a> {
             .checked_mul(cols)
             .ok_or_else(|| crate::views::ViewError("Count-Min grid too large".into()))?;
         let grid = reader.f64s(cells)?;
+        check_matrix_shape("CMS", rows, cols)
+            .map_err(|e| crate::views::ViewError(e.to_string()))?;
+        crate::asapv1::admission_rate::to_key(admission_rate)
+            .map_err(|e| crate::views::ViewError(format!("Count-Min {e}")))?;
         Ok(Self {
             rows,
             cols,
@@ -477,19 +493,17 @@ impl<'a> CountMinF64View<'a> {
         sketch
     }
 
-    /// The counters' first slot, for checking where a view reads from.
-    pub fn grid_ptr(&self) -> *const f64 {
-        self.grid.as_ptr()
+    /// The total update weight: every row receives each update once, so
+    /// row 0's counters sum to it.
+    pub fn total(&self) -> f64 {
+        self.grid[..self.cols].iter().sum()
     }
 
     /// The point estimate of `value`, as the owned sketch answers it.
     pub fn estimate<H: SketchHasher>(&self, value: &DataInput) -> f64 {
-        (0..self.rows)
-            .map(|r| {
-                let col = ((H::hash64_seeded(r, value) & LOWER_32_MASK) as usize) % self.cols;
-                self.grid[r * self.cols + col]
-            })
-            .fold(f64::INFINITY, f64::min)
+        probe_min::<f64, H>(self.rows, self.cols, value, |row, col| {
+            self.grid[row * self.cols + col]
+        })
     }
 }
 

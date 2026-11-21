@@ -12,6 +12,14 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **Zero-copy sketch views** (`views` module): `DdSketch`, `Kll<f64>` and
+  `CountMinF64` write `to_view_bytes` (little-endian fixed fields, 8-byte
+  aligned arrays; DDSketch bucket counts as `u32` when they all fit,
+  `u64` otherwise) and read them in place as `DdSketchView`, `KllView` and
+  `CountMinF64View` (`from_bytes` validates every field, so no later
+  operation on an accepted view panics). Each view answers as its owned
+  sketch and folds into an owned accumulator with `merge_view`;
+  `KllView::to_owned_sketch` takes the accumulator's seed.
 - **`DdSketch::shrink_to_fit`** keeps only each bucket store's occupied
   range (stores grow 128 slots at a time), for a sketch kept after it
   stops receiving inserts. Answers, count, sum, min, max and merges are

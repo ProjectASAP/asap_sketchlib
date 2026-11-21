@@ -1112,6 +1112,18 @@ impl<'a> KllView<'a> {
             return Err(ViewError("KLL level boundaries out of order".into()));
         }
         let items = reader.f64s(len)?;
+        if normalized_k_m(k, m) != (k, m) {
+            return Err(ViewError(format!("KLL k {k}, m {m} out of range")));
+        }
+        // The weighted count must fit, as a real sketch's does.
+        (0..num_levels)
+            .try_fold(0u64, |total, h| {
+                let size = u64::from(levels[h + 1] - levels[h]);
+                size.checked_mul(1u64 << h)
+                    .and_then(|weighted| total.checked_add(weighted))
+            })
+            .filter(|&total| usize::try_from(total).is_ok())
+            .ok_or_else(|| ViewError("KLL weighted count overflows".into()))?;
         Ok(Self {
             k,
             m,
@@ -1147,24 +1159,25 @@ impl<'a> KllView<'a> {
         self.cdf().value_at(q)
     }
 
-    /// The configured `m`.
-    pub fn m(&self) -> usize {
-        self.m
+    /// The configured `m`, as [`Kll::m`].
+    pub fn m(&self) -> u32 {
+        self.m as u32
     }
 
-    /// An owned sketch holding this view's items (an accumulator to merge
-    /// further views into): `Kll::new(k, m)` merged with this view.
-    pub fn to_owned_sketch(&self) -> Kll<f64> {
-        let mut sketch = Kll::new(self.k, self.m);
-        sketch
-            .merge_view(self)
-            .expect("a view merges into an empty sketch of its k and m");
-        sketch
+    /// The estimated (weighted) rank of `x`, as [`Kll::rank`].
+    pub fn rank(&self, x: f64) -> usize {
+        (0..self.num_levels)
+            .map(|h| self.level(h).iter().filter(|&&v| v <= x).count() << h)
+            .sum()
     }
 
-    /// The retained items' first slot, for checking where a view reads from.
-    pub fn items_ptr(&self) -> *const f64 {
-        self.items.as_ptr()
+    /// An owned sketch holding this view's items, an accumulator to merge
+    /// further views into: `Kll::with_seed(k, m, seed)` merged with this
+    /// view, so the same seed and the same views give the same sketch.
+    pub fn to_owned_sketch(&self, seed: u64) -> Kll<f64> {
+        let mut sketch = Kll::with_seed(self.k, self.m, seed);
+        sketch.merge_levels(self.num_levels, |h| self.level(h));
+        sketch
     }
 }
 

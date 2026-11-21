@@ -4,10 +4,12 @@
 //! rebuilding the sketch.
 //!
 //! Each sketch family with a view has `to_view_bytes` on the owned sketch
-//! (the writer), a `…View<'a>` type with `from_bytes` (validates lengths and
-//! alignment; never panics on bad bytes), the family's estimates, and a
-//! `merge_view` on the owned sketch that folds a view into it in place, so
-//! a query merging many stored windows allocates only its accumulator.
+//! (the writer), a `…View<'a>` type with `from_bytes` (validates every
+//! field, so no later operation on an accepted view can panic), the
+//! family's estimates, and a `merge_view` on the owned sketch that folds a
+//! view into it in place: a query merging many stored windows never
+//! rebuilds them; it allocates in its accumulator only (a DDSketch store
+//! that grows; a KLL merge's level scratch).
 //!
 //! Layout of every view: a 4-byte family magic, a `u32` layout version, the
 //! family's fixed fields (each 8 bytes, or `i32`/`u32` in pairs), then its
@@ -109,11 +111,15 @@ macro_rules! fixed {
     ($name:ident, $ty:ty) => {
         pub(crate) fn $name(&mut self) -> Result<$ty, ViewError> {
             const N: usize = std::mem::size_of::<$ty>();
+            let end = self
+                .at
+                .checked_add(N)
+                .ok_or_else(|| ViewError("truncated".into()))?;
             let raw = self
                 .bytes
-                .get(self.at..self.at + N)
+                .get(self.at..end)
                 .ok_or_else(|| ViewError("truncated".into()))?;
-            self.at += N;
+            self.at = end;
             Ok(<$ty>::from_le_bytes(raw.try_into().expect("N bytes")))
         }
     };
@@ -123,18 +129,25 @@ macro_rules! array {
     ($name:ident, $ty:ty) => {
         /// `n` values borrowed in place, starting at the next 8-byte boundary.
         pub(crate) fn $name(&mut self, n: usize) -> Result<&'a [$ty], ViewError> {
-            self.at = self.at.div_ceil(8) * 8;
+            self.at = self
+                .at
+                .checked_next_multiple_of(8)
+                .ok_or_else(|| ViewError("array too long".into()))?;
             let len = n
                 .checked_mul(std::mem::size_of::<$ty>())
                 .ok_or_else(|| ViewError("array too long".into()))?;
+            let end = self
+                .at
+                .checked_add(len)
+                .ok_or_else(|| ViewError("array too long".into()))?;
             let raw = self
                 .bytes
-                .get(self.at..self.at + len)
+                .get(self.at..end)
                 .ok_or_else(|| ViewError("truncated array".into()))?;
             if raw.as_ptr() as usize % std::mem::align_of::<$ty>() != 0 {
                 return Err(ViewError("misaligned array".into()));
             }
-            self.at += len;
+            self.at = end;
             // SAFETY: `raw` is `n * size_of::<T>()` initialized bytes, aligned
             // for `T`, which is valid for every bit pattern; the host is
             // little-endian (checked in `new`), the layout's byte order.

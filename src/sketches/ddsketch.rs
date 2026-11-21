@@ -401,7 +401,25 @@ impl DdSketch {
     /// Returns the quantile at `q` interpolated linearly between the two
     /// adjacent order statistics at rank `q * (n - 1)` (0-based), the
     /// convention of PromQL `quantile_over_time` and SQL `percentile_cont`.
-    /// See [`DdSketchView::quantile_interpolated`].
+    /// [`Self::get_value_at_quantile`] keeps its nearest-rank convention.
+    ///
+    /// - `Ok(None)` for an empty sketch.
+    /// - `Err` for `q` outside `[0, 1]`, NaN included; mapping such a `q` to
+    ///   `-inf` / `+inf` (as PromQL does) is the caller's job.
+    /// - Rank 0 and rank `n - 1` are the exactly retained minimum and
+    ///   maximum; every other order statistic is its bucket's representative
+    ///   (negative store, zero bucket or positive store), clamped to
+    ///   `[min, max]`.
+    ///
+    /// Error: each neighbour is within `alpha` relative of the true order
+    /// statistic when its magnitude is indexable, so when both neighbours are
+    /// indexable and share a sign the result is within `alpha` relative of the
+    /// true interpolated value. Across zero the bound is absolute:
+    /// `alpha * ((1 - f) |lower| + f |upper|)` with `f` the fractional rank,
+    /// which need not be small relative to a result near zero. Magnitudes
+    /// below the indexable range are counted in the zero bucket and read as
+    /// `0`. A sketch never holds NaN: [`Self::try_add`] refuses non-finite
+    /// values. Ranks are computed in `f64`, exact up to `2^53` samples.
     pub fn quantile_interpolated(&self, q: f64) -> Result<Option<f64>, String> {
         self.as_view().quantile_interpolated(q)
     }
@@ -771,13 +789,6 @@ impl<'a> Counts<'a> {
             back: self.len(),
         }
     }
-
-    fn first_ptr(&self) -> *const u8 {
-        match self {
-            Self::U32(counts) => counts.as_ptr().cast(),
-            Self::U64(counts) => counts.as_ptr().cast(),
-        }
-    }
 }
 
 /// The counts of a [`Counts`], as `u64`, from either end.
@@ -902,6 +913,48 @@ impl<'a> DdSketchView<'a> {
                 "DDSketch count {count} differs from its buckets' {buckets}"
             )));
         }
+        admission_rate::to_key(admission_rate).map_err(|e| ViewError(format!("DDSketch {e}")))?;
+        if count > 0 && !(min <= max && min.is_finite() && max.is_finite()) || sum.is_nan() {
+            return Err(ViewError(format!(
+                "DDSketch min {min} / max {max} / sum {sum} are not a valid range"
+            )));
+        }
+        // Every bucket index a real sketch can hold: from the smallest
+        // indexable magnitude to the largest sample, plus the empty slots a
+        // growing store keeps at its ends (under one growth chunk each).
+        let inv_log_gamma = 1.0 / ((1.0 + alpha) / (1.0 - alpha)).ln();
+        let key = |v: f64| (v.ln() * inv_log_gamma).floor();
+        let lowest = key(ddsketch_indexable_bounds(alpha).0) - GROW_CHUNK as f64 - 1.0;
+        let store_ok = |offset: i32, len: usize, largest: f64| -> bool {
+            if len == 0 {
+                return true;
+            }
+            let Some(last) = i32::try_from(len - 1)
+                .ok()
+                .and_then(|span| offset.checked_add(span))
+            else {
+                return false;
+            };
+            let highest = if largest > 0.0 {
+                key(largest) + GROW_CHUNK as f64 + 1.0
+            } else {
+                lowest + GROW_CHUNK as f64
+            };
+            f64::from(offset) >= lowest && f64::from(last) <= highest
+        };
+        if !store_ok(
+            positive_offset,
+            positive_len,
+            if count > 0 { max } else { 0.0 },
+        ) || !store_ok(
+            negative_offset,
+            negative_len,
+            if count > 0 { -min } else { 0.0 },
+        ) {
+            return Err(ViewError(
+                "DDSketch bucket range outside its samples' range".into(),
+            ));
+        }
         Ok(Self {
             alpha,
             gamma: (1.0 + alpha) / (1.0 - alpha),
@@ -930,11 +983,6 @@ impl<'a> DdSketchView<'a> {
             .merge_view(self)
             .expect("a view merges into an empty sketch of its alpha");
         sketch
-    }
-
-    /// The bucket counts' first slot, for checking where a view reads from.
-    pub fn bucket_counts_ptr(&self) -> Option<*const u8> {
-        (!self.positive.counts.is_empty()).then_some(self.positive.counts.first_ptr())
     }
 
     /// The width of its stored bucket counts, in bytes: 4 or 8.
@@ -1048,7 +1096,7 @@ impl<'a> DdSketchView<'a> {
     /// `alpha * ((1 - f) |lower| + f |upper|)` with `f` the fractional rank,
     /// which need not be small relative to a result near zero. Magnitudes
     /// below the indexable range are counted in the zero bucket and read as
-    /// `0`. A sketch never holds NaN: [`Self::try_add`] refuses non-finite
+    /// `0`. A sketch never holds NaN: [`DdSketch::try_add`] refuses non-finite
     /// values. Ranks are computed in `f64`, exact up to `2^53` samples.
     pub fn quantile_interpolated(&self, q: f64) -> Result<Option<f64>, String> {
         if !(0.0..=1.0).contains(&q) {
