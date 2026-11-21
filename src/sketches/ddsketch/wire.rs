@@ -34,7 +34,6 @@ use crate::asapv1::envelope;
 use crate::asapv1::kind;
 use crate::asapv1::kind::DDSKETCH;
 use crate::asapv1::wire_key::exact;
-use crate::common::structures::Vector1D;
 
 use super::{Buckets, DdSketch, DdSketchState};
 
@@ -127,7 +126,7 @@ pub(super) fn check_alpha(alpha: f64) -> Result<(), String> {
 /// a populated one's highest index `offset + len - 1` is representable as an
 /// `i32`. Applied before the store is rebuilt from the declared offset.
 fn check_store_span(store: &Buckets) -> Result<(), String> {
-    let (offset, len) = (store.offset, store.counts.len());
+    let (offset, len) = (store.offset, store.len());
     if len == 0 {
         if offset != 0 {
             return Err(format!(
@@ -148,10 +147,9 @@ fn check_store_span(store: &Buckets) -> Result<(), String> {
 /// Sum of a store's bucket counts. `None` on overflow.
 fn store_total(store: &Buckets) -> Option<u64> {
     store
-        .counts
-        .as_slice()
+        .as_ref()
         .iter()
-        .try_fold(0u64, |acc, &c| acc.checked_add(c))
+        .try_fold(0u64, |acc, c| acc.checked_add(c))
 }
 
 /// Checks the running scalars against the total count. An empty sketch carries
@@ -228,12 +226,12 @@ impl DdSketch {
             .map_err(|e| RmpEncodeError::Syntax(format!("ASAPv1 DDSketch envelope: {e}")))?;
         let metadata = encode_metadata(self.alpha, self.admission_rate)?;
         let payload = rmp_serde::to_vec(&DdPayload {
-            counts: state.positive_store.counts.into_vec(),
+            counts: state.positive_store.as_ref().iter().collect(),
             offset: state.positive_store.offset,
             sum: self.sum,
             min: self.min,
             max: self.max,
-            negative_counts: state.negative_store.counts.into_vec(),
+            negative_counts: state.negative_store.as_ref().iter().collect(),
             negative_offset: state.negative_store.offset,
             zero_count: self.zero_count,
         })?;
@@ -257,17 +255,11 @@ impl DdSketch {
         p.negative_counts.shrink_to_fit();
         DdSketch::try_from(DdSketchState {
             alpha,
-            positive_store: Buckets {
-                counts: Vector1D::from_vec(p.counts),
-                offset: p.offset,
-            },
+            positive_store: Buckets::wide(p.counts, p.offset),
             sum: p.sum,
             min: p.min,
             max: p.max,
-            negative_store: Buckets {
-                counts: Vector1D::from_vec(p.negative_counts),
-                offset: p.negative_offset,
-            },
+            negative_store: Buckets::wide(p.negative_counts, p.negative_offset),
             zero_count: p.zero_count,
             admission_rate,
         })
@@ -646,7 +638,7 @@ mod tests {
     fn ddsketch_rejects_serializing_a_store_span_past_i32() {
         let mut sketch = DdSketch::new(ALPHA);
         sketch.add(&1.0f64);
-        sketch.positive_store.counts = Vector1D::from_vec(vec![1u64; 10]);
+        sketch.positive_store = Buckets::wide(vec![1u64; 10], 0);
         sketch.positive_store.offset = i32::MAX - 2;
         assert!(
             sketch.to_asapv1().is_err(),
@@ -660,7 +652,7 @@ mod tests {
     fn ddsketch_rejects_serializing_an_overflowing_bucket_total() {
         let mut sketch = DdSketch::new(ALPHA);
         sketch.add(&1.0f64);
-        sketch.positive_store.counts = Vector1D::from_vec(vec![u64::MAX, 1]);
+        sketch.positive_store = Buckets::wide(vec![u64::MAX, 1], 0);
         sketch.positive_store.offset = 0;
         assert!(
             sketch.to_asapv1().is_err(),
@@ -675,10 +667,7 @@ mod tests {
 
         let state = |positive: (&[u64], i32), negative: (&[u64], i32), zero_count, scalars| {
             let (sum, min, max) = scalars;
-            let store = |(counts, offset): (&[u64], i32)| Buckets {
-                counts: Vector1D::from_vec(counts.to_vec()),
-                offset,
-            };
+            let store = |(counts, offset): (&[u64], i32)| Buckets::wide(counts.to_vec(), offset);
             DdSketch::try_from(DdSketchState {
                 alpha: 0.01,
                 positive_store: store(positive),

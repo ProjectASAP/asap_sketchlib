@@ -4938,8 +4938,8 @@ mod partition_accuracy {
                 reference.positive_store_offset(),
             );
             let (p, r) = (
-                parent.sketch.positive_store_counts(),
-                reference.positive_store_counts(),
+                parent.sketch.positive_store_counts().into_owned(),
+                reference.positive_store_counts().into_owned(),
             );
             let lo = p_off.min(r_off);
             let hi = (p_off + p.len() as i32).max(r_off + r.len() as i32);
@@ -4953,7 +4953,7 @@ mod partition_accuracy {
             };
             let mut buckets = Tally::default();
             for k in lo..hi {
-                let (a, b) = (at(p, p_off, k), at(r, r_off, k));
+                let (a, b) = (at(&p, p_off, k), at(&r, r_off, k));
                 buckets.record(a == b, || {
                     format!("bucket {k}: octo {a}, single-thread {b}")
                 });

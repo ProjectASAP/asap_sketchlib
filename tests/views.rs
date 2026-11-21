@@ -76,10 +76,11 @@ fn ddsketch_view_answers_as_the_owned_sketch() {
             let range = bytes.as_ptr_range();
             assert!(range.contains(&ptr.cast::<u8>()));
         }
-        assert_eq!(
-            view.to_owned_sketch().to_view_bytes(),
-            owned.to_view_bytes()
-        );
+        // The owned copy holds 8-byte counts; sealed again, it writes the
+        // same 4-byte view.
+        let mut copy = view.to_owned_sketch();
+        copy.shrink_to_fit();
+        assert_eq!(copy.to_view_bytes(), owned.to_view_bytes());
     }
 }
 

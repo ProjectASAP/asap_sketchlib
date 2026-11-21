@@ -187,8 +187,7 @@ impl DdSketch {
                 } else {
                     &mut self.positive_store
                 };
-                store.ensure(k);
-                store.counts.as_mut_slice()[(k - store.offset) as usize] += c;
+                store.add(k, c);
                 let magnitude = self.bin_representative(k);
                 let r = if negative { -magnitude } else { magnitude };
                 self.add_to_sum(r * c as f64);
@@ -209,7 +208,6 @@ impl DdSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::structures::Vector1D;
     use crate::sketches::ddsketch::DdSketchState;
 
     const ALPHA: f64 = 0.01;
@@ -289,7 +287,7 @@ mod tests {
         assert!(sketch.merge_delta(&other).is_err());
         assert_eq!(sketch.get_count(), 1);
 
-        sketch.positive_store.counts = Vector1D::from_vec(vec![u64::MAX - 1]);
+        sketch.positive_store = Buckets::wide(vec![u64::MAX - 1], 0);
         sketch.positive_store.offset = 55;
         sketch.count = u64::MAX - 1;
         let before = sketch.to_asapv1().unwrap();
@@ -310,10 +308,7 @@ mod tests {
     fn merge_delta_rejects_a_store_span_past_i32() {
         let mut sketch = DdSketch::try_from(DdSketchState {
             alpha: ALPHA,
-            positive_store: Buckets {
-                counts: Vector1D::from_vec(vec![1]),
-                offset: i32::MAX - 1,
-            },
+            positive_store: Buckets::wide(vec![1], i32::MAX - 1),
             sum: 1e300,
             min: 1e300,
             max: 1e300,

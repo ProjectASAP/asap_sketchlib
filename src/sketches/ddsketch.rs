@@ -33,9 +33,21 @@ pub use delta::DdSketchDelta;
 // Number of buckets to grow by when expanding.
 const GROW_CHUNK: usize = 128;
 
+/// One store's bucket counts. A store that still receives values keeps
+/// 8-byte counts; sealing a store ([`DdSketch::shrink_to_fit`]) narrows
+/// them to 4 bytes when every count fits in a `u32`, halving the bytes a
+/// stored window holds. A count past `u32::MAX` keeps the 8-byte layout.
+/// Any change to a narrow store widens it first, so merge accumulators
+/// always add in `u64`.
+#[derive(Debug, Clone)]
+enum Counts {
+    Wide(Vector1D<u64>),
+    Narrow(Box<[u32]>),
+}
+
 #[derive(Debug, Clone)]
 struct Buckets {
-    counts: Vector1D<u64>,
+    counts: Counts,
     offset: i32,
 }
 
@@ -47,24 +59,63 @@ impl Default for Buckets {
 
 impl Buckets {
     fn new() -> Self {
+        Self::wide(Vec::new(), 0)
+    }
+
+    fn wide(counts: Vec<u64>, offset: i32) -> Self {
         Self {
-            counts: Vector1D::from_vec(Vec::new()),
-            offset: 0,
+            counts: Counts::Wide(Vector1D::from_vec(counts)),
+            offset,
         }
     }
 
     #[inline(always)]
+    fn len(&self) -> usize {
+        self.as_ref().len()
+    }
+
+    #[inline(always)]
     fn is_empty(&self) -> bool {
-        self.counts.is_empty()
+        self.len() == 0
+    }
+
+    #[inline(always)]
+    fn as_ref(&self) -> CountsRef<'_> {
+        match &self.counts {
+            Counts::Wide(counts) => CountsRef::Wide(counts.as_slice()),
+            Counts::Narrow(counts) => CountsRef::Narrow(counts),
+        }
+    }
+
+    /// Bytes the counts have allocated.
+    fn allocated_bytes(&self) -> usize {
+        match &self.counts {
+            Counts::Wide(counts) => counts.capacity() * size_of::<u64>(),
+            Counts::Narrow(counts) => counts.len() * size_of::<u32>(),
+        }
+    }
+
+    /// The 8-byte counts, widening narrow ones first.
+    #[inline(always)]
+    fn wide_mut(&mut self) -> &mut Vector1D<u64> {
+        if let Counts::Narrow(narrow) = &self.counts {
+            self.counts = Counts::Wide(Vector1D::from_vec(
+                narrow.iter().map(|&c| u64::from(c)).collect(),
+            ));
+        }
+        match &mut self.counts {
+            Counts::Wide(counts) => counts,
+            Counts::Narrow(_) => unreachable!("widened above"),
+        }
     }
 
     #[inline(always)]
     fn range(&self) -> Option<(i32, i32)> {
-        if self.counts.is_empty() {
+        if self.is_empty() {
             None
         } else {
             let left = self.offset;
-            let right = self.offset + self.counts.len() as i32 - 1;
+            let right = self.offset + self.len() as i32 - 1;
             Some((left, right))
         }
     }
@@ -72,8 +123,8 @@ impl Buckets {
     /// Ensure bucket k exists, using growth in chunks.
     #[inline(always)]
     fn ensure(&mut self, k: i32) {
-        if self.counts.is_empty() {
-            self.counts = Vector1D::from_vec(vec![0u64; GROW_CHUNK]);
+        if self.is_empty() {
+            self.counts = Counts::Wide(Vector1D::from_vec(vec![0u64; GROW_CHUNK]));
             self.offset = k - (GROW_CHUNK as i32 / 2);
             return;
         }
@@ -85,18 +136,26 @@ impl Buckets {
             let grow = needed.max(GROW_CHUNK);
 
             let mut v = vec![0u64; grow];
-            v.extend_from_slice(self.counts.as_slice());
+            v.extend_from_slice(self.wide_mut().as_slice());
 
-            self.counts = Vector1D::from_vec(v);
+            self.counts = Counts::Wide(Vector1D::from_vec(v));
             self.offset -= grow as i32;
         } else if k > right {
             let needed = (k - right) as usize;
             let grow = needed.max(GROW_CHUNK);
 
-            let mut v = self.counts.clone().into_vec();
+            let mut v = self.wide_mut().clone().into_vec();
             v.resize(v.len() + grow, 0);
-            self.counts = Vector1D::from_vec(v);
+            self.counts = Counts::Wide(Vector1D::from_vec(v));
         }
+    }
+
+    /// Adds `count` to bucket `k`, growing the store to hold it.
+    #[inline(always)]
+    fn add(&mut self, k: i32, count: u64) {
+        self.ensure(k);
+        let idx = (k - self.offset) as usize;
+        self.wide_mut().as_mut_slice()[idx] += count;
     }
 
     #[inline(always)]
@@ -104,9 +163,11 @@ impl Buckets {
         // this is the method that gets called on every sample insertion
         let idx_i32 = k - self.offset;
 
-        if idx_i32 >= 0 {
+        if idx_i32 >= 0
+            && let Counts::Wide(counts) = &mut self.counts
+        {
+            let slice = counts.as_mut_slice();
             let idx = idx_i32 as usize;
-            let slice = self.counts.as_mut_slice();
             if idx < slice.len() {
                 slice[idx] += 1;
                 return;
@@ -114,30 +175,155 @@ impl Buckets {
         }
 
         // This is the method that gets called only on rare expansions
-        self.ensure(k);
-        let idx = (k - self.offset) as usize;
-        self.counts.as_mut_slice()[idx] += 1;
+        self.add(k, 1);
     }
 
-    /// Drops the empty slots at both ends and the spare capacity: the
+    /// Seals the store: drops its empty end slots and spare capacity, and
+    /// narrows its counts to 4 bytes when each fits in a `u32`. The
     /// occupied range of bucket indices and its counts are unchanged.
     fn shrink_to_fit(&mut self) {
-        let counts = self.counts.as_slice();
-        let Some(first) = counts.iter().position(|&c| c != 0) else {
-            self.counts = Vector1D::from_vec(Vec::new());
-            self.offset = 0;
+        self.drop_empty_slots();
+        if let Counts::Wide(counts) = &self.counts
+            && let Ok(narrow) = counts
+                .as_slice()
+                .iter()
+                .map(|&c| u32::try_from(c))
+                .collect::<Result<Box<[u32]>, _>>()
+        {
+            self.counts = Counts::Narrow(narrow);
+        }
+    }
+
+    /// Drops the empty slots at both ends and the spare capacity, keeping
+    /// the counts' width.
+    fn drop_empty_slots(&mut self) {
+        let counts = self.as_ref();
+        let Some(first) = counts.iter().position(|c| c != 0) else {
+            *self = Self::new();
             return;
         };
         let last = counts
             .iter()
-            .rposition(|&c| c != 0)
+            .rposition(|c| c != 0)
             .expect("a nonzero count");
-        if first == 0 && last + 1 == counts.len() && counts.len() == self.counts.capacity() {
-            return;
+        match &mut self.counts {
+            Counts::Wide(wide) => {
+                if first == 0 && last + 1 == wide.len() && wide.len() == wide.capacity() {
+                    return;
+                }
+                *wide = Vector1D::from_vec(wide.as_slice()[first..=last].to_vec());
+            }
+            Counts::Narrow(narrow) => {
+                if first == 0 && last + 1 == narrow.len() {
+                    return;
+                }
+                *narrow = narrow[first..=last].into();
+            }
         }
-        let kept = counts[first..=last].to_vec();
         self.offset += first as i32;
-        self.counts = Vector1D::from_vec(kept);
+    }
+}
+
+/// One store's bucket counts, borrowed at their stored width.
+#[derive(Debug, Clone, Copy)]
+enum CountsRef<'a> {
+    Wide(&'a [u64]),
+    Narrow(&'a [u32]),
+}
+
+impl<'a> CountsRef<'a> {
+    #[inline(always)]
+    fn len(self) -> usize {
+        match self {
+            Self::Wide(counts) => counts.len(),
+            Self::Narrow(counts) => counts.len(),
+        }
+    }
+
+    #[inline(always)]
+    fn is_empty(self) -> bool {
+        self.len() == 0
+    }
+
+    /// Each count as a `u64`, in bucket order.
+    #[inline(always)]
+    fn iter(self) -> CountsIter<'a> {
+        match self {
+            Self::Wide(counts) => CountsIter::Wide(counts.iter()),
+            Self::Narrow(counts) => CountsIter::Narrow(counts.iter()),
+        }
+    }
+
+    /// The counts as 4-byte values, each at most `u32::MAX`: borrowed when
+    /// stored narrow.
+    fn to_narrow(self) -> std::borrow::Cow<'a, [u32]> {
+        match self {
+            Self::Narrow(counts) => std::borrow::Cow::Borrowed(counts),
+            Self::Wide(counts) => counts
+                .iter()
+                .map(|&c| u32::try_from(c).expect("checked to fit a u32"))
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+
+    /// The counts as 8-byte values: borrowed when stored wide.
+    fn to_wide(self) -> std::borrow::Cow<'a, [u64]> {
+        match self {
+            Self::Wide(counts) => std::borrow::Cow::Borrowed(counts),
+            Self::Narrow(_) => self.iter().collect::<Vec<_>>().into(),
+        }
+    }
+
+    /// The first count's address, for checking where a view reads from.
+    fn as_ptr(self) -> *const u8 {
+        match self {
+            Self::Wide(counts) => counts.as_ptr().cast(),
+            Self::Narrow(counts) => counts.as_ptr().cast(),
+        }
+    }
+}
+
+/// [`CountsRef::iter`]: each count widened to `u64`.
+#[derive(Debug, Clone)]
+enum CountsIter<'a> {
+    Wide(std::slice::Iter<'a, u64>),
+    Narrow(std::slice::Iter<'a, u32>),
+}
+
+impl Iterator for CountsIter<'_> {
+    type Item = u64;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<u64> {
+        match self {
+            Self::Wide(counts) => counts.next().copied(),
+            Self::Narrow(counts) => counts.next().map(|&c| u64::from(c)),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
+    }
+}
+
+impl DoubleEndedIterator for CountsIter<'_> {
+    #[inline(always)]
+    fn next_back(&mut self) -> Option<u64> {
+        match self {
+            Self::Wide(counts) => counts.next_back().copied(),
+            Self::Narrow(counts) => counts.next_back().map(|&c| u64::from(c)),
+        }
+    }
+}
+
+impl ExactSizeIterator for CountsIter<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Wide(counts) => counts.len(),
+            Self::Narrow(counts) => counts.len(),
+        }
     }
 }
 
@@ -373,9 +559,7 @@ impl DdSketch {
         } else {
             &mut self.positive_store
         };
-        store.ensure(delta.index);
-        let slot = (delta.index - store.offset) as usize;
-        store.counts.as_mut_slice()[slot] += delta.count;
+        store.add(delta.index, delta.count);
 
         let representative = self.bin_representative(delta.index)
             * if delta.sign == DdSign::Negative {
@@ -427,14 +611,15 @@ impl DdSketch {
     /// `admission_rate`, the count width in bytes (`4` when every bucket
     /// count fits a `u32`, as in a stored window; `8` otherwise) and a
     /// reserved `u32`, then per sign (positive, negative) `offset: i32`,
-    /// `len: u32`, and the bucket counts `[u32 or u64; len]`.
+    /// `len: u32`, and the bucket counts `[u32 or u64; len]`. A sealed
+    /// sketch's 4-byte counts ([`Self::shrink_to_fit`]) are written as
+    /// they are held.
     pub fn to_view_bytes(&self) -> Vec<u8> {
-        let positive = self.positive_store.counts.as_slice();
-        let negative = self.negative_store.counts.as_slice();
+        let (positive, negative) = (self.positive_store.as_ref(), self.negative_store.as_ref());
         let narrow = positive
             .iter()
-            .chain(negative)
-            .all(|&count| count <= u64::from(u32::MAX));
+            .chain(negative.iter())
+            .all(|count| count <= u64::from(u32::MAX));
         let mut writer = ViewWriter::new(DD_VIEW_MAGIC);
         writer
             .f64(self.alpha)
@@ -451,11 +636,11 @@ impl DdSketch {
             .i32(self.negative_store.offset)
             .u32(negative.len() as u32);
         if narrow {
-            let narrowed =
-                |counts: &[u64]| -> Vec<u32> { counts.iter().map(|&c| c as u32).collect() };
-            writer.u32s(&narrowed(positive)).u32s(&narrowed(negative));
+            writer
+                .u32s(&positive.to_narrow())
+                .u32s(&negative.to_narrow());
         } else {
-            writer.u64s(positive).u64s(negative);
+            writer.u64s(&positive.to_wide()).u64s(&negative.to_wide());
         }
         writer.finish()
     }
@@ -498,6 +683,12 @@ impl DdSketch {
     /// sketch stays usable and grows again on a later insert. Its ASAPv1
     /// bytes are shorter (the stores' empty end slots are not written), and
     /// decode to a sketch with the same answers.
+    ///
+    /// Each store keeps its counts in 4 bytes instead of 8 when every count
+    /// fits in a `u32` (always, below 2^32 values), and in 8 bytes
+    /// otherwise. A later insert or merge into this sketch widens the
+    /// counts back to 8 bytes first. The ASAPv1 encoding does not depend on
+    /// the width.
     pub fn shrink_to_fit(&mut self) {
         self.positive_store.shrink_to_fit();
         self.negative_store.shrink_to_fit();
@@ -507,8 +698,8 @@ impl DdSketch {
     /// have allocated.
     pub fn memory_bytes(&self) -> usize {
         size_of::<Self>()
-            + (self.positive_store.counts.capacity() + self.negative_store.counts.capacity())
-                * size_of::<u64>()
+            + self.positive_store.allocated_bytes()
+            + self.negative_store.allocated_bytes()
     }
 
     /// Upper bound on [`Self::memory_bytes`] for a sketch of `alpha`, built or
@@ -574,8 +765,8 @@ impl DdSketch {
 
     /// Returns the raw bucket-count slice. Each entry is the number of
     /// samples in the bucket whose absolute index is `positive_store_offset() + i`.
-    pub fn positive_store_counts(&self) -> &[u64] {
-        self.positive_store.counts.as_slice()
+    pub fn positive_store_counts(&self) -> std::borrow::Cow<'_, [u64]> {
+        self.positive_store.as_ref().to_wide()
     }
 
     /// Returns the absolute bucket index corresponding to
@@ -584,8 +775,8 @@ impl DdSketch {
         self.positive_store.offset
     }
 
-    pub fn negative_store_counts(&self) -> &[u64] {
-        self.negative_store.counts.as_slice()
+    pub fn negative_store_counts(&self) -> std::borrow::Cow<'_, [u64]> {
+        self.negative_store.as_ref().to_wide()
     }
     pub fn negative_store_offset(&self) -> i32 {
         self.negative_store.offset
@@ -700,7 +891,7 @@ impl DdSketch {
         let mut merged = vec![0u64; new_len];
 
         // Copy self
-        for (i, &c) in store.counts.as_slice().iter().enumerate() {
+        for (i, c) in store.as_ref().iter().enumerate() {
             let k = self_l + i as i32;
             merged[(k - new_l) as usize] += c;
         }
@@ -711,8 +902,7 @@ impl DdSketch {
             merged[(k - new_l) as usize] += c;
         }
 
-        store.counts = Vector1D::from_vec(merged);
-        store.offset = new_l;
+        *store = Buckets::wide(merged, new_l);
     }
 }
 
@@ -737,107 +927,30 @@ impl Clone for DdSketch {
 
 const DD_VIEW_MAGIC: [u8; 4] = *b"DDV1";
 
-/// Bucket counts, borrowed at the width they are stored in: `u32` when
-/// every count fits (a stored window), `u64` otherwise.
-#[derive(Debug, Clone, Copy)]
-enum Counts<'a> {
-    U32(&'a [u32]),
-    U64(&'a [u64]),
-}
-
-impl<'a> Counts<'a> {
-    fn len(&self) -> usize {
-        match self {
-            Self::U32(counts) => counts.len(),
-            Self::U64(counts) => counts.len(),
-        }
-    }
-
-    fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    fn get(&self, index: usize) -> u64 {
-        match self {
-            Self::U32(counts) => u64::from(counts[index]),
-            Self::U64(counts) => counts[index],
-        }
-    }
-
-    fn iter(self) -> CountsIter<'a> {
-        CountsIter {
-            counts: self,
-            front: 0,
-            back: self.len(),
-        }
-    }
-
-    fn first_ptr(&self) -> *const u8 {
-        match self {
-            Self::U32(counts) => counts.as_ptr().cast(),
-            Self::U64(counts) => counts.as_ptr().cast(),
-        }
-    }
-}
-
-/// The counts of a [`Counts`], as `u64`, from either end.
-struct CountsIter<'a> {
-    counts: Counts<'a>,
-    front: usize,
-    back: usize,
-}
-
-impl Iterator for CountsIter<'_> {
-    type Item = u64;
-
-    fn next(&mut self) -> Option<u64> {
-        (self.front < self.back).then(|| {
-            self.front += 1;
-            self.counts.get(self.front - 1)
-        })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = self.back - self.front;
-        (n, Some(n))
-    }
-}
-
-impl DoubleEndedIterator for CountsIter<'_> {
-    fn next_back(&mut self) -> Option<u64> {
-        (self.front < self.back).then(|| {
-            self.back -= 1;
-            self.counts.get(self.back)
-        })
-    }
-}
-
-impl ExactSizeIterator for CountsIter<'_> {}
-
-/// One sign's bucket store, borrowed: bucket `offset + i` holds count `i`.
+/// One sign's bucket store, borrowed: bucket `offset + i` holds `counts[i]`.
 #[derive(Debug, Clone, Copy)]
 struct StoreRef<'a> {
     offset: i32,
-    counts: Counts<'a>,
+    counts: CountsRef<'a>,
 }
 
 impl<'a> StoreRef<'a> {
     fn of(store: &'a Buckets) -> Self {
         Self {
             offset: store.offset,
-            counts: Counts::U64(store.counts.as_slice()),
+            counts: store.as_ref(),
         }
     }
 
     fn to_buckets(self) -> Buckets {
-        Buckets {
-            counts: Vector1D::from_vec(self.counts.iter().collect()),
-            offset: if self.counts.is_empty() {
+        Buckets::wide(
+            self.counts.iter().collect(),
+            if self.counts.is_empty() {
                 0
             } else {
                 self.offset
             },
-        }
+        )
     }
 }
 
@@ -883,14 +996,18 @@ impl<'a> DdSketchView<'a> {
         let negative_len = reader.u32()? as usize;
         let (positive, negative) = match width {
             4 => (
-                Counts::U32(reader.u32s(positive_len)?),
-                Counts::U32(reader.u32s(negative_len)?),
+                CountsRef::Narrow(reader.u32s(positive_len)?),
+                CountsRef::Narrow(reader.u32s(negative_len)?),
             ),
             8 => (
-                Counts::U64(reader.u64s(positive_len)?),
-                Counts::U64(reader.u64s(negative_len)?),
+                CountsRef::Wide(reader.u64s(positive_len)?),
+                CountsRef::Wide(reader.u64s(negative_len)?),
             ),
-            other => return Err(ViewError(format!("DDSketch count width {other}"))),
+            other => {
+                return Err(ViewError(format!(
+                    "DDSketch count width {other} is not 4 or 8 bytes"
+                )));
+            }
         };
         let buckets: u64 = positive
             .iter()
@@ -922,7 +1039,8 @@ impl<'a> DdSketchView<'a> {
         })
     }
 
-    /// The owned sketch this view reads.
+    /// The owned sketch this view reads, with 8-byte counts (as an open
+    /// sketch or a merge accumulator holds them).
     pub fn to_owned_sketch(&self) -> DdSketch {
         let mut sketch = DdSketch::new(self.alpha);
         sketch.admission_rate = self.admission_rate;
@@ -934,14 +1052,14 @@ impl<'a> DdSketchView<'a> {
 
     /// The bucket counts' first slot, for checking where a view reads from.
     pub fn bucket_counts_ptr(&self) -> Option<*const u8> {
-        (!self.positive.counts.is_empty()).then_some(self.positive.counts.first_ptr())
+        (!self.positive.counts.is_empty()).then_some(self.positive.counts.as_ptr())
     }
 
     /// The width of its stored bucket counts, in bytes: 4 or 8.
     pub fn count_width(&self) -> usize {
         match self.positive.counts {
-            Counts::U32(_) => 4,
-            Counts::U64(_) => 8,
+            CountsRef::Narrow(_) => 4,
+            CountsRef::Wide(_) => 8,
         }
     }
 
@@ -1199,6 +1317,261 @@ mod tests {
         sketch
     }
 
+    /// `n` values over six decades, one in seven negative, some zero.
+    fn spread_values(n: usize) -> Vec<f64> {
+        (0..n)
+            .map(|i| {
+                let magnitude = 10f64.powf(((i as u64 * 2_654_435_761) % 6_000) as f64 / 1_000.0);
+                match i % 7 {
+                    0 => -magnitude,
+                    3 if i % 21 == 3 => 0.0,
+                    _ => magnitude,
+                }
+            })
+            .collect()
+    }
+
+    fn occupied_slots(sketch: &DdSketch) -> usize {
+        sketch.positive_store_counts().len() + sketch.negative_store_counts().len()
+    }
+
+    fn is_narrow(sketch: &DdSketch) -> bool {
+        matches!(sketch.positive_store.counts, Counts::Narrow(_))
+            && matches!(sketch.negative_store.counts, Counts::Narrow(_))
+    }
+
+    fn is_wide(sketch: &DdSketch) -> bool {
+        matches!(sketch.positive_store.counts, Counts::Wide(_))
+            && matches!(sketch.negative_store.counts, Counts::Wide(_))
+    }
+
+    /// Where a DDSketch view records its counts' width in bytes (4 or 8):
+    /// after the magic, layout version and seven 8-byte scalars.
+    const VIEW_COUNT_BYTES_AT: usize = 4 + 4 + 7 * 8;
+
+    const QS: [f64; 11] = [
+        0.0, 1e-4, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.9999, 1.0,
+    ];
+
+    /// A store's nonzero buckets as `(index, count)`, whatever empty slots
+    /// it holds.
+    fn occupied(counts: &[u64], offset: i32) -> Vec<(i32, u64)> {
+        (offset..)
+            .zip(counts.iter().copied())
+            .filter(|&(_, c)| c != 0)
+            .collect()
+    }
+
+    /// Every answer a sketch gives: count, sum, min, max, the zero bucket,
+    /// both stores' occupied buckets, and the nearest-rank and interpolated
+    /// quantiles at `QS` (with the q = 0 and q = 1 extremes).
+    fn every_answer(sketch: &DdSketch) -> String {
+        format!(
+            "{} {} {:?} {:?} {} {:?} {:?} {:?} {:?}",
+            sketch.get_count(),
+            sketch.sum().to_bits(),
+            sketch.min(),
+            sketch.max(),
+            sketch.zero_count(),
+            occupied(
+                &sketch.positive_store_counts(),
+                sketch.positive_store_offset()
+            ),
+            occupied(
+                &sketch.negative_store_counts(),
+                sketch.negative_store_offset()
+            ),
+            QS.map(|q| sketch.get_value_at_quantile(q)),
+            QS.map(|q| sketch.quantile_interpolated(q).unwrap()),
+        )
+    }
+
+    /// A sealed sketch keeps each bucket count in 4 bytes: it holds its
+    /// struct and 4 B per occupied bucket slot, half the open layout's 8 B.
+    #[test]
+    fn a_sealed_sketch_holds_four_bytes_per_bucket() {
+        let mut sealed = sketch_of(0.01, &spread_values(10_000));
+        sealed.shrink_to_fit();
+        let slots = occupied_slots(&sealed);
+        assert!(slots > 1_000, "{slots}");
+        assert!(is_narrow(&sealed));
+        assert_eq!(sealed.memory_bytes(), size_of::<DdSketch>() + 4 * slots);
+    }
+
+    /// A sealed sketch answers exactly as the open sketch it was sealed
+    /// from, the q = 0 and q = 1 extremes included, and so does a sketch
+    /// with one empty store.
+    #[test]
+    fn sealed_counts_answer_as_open_counts() {
+        for values in [
+            spread_values(10_000),
+            spread_values(1),
+            vec![3.0, 3.0, 5.0, 1e6],
+            vec![-3.0, -2.0, -2.0],
+            vec![0.0, 0.0],
+        ] {
+            let open = sketch_of(0.01, &values);
+            let mut sealed = open.clone();
+            sealed.shrink_to_fit();
+            assert_eq!(every_answer(&sealed), every_answer(&open), "{values:?}");
+            assert_eq!(sealed.to_asapv1().unwrap(), {
+                let mut shrunk_open = open.clone();
+                shrunk_open.positive_store.drop_empty_slots();
+                shrunk_open.negative_store.drop_empty_slots();
+                shrunk_open.to_asapv1().unwrap()
+            });
+        }
+        assert!(
+            sketch_of(0.01, &[])
+                .quantile_interpolated(0.5)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Merging sealed sketches into an accumulator gives the accumulator
+    /// merging their open copies gives, and the accumulator keeps 8-byte
+    /// counts, including when its first merge copies a sealed sketch; it
+    /// then adds past `u32::MAX`.
+    #[test]
+    fn merging_sealed_sketches_into_an_open_accumulator_is_exact() {
+        let open: Vec<DdSketch> = (0..60)
+            .map(|w| {
+                let values = spread_values(200 + w);
+                sketch_of(0.01, &values[w..])
+            })
+            .collect();
+        let sealed: Vec<DdSketch> = open
+            .iter()
+            .map(|sketch| {
+                let mut sealed = sketch.clone();
+                sealed.shrink_to_fit();
+                sealed
+            })
+            .collect();
+        let (mut from_open, mut from_sealed) = (DdSketch::new(0.01), DdSketch::new(0.01));
+        for (o, s) in open.iter().zip(&sealed) {
+            from_open.merge(o).unwrap();
+            from_sealed.merge(s).unwrap();
+            assert!(is_wide(&from_sealed));
+        }
+        assert_eq!(every_answer(&from_sealed), every_answer(&from_open));
+
+        let mut near_max = sketch_of(0.01, &[7.0]);
+        near_max.apply_delta(DdSketchBucketDelta {
+            sign: DdSign::Positive,
+            index: near_max.key_for(7.0),
+            count: u64::from(u32::MAX) - 1,
+        });
+        near_max.shrink_to_fit();
+        assert!(is_narrow(&near_max));
+        let mut accumulator = DdSketch::new(0.01);
+        accumulator.merge(&near_max).unwrap();
+        accumulator.merge(&near_max).unwrap();
+        assert_eq!(
+            accumulator.positive_store_counts().as_ref(),
+            &[2 * u64::from(u32::MAX)]
+        );
+        assert_eq!(accumulator.get_count(), 2 * u64::from(u32::MAX));
+    }
+
+    /// A bucket count past `u32::MAX` keeps the 8-byte layout when sealed,
+    /// with the same answers; a count of exactly `u32::MAX` narrows.
+    #[test]
+    fn a_bucket_past_u32_max_keeps_eight_byte_counts_when_sealed() {
+        let mut doubled = sketch_of(0.01, &[1.0, 2.0, 1.0, -4.0]);
+        for _ in 0..32 {
+            let copy = doubled.clone();
+            doubled.merge(&copy).unwrap();
+        }
+        assert_eq!(doubled.get_count(), 4 << 32);
+        let open = doubled.clone();
+        doubled.shrink_to_fit();
+        assert!(is_wide(&doubled));
+        assert_eq!(
+            doubled.memory_bytes(),
+            size_of::<DdSketch>() + 8 * occupied_slots(&doubled)
+        );
+        assert_eq!(every_answer(&doubled), every_answer(&open));
+
+        let mut at_max = sketch_of(0.01, &[7.0]);
+        at_max.apply_delta(DdSketchBucketDelta {
+            sign: DdSign::Positive,
+            index: at_max.key_for(7.0),
+            count: u64::from(u32::MAX) - 1,
+        });
+        at_max.shrink_to_fit();
+        assert!(is_narrow(&at_max));
+        assert_eq!(
+            at_max.positive_store_counts().as_ref(),
+            &[u64::from(u32::MAX)]
+        );
+        at_max.add(&7.0);
+        assert_eq!(
+            at_max.positive_store_counts().as_ref(),
+            &[u64::from(u32::MAX) + 1],
+            "an insert into a sealed sketch widens its counts first"
+        );
+    }
+
+    /// A view records its counts' width: open and sealed sketches whose
+    /// counts fit a `u32` write 4-byte counts (a sealed one as it holds
+    /// them), one with a count past `u32::MAX` 8-byte counts, and a view of
+    /// either answers and merges as the owned sketch, reading the counts in
+    /// place. Any other width is refused.
+    #[test]
+    fn views_record_and_read_both_count_widths() {
+        let open = sketch_of(0.01, &spread_values(5_000));
+        let mut sealed = open.clone();
+        sealed.shrink_to_fit();
+        let mut overflowing = sketch_of(0.01, &[1.0, -2.0]);
+        for _ in 0..33 {
+            let copy = overflowing.clone();
+            overflowing.merge(&copy).unwrap();
+        }
+        overflowing.shrink_to_fit();
+        assert!(is_wide(&overflowing));
+        for (sketch, count_bytes) in [(&open, 4), (&sealed, 4), (&overflowing, 8)] {
+            let bytes = sketch.to_view_bytes();
+            assert_eq!(bytes[VIEW_COUNT_BYTES_AT], count_bytes);
+            let words = crate::views::aligned_copy(&bytes);
+            let in_place = crate::views::aligned_bytes(&words, bytes.len());
+            let view = DdSketchView::from_bytes(in_place).unwrap();
+            assert_eq!(view.count_width(), usize::from(count_bytes));
+            let ptr = view.bucket_counts_ptr().unwrap();
+            assert!(in_place.as_ptr_range().contains(&ptr));
+            let mut via_view = DdSketch::new(0.01);
+            via_view.merge_view(&view).unwrap();
+            let mut via_owned = DdSketch::new(0.01);
+            via_owned.merge(sketch).unwrap();
+            assert_eq!(every_answer(&via_view), every_answer(&via_owned));
+            for q in QS {
+                assert_eq!(
+                    view.get_value_at_quantile(q),
+                    sketch.get_value_at_quantile(q)
+                );
+                assert_eq!(
+                    view.quantile_interpolated(q),
+                    sketch.quantile_interpolated(q)
+                );
+            }
+        }
+        // Header (width, reserved, two offsets and lengths after the
+        // scalars), then each store's counts padded to 8 bytes.
+        let padded = |bytes: usize| bytes.div_ceil(8) * 8;
+        let header = VIEW_COUNT_BYTES_AT + 8 + 16;
+        assert_eq!(
+            sealed.to_view_bytes().len(),
+            header
+                + padded(4 * sealed.positive_store_counts().len())
+                + padded(4 * sealed.negative_store_counts().len())
+        );
+        let mut bad = sealed.to_view_bytes();
+        bad[VIEW_COUNT_BYTES_AT] = 2;
+        let words = crate::views::aligned_copy(&bad);
+        assert!(DdSketchView::from_bytes(crate::views::aligned_bytes(&words, bad.len())).is_err());
+    }
+
     #[test]
     fn quantile_interpolated_two_values() {
         let sketch = sketch_of(0.01, &[20.0, 40.0]);
@@ -1433,7 +1806,7 @@ mod tests {
             d.add(&(f64::from(i)));
         }
         let count_before = d.get_count();
-        let span_before = d.positive_store.counts.as_slice().len();
+        let span_before = d.positive_store.len();
 
         let (min_indexable, max_indexable) = ddsketch_indexable_bounds(0.01);
         d.add(&(max_indexable * 10.0));
@@ -1444,7 +1817,7 @@ mod tests {
             "tiny value belongs to zero bucket"
         );
         assert_eq!(
-            d.positive_store.counts.as_slice().len(),
+            d.positive_store.len(),
             span_before,
             "store span grew from an untrackable extreme"
         );

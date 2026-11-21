@@ -1051,14 +1051,14 @@ fn assert_dd_golden(
     let decoded = DdSketch::from_asapv1(&want).expect("decode");
     assert_eq!(
         (
-            decoded.positive_store_counts(),
+            decoded.positive_store_counts().as_ref(),
             decoded.positive_store_offset()
         ),
         positive
     );
     assert_eq!(
         (
-            decoded.negative_store_counts(),
+            decoded.negative_store_counts().as_ref(),
             decoded.negative_store_offset()
         ),
         negative
@@ -1142,7 +1142,10 @@ fn ddsketch_signed_a001_delta_matches_golden() {
         sum += -r(*k) * *c as f64;
     }
     assert_eq!(
-        dd_buckets(state.positive_store_counts(), state.positive_store_offset()),
+        dd_buckets(
+            &state.positive_store_counts(),
+            state.positive_store_offset()
+        ),
         [
             (-300, 1),
             (-100, 127),
@@ -1155,7 +1158,10 @@ fn ddsketch_signed_a001_delta_matches_golden() {
         ]
     );
     assert_eq!(
-        dd_buckets(state.negative_store_counts(), state.negative_store_offset()),
+        dd_buckets(
+            &state.negative_store_counts(),
+            state.negative_store_offset()
+        ),
         [
             (-208, 7),
             (-207, 1),
