@@ -718,6 +718,7 @@ impl<T: NumericalValue> Kll<T> {
             work[h].extend_from_slice(&self.items[s..e]);
         }
         let mut merge_buf: Vec<T> = Vec::new();
+        #[allow(clippy::needless_range_loop)] // `h` also indexes `level`
         for h in 0..other_num_levels {
             let self_len = work[h].len();
             work[h].extend_from_slice(level(h));

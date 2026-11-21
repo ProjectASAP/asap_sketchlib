@@ -831,7 +831,7 @@ impl<'a> DdSketchView<'a> {
 
     /// The bucket counts' first slot, for checking where a view reads from.
     pub fn bucket_counts_ptr(&self) -> Option<*const u64> {
-        (!self.positive.counts.is_empty()).then(|| self.positive.counts.as_ptr())
+        (!self.positive.counts.is_empty()).then_some(self.positive.counts.as_ptr())
     }
 
     /// Representative of bucket k, as [`DdSketch`] computes it.
