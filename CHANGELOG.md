@@ -12,6 +12,11 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`Kll::shrink_to_fit`** frees what a KLL sketch holds only for later
+  inserts and queries (unused levels, the free front of the item buffer,
+  compaction scratch space, a memoized CDF), for a sketch kept after it
+  stops receiving inserts. Answers, merges and encodings are unchanged.
+  A k = 132 sketch of 15 items drops from 872 to 384 bytes.
 - **Sketch analytics** (`asap_sketchlib::analytics`): the
   `SketchAnalytics` trait, with `ErrorBound`, `ErrorMetric` and `NormScale`
   re-exported at the root, gives a sketch type's theoretical memory, update,
