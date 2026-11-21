@@ -12,6 +12,11 @@ signals a backwards-compatible change.
 
 ### Added
 
+- **`DdSketch::shrink_to_fit`** keeps only each bucket store's occupied
+  range (stores grow 128 slots at a time), for a sketch kept after it
+  stops receiving inserts. Answers, count and merges are
+  unchanged; the ASAPv1 bytes are shorter (no empty end slots) and decode
+  to the same answers. An alpha 0.05 sketch of 15 samples drops from 1,181 to 413 bytes.
 - **Sketch analytics** (`asap_sketchlib::analytics`): the
   `SketchAnalytics` trait, with `ErrorBound`, `ErrorMetric` and `NormScale`
   re-exported at the root, gives a sketch type's theoretical memory, update,
