@@ -199,3 +199,40 @@ fn bad_bytes_are_errors_not_panics() {
             || (shifted[1..].as_ptr() as usize) % 8 == 0
     );
 }
+
+/// Bucket counts are stored as `u32` when they all fit (a window's counts
+/// do), and as `u64` when one does not; both read and merge alike.
+#[test]
+fn ddsketch_counts_are_stored_narrow_and_widen_on_overflow() {
+    use asap_sketchlib::sketches::octo_delta::{DdSign, DdSketchBucketDelta};
+    let small = dd(1, 1_000);
+    let small_bytes = small.to_view_bytes();
+    let words = aligned_copy(&small_bytes);
+    let view = DdSketchView::from_bytes(aligned_bytes(&words, small_bytes.len())).unwrap();
+    assert_eq!(view.count_width(), 4);
+    let mut big = dd(2, 1_000);
+    big.apply_delta(DdSketchBucketDelta {
+        sign: DdSign::Positive,
+        index: 300,
+        count: u64::from(u32::MAX) + 5,
+    });
+    let big_bytes = big.to_view_bytes();
+    let big_words = aligned_copy(&big_bytes);
+    let big_view = DdSketchView::from_bytes(aligned_bytes(&big_words, big_bytes.len())).unwrap();
+    assert_eq!(big_view.count_width(), 8);
+    for q in QS {
+        assert_eq!(
+            big_view.quantile_interpolated(q),
+            big.quantile_interpolated(q)
+        );
+    }
+    // An accumulator merging both widths equals the owned merge, and its
+    // own count exceeds u32 (accumulators stay u64).
+    let mut owned = small.clone();
+    owned.merge(&big).unwrap();
+    let mut viewed = DdSketch::new(0.01);
+    viewed.merge_view(&view).unwrap();
+    viewed.merge_view(&big_view).unwrap();
+    assert_eq!(viewed.to_view_bytes(), owned.to_view_bytes());
+    assert!(viewed.get_count() > u64::from(u32::MAX));
+}

@@ -424,9 +424,17 @@ impl DdSketch {
 
     /// This sketch in its zero-copy view layout (see [`crate::views`]):
     /// `DDV1`, version, `alpha`, `count`, `sum`, `min`, `max`, `zero_count`,
-    /// `admission_rate`, then per sign (positive, negative) `offset: i32`,
-    /// `len: u32`, and the bucket counts `[u64; len]`.
+    /// `admission_rate`, the count width in bytes (`4` when every bucket
+    /// count fits a `u32`, as in a stored window; `8` otherwise) and a
+    /// reserved `u32`, then per sign (positive, negative) `offset: i32`,
+    /// `len: u32`, and the bucket counts `[u32 or u64; len]`.
     pub fn to_view_bytes(&self) -> Vec<u8> {
+        let positive = self.positive_store.counts.as_slice();
+        let negative = self.negative_store.counts.as_slice();
+        let narrow = positive
+            .iter()
+            .chain(negative)
+            .all(|&count| count <= u64::from(u32::MAX));
         let mut writer = ViewWriter::new(DD_VIEW_MAGIC);
         writer
             .f64(self.alpha)
@@ -436,12 +444,19 @@ impl DdSketch {
             .f64(self.max)
             .u64(self.zero_count)
             .f64(self.admission_rate)
+            .u32(if narrow { 4 } else { 8 })
+            .u32(0)
             .i32(self.positive_store.offset)
-            .u32(self.positive_store.counts.len() as u32)
+            .u32(positive.len() as u32)
             .i32(self.negative_store.offset)
-            .u32(self.negative_store.counts.len() as u32)
-            .u64s(self.positive_store.counts.as_slice())
-            .u64s(self.negative_store.counts.as_slice());
+            .u32(negative.len() as u32);
+        if narrow {
+            let narrowed =
+                |counts: &[u64]| -> Vec<u32> { counts.iter().map(|&c| c as u32).collect() };
+            writer.u32s(&narrowed(positive)).u32s(&narrowed(negative));
+        } else {
+            writer.u64s(positive).u64s(negative);
+        }
         writer.finish()
     }
 
@@ -691,7 +706,7 @@ impl DdSketch {
         }
 
         // Add other
-        for (i, &c) in other.counts.iter().enumerate() {
+        for (i, c) in other.counts.iter().enumerate() {
             let k = other_l + i as i32;
             merged[(k - new_l) as usize] += c;
         }
@@ -722,24 +737,101 @@ impl Clone for DdSketch {
 
 const DD_VIEW_MAGIC: [u8; 4] = *b"DDV1";
 
-/// One sign's bucket store, borrowed: bucket `offset + i` holds `counts[i]`.
+/// Bucket counts, borrowed at the width they are stored in: `u32` when
+/// every count fits (a stored window), `u64` otherwise.
+#[derive(Debug, Clone, Copy)]
+enum Counts<'a> {
+    U32(&'a [u32]),
+    U64(&'a [u64]),
+}
+
+impl<'a> Counts<'a> {
+    fn len(&self) -> usize {
+        match self {
+            Self::U32(counts) => counts.len(),
+            Self::U64(counts) => counts.len(),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn get(&self, index: usize) -> u64 {
+        match self {
+            Self::U32(counts) => u64::from(counts[index]),
+            Self::U64(counts) => counts[index],
+        }
+    }
+
+    fn iter(self) -> CountsIter<'a> {
+        CountsIter {
+            counts: self,
+            front: 0,
+            back: self.len(),
+        }
+    }
+
+    fn first_ptr(&self) -> *const u8 {
+        match self {
+            Self::U32(counts) => counts.as_ptr().cast(),
+            Self::U64(counts) => counts.as_ptr().cast(),
+        }
+    }
+}
+
+/// The counts of a [`Counts`], as `u64`, from either end.
+struct CountsIter<'a> {
+    counts: Counts<'a>,
+    front: usize,
+    back: usize,
+}
+
+impl Iterator for CountsIter<'_> {
+    type Item = u64;
+
+    fn next(&mut self) -> Option<u64> {
+        (self.front < self.back).then(|| {
+            self.front += 1;
+            self.counts.get(self.front - 1)
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.back - self.front;
+        (n, Some(n))
+    }
+}
+
+impl DoubleEndedIterator for CountsIter<'_> {
+    fn next_back(&mut self) -> Option<u64> {
+        (self.front < self.back).then(|| {
+            self.back -= 1;
+            self.counts.get(self.back)
+        })
+    }
+}
+
+impl ExactSizeIterator for CountsIter<'_> {}
+
+/// One sign's bucket store, borrowed: bucket `offset + i` holds count `i`.
 #[derive(Debug, Clone, Copy)]
 struct StoreRef<'a> {
     offset: i32,
-    counts: &'a [u64],
+    counts: Counts<'a>,
 }
 
 impl<'a> StoreRef<'a> {
     fn of(store: &'a Buckets) -> Self {
         Self {
             offset: store.offset,
-            counts: store.counts.as_slice(),
+            counts: Counts::U64(store.counts.as_slice()),
         }
     }
 
     fn to_buckets(self) -> Buckets {
         Buckets {
-            counts: Vector1D::from_vec(self.counts.to_vec()),
+            counts: Vector1D::from_vec(self.counts.iter().collect()),
             offset: if self.counts.is_empty() {
                 0
             } else {
@@ -783,16 +875,27 @@ impl<'a> DdSketchView<'a> {
         let max = reader.f64()?;
         let zero_count = reader.u64()?;
         let admission_rate = reader.f64()?;
+        let width = reader.u32()?;
+        let _reserved = reader.u32()?;
         let positive_offset = reader.i32()?;
         let positive_len = reader.u32()? as usize;
         let negative_offset = reader.i32()?;
         let negative_len = reader.u32()? as usize;
-        let positive = reader.u64s(positive_len)?;
-        let negative = reader.u64s(negative_len)?;
+        let (positive, negative) = match width {
+            4 => (
+                Counts::U32(reader.u32s(positive_len)?),
+                Counts::U32(reader.u32s(negative_len)?),
+            ),
+            8 => (
+                Counts::U64(reader.u64s(positive_len)?),
+                Counts::U64(reader.u64s(negative_len)?),
+            ),
+            other => return Err(ViewError(format!("DDSketch count width {other}"))),
+        };
         let buckets: u64 = positive
             .iter()
-            .chain(negative)
-            .try_fold(zero_count, |total, &c| total.checked_add(c))
+            .chain(negative.iter())
+            .try_fold(zero_count, |total, c| total.checked_add(c))
             .ok_or_else(|| ViewError("DDSketch counts overflow".into()))?;
         if buckets != count {
             return Err(ViewError(format!(
@@ -830,8 +933,16 @@ impl<'a> DdSketchView<'a> {
     }
 
     /// The bucket counts' first slot, for checking where a view reads from.
-    pub fn bucket_counts_ptr(&self) -> Option<*const u64> {
-        (!self.positive.counts.is_empty()).then_some(self.positive.counts.as_ptr())
+    pub fn bucket_counts_ptr(&self) -> Option<*const u8> {
+        (!self.positive.counts.is_empty()).then_some(self.positive.counts.first_ptr())
+    }
+
+    /// The width of its stored bucket counts, in bytes: 4 or 8.
+    pub fn count_width(&self) -> usize {
+        match self.positive.counts {
+            Counts::U32(_) => 4,
+            Counts::U64(_) => 8,
+        }
     }
 
     /// Representative of bucket k, as [`DdSketch`] computes it.
@@ -879,7 +990,7 @@ impl<'a> DdSketchView<'a> {
 
         let rank = ((q * self.count as f64).ceil() as u64).max(1);
         let mut seen = 0u64;
-        for (i, &count) in self.negative.counts.iter().enumerate().rev() {
+        for (i, count) in self.negative.counts.iter().enumerate().rev() {
             seen += count;
             if seen >= rank {
                 return Some(
@@ -896,7 +1007,7 @@ impl<'a> DdSketchView<'a> {
         let slice = self.positive.counts;
         let offset = self.positive.offset;
 
-        for (i, &c) in slice.iter().enumerate() {
+        for (i, c) in slice.iter().enumerate() {
             if c == 0 {
                 continue;
             }
@@ -971,7 +1082,7 @@ impl<'a> DdSketchView<'a> {
         }
         let mut seen = 0u64;
         let negative = self.negative.counts;
-        for (i, &count) in negative.iter().enumerate().rev() {
+        for (i, count) in negative.iter().enumerate().rev() {
             seen += count;
             if seen > rank {
                 let bin = self.negative.offset + i as i32;
@@ -983,7 +1094,7 @@ impl<'a> DdSketchView<'a> {
             return 0.0_f64.clamp(self.min, self.max);
         }
         let positive = self.positive.counts;
-        for (i, &count) in positive.iter().enumerate() {
+        for (i, count) in positive.iter().enumerate() {
             seen += count;
             if seen > rank {
                 let bin = self.positive.offset + i as i32;
