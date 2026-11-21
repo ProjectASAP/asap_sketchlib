@@ -3,11 +3,15 @@
 //! gives the same accumulator as merging the owned sketches.
 
 use asap_sketchlib::views::{aligned_bytes, aligned_copy};
-use asap_sketchlib::{CountMinF64, CountMinF64View, DataInput, DdSketch, DdSketchView, Kll, KllView};
+use asap_sketchlib::{
+    CountMinF64, CountMinF64View, DataInput, DdSketch, DdSketchView, Kll, KllView,
+};
 
 /// A deterministic stream of `n` values from `seed`.
 fn values(seed: u64, n: usize) -> Vec<f64> {
-    let mut x = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    let mut x = seed
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(1442695040888963407);
     (0..n)
         .map(|_| {
             x ^= x << 13;
@@ -56,15 +60,26 @@ fn ddsketch_view_answers_as_the_owned_sketch() {
         assert_eq!(view.min(), owned.min());
         assert_eq!(view.max(), owned.max());
         for q in QS {
-            assert_eq!(view.get_value_at_quantile(q), owned.get_value_at_quantile(q), "{n} {q}");
-            assert_eq!(view.quantile_interpolated(q), owned.quantile_interpolated(q), "{n} {q}");
+            assert_eq!(
+                view.get_value_at_quantile(q),
+                owned.get_value_at_quantile(q),
+                "{n} {q}"
+            );
+            assert_eq!(
+                view.quantile_interpolated(q),
+                owned.quantile_interpolated(q),
+                "{n} {q}"
+            );
         }
         // The view reads the bytes in place.
         if let Some(ptr) = view.bucket_counts_ptr() {
             let range = bytes.as_ptr_range();
             assert!(range.contains(&ptr.cast::<u8>()));
         }
-        assert_eq!(view.to_owned_sketch().to_view_bytes(), owned.to_view_bytes());
+        assert_eq!(
+            view.to_owned_sketch().to_view_bytes(),
+            owned.to_view_bytes()
+        );
     }
 }
 
@@ -88,14 +103,19 @@ fn ddsketch_views_merge_as_owned_sketches() {
     }
     assert_eq!(viewed.to_view_bytes(), owned.to_view_bytes());
     for q in QS {
-        assert_eq!(viewed.quantile_interpolated(q), owned.quantile_interpolated(q));
+        assert_eq!(
+            viewed.quantile_interpolated(q),
+            owned.quantile_interpolated(q)
+        );
     }
     let other = DdSketch::new(0.05);
     let bytes = other.to_view_bytes();
     let words = aligned_copy(&bytes);
-    assert!(viewed
-        .merge_view(&DdSketchView::from_bytes(aligned_bytes(&words, bytes.len())).unwrap())
-        .is_err());
+    assert!(
+        viewed
+            .merge_view(&DdSketchView::from_bytes(aligned_bytes(&words, bytes.len())).unwrap())
+            .is_err()
+    );
 }
 
 #[test]
@@ -127,9 +147,11 @@ fn kll_view_answers_and_merges_as_the_owned_sketch() {
     assert_eq!(viewed.to_view_bytes(), owned.to_view_bytes());
     let mismatched = Kll::<f64>::with_k_and_seed(100, 1).to_view_bytes();
     let words = aligned_copy(&mismatched);
-    assert!(owned
-        .merge_view(&KllView::from_bytes(aligned_bytes(&words, mismatched.len())).unwrap())
-        .is_err());
+    assert!(
+        owned
+            .merge_view(&KllView::from_bytes(aligned_bytes(&words, mismatched.len())).unwrap())
+            .is_err()
+    );
 }
 
 #[test]
@@ -141,7 +163,10 @@ fn count_min_view_answers_and_merges_as_the_owned_sketch() {
     let view = CountMinF64View::from_bytes(aligned_bytes(&words, bytes.len())).unwrap();
     for key in 0..50 {
         let key = DataInput::I64(key);
-        assert_eq!(view.estimate::<asap_sketchlib::DefaultXxHasher>(&key), b.estimate(&key));
+        assert_eq!(
+            view.estimate::<asap_sketchlib::DefaultXxHasher>(&key),
+            b.estimate(&key)
+        );
     }
     let mut owned = a.clone();
     owned.merge(&b);
@@ -169,5 +194,8 @@ fn bad_bytes_are_errors_not_panics() {
     assert!(KllView::from_bytes(aligned_bytes(&kll_words, kll_bytes.len())).is_err());
     // Misaligned: one byte in.
     let shifted: Vec<u8> = std::iter::once(0).chain(bytes.iter().copied()).collect();
-    assert!(DdSketchView::from_bytes(&shifted[1..]).is_err() || (shifted[1..].as_ptr() as usize) % 8 == 0);
+    assert!(
+        DdSketchView::from_bytes(&shifted[1..]).is_err()
+            || (shifted[1..].as_ptr() as usize) % 8 == 0
+    );
 }

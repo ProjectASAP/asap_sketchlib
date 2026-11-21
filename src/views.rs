@@ -146,7 +146,9 @@ macro_rules! array {
 impl<'a> ViewReader<'a> {
     pub(crate) fn new(bytes: &'a [u8], magic: [u8; 4]) -> Result<Self, ViewError> {
         if cfg!(target_endian = "big") {
-            return Err(ViewError("views are read on little-endian hosts only".into()));
+            return Err(ViewError(
+                "views are read on little-endian hosts only".into(),
+            ));
         }
         if bytes.as_ptr() as usize % 8 != 0 {
             return Err(ViewError("view bytes are not 8-byte aligned".into()));

@@ -15,13 +15,13 @@
 //!   with Relative-Error Guarantees," PVLDB 12(12), 2019.
 //!   <https://www.vldb.org/pvldb/vol12/p2195-masson.pdf>
 
-use crate::views::{ViewError, ViewReader, ViewWriter};
 use crate::DataInput;
 use crate::asapv1::admission_rate::{self, admit_all};
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
 use crate::octo_delta::{DdSign, DdSketchBucketDelta};
+use crate::views::{ViewError, ViewReader, ViewWriter};
 
 /// The ASAPv1 DDSketch delta (kind_id `0x05 0x80`).
 mod delta;
@@ -740,7 +740,11 @@ impl<'a> StoreRef<'a> {
     fn to_buckets(self) -> Buckets {
         Buckets {
             counts: Vector1D::from_vec(self.counts.to_vec()),
-            offset: if self.counts.is_empty() { 0 } else { self.offset },
+            offset: if self.counts.is_empty() {
+                0
+            } else {
+                self.offset
+            },
         }
     }
 }
@@ -769,7 +773,9 @@ impl<'a> DdSketchView<'a> {
         let mut reader = ViewReader::new(bytes, DD_VIEW_MAGIC)?;
         let alpha = reader.f64()?;
         if !(alpha > 0.0 && alpha < 1.0) {
-            return Err(ViewError(format!("DDSketch alpha {alpha} is outside (0, 1)")));
+            return Err(ViewError(format!(
+                "DDSketch alpha {alpha} is outside (0, 1)"
+            )));
         }
         let count = reader.u64()?;
         let sum = reader.f64()?;
@@ -873,13 +879,7 @@ impl<'a> DdSketchView<'a> {
 
         let rank = ((q * self.count as f64).ceil() as u64).max(1);
         let mut seen = 0u64;
-        for (i, &count) in self
-            .negative
-            .counts
-            .iter()
-            .enumerate()
-            .rev()
-        {
+        for (i, &count) in self.negative.counts.iter().enumerate().rev() {
             seen += count;
             if seen >= rank {
                 return Some(

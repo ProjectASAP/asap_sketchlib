@@ -12,10 +12,10 @@
 
 use rand::{Rng, rng};
 
-use crate::views::{ViewError, ViewReader, ViewWriter};
 use crate::common::heap::vec_minimum_slots;
 use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
+use crate::views::{ViewError, ViewReader, ViewWriter};
 use crate::{DataInput, Vector1D};
 
 #[cfg(test)]
