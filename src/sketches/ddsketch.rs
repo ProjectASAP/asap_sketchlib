@@ -33,6 +33,15 @@ pub use delta::DdSketchDelta;
 // Number of buckets to grow by when expanding.
 const GROW_CHUNK: usize = 128;
 
+/// The most buckets one store of a view may span (first to last index).
+/// The owned sketch a view merges into holds its stores dense, so a view
+/// spanning more would make a few bytes allocate gigabytes (a tiny alpha
+/// puts samples a factor of two apart about `ln 2 / (2 alpha)` buckets
+/// apart). 2^20 buckets is 8 MiB of `u64` counts. It covers any samples
+/// between 1e-300 and 1e300 at alpha >= 1e-3, and samples spread by a
+/// factor of 1e9 at alpha >= 1e-5; a sketch spread wider is refused.
+const MAX_VIEW_BUCKET_SPAN: i64 = 1 << 20;
+
 #[derive(Debug, Clone)]
 struct Buckets {
     counts: Vector1D<u64>,
@@ -688,7 +697,12 @@ impl DdSketch {
 
     /// Merges a view (a stored sketch read in place) into this one, as
     /// [`Self::merge`] merges an owned sketch: the same checks, the same
-    /// result. Allocates only when this sketch's stores must grow.
+    /// answers. Allocates only when this sketch's stores must grow.
+    ///
+    /// A view holds only each store's occupied buckets, so the merged
+    /// stores (and so [`Self::to_view_bytes`]) equal a merge of the view's
+    /// owned sketch after [`Self::shrink_to_fit`], which can differ from a merge of the
+    /// original sketch only in empty slots at a store's ends.
     pub fn merge_view(&mut self, other: &DdSketchView<'_>) -> Result<(), String> {
         if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma - other.gamma).abs() >= 1e-12 {
             return Err(format!(
@@ -1032,30 +1046,48 @@ impl<'a> DdSketchView<'a> {
                 "DDSketch min {min} / max {max} / sum {sum} are not a valid range"
             )));
         }
-        // Every bucket index a real sketch can hold: from the smallest
-        // indexable magnitude to the largest sample, plus the empty slots a
-        // growing store keeps at its ends (under one growth chunk each).
+        // Every bucket index a real sketch can hold: from its smallest
+        // sample's (or, when a store may hold values down to zero, the
+        // smallest indexable magnitude's) to its largest sample's, plus the
+        // empty slots a growing store keeps at its ends (under one growth
+        // chunk each).
         let inv_log_gamma = 1.0 / ((1.0 + alpha) / (1.0 - alpha)).ln();
         let key = |v: f64| (v.ln() * inv_log_gamma).floor();
-        let lowest = key(ddsketch_indexable_bounds(alpha).0) - GROW_CHUNK as f64 - 1.0;
-        let store_ok = |store: &StoreRef, largest: f64| -> bool {
+        let slack = GROW_CHUNK as f64 + 1.0;
+        let indexable_lowest = key(ddsketch_indexable_bounds(alpha).0) - slack;
+        // A store's magnitudes lie in [smallest, largest]; `smallest` is 0
+        // when samples of that sign may come arbitrarily close to zero.
+        let store_ok = |store: &StoreRef, smallest: f64, largest: f64| -> bool {
             if store.is_empty() {
                 return true;
             }
             let (first, last) = store.range();
+            let lowest = if smallest > 0.0 {
+                (key(smallest) - slack).max(indexable_lowest)
+            } else {
+                indexable_lowest
+            };
             let highest = if largest > 0.0 {
-                key(largest) + GROW_CHUNK as f64 + 1.0
+                key(largest) + slack
             } else {
                 lowest + GROW_CHUNK as f64
             };
-            f64::from(first) >= lowest && f64::from(last) <= highest
+            f64::from(first) >= lowest
+                && f64::from(last) <= highest
+                && i64::from(last) - i64::from(first) < MAX_VIEW_BUCKET_SPAN
         };
-        if !store_ok(&positive, if count > 0 { max } else { 0.0 })
-            || !store_ok(&negative, if count > 0 { -min } else { 0.0 })
+        let (positive_range, negative_range) = if count > 0 {
+            ((min.max(0.0), max), ((-max).max(0.0), -min))
+        } else {
+            ((0.0, 0.0), (0.0, 0.0))
+        };
+        if !store_ok(&positive, positive_range.0, positive_range.1)
+            || !store_ok(&negative, negative_range.0, negative_range.1)
         {
-            return Err(ViewError(
-                "DDSketch bucket range outside its samples' range".into(),
-            ));
+            return Err(ViewError(format!(
+                "DDSketch bucket range outside its samples' range or over \
+                 {MAX_VIEW_BUCKET_SPAN} buckets"
+            )));
         }
         Ok(Self {
             alpha,

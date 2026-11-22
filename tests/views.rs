@@ -90,8 +90,12 @@ fn ddsketch_views_merge_as_owned_sketches() {
         .collect();
     let mut owned = DdSketch::new(0.01);
     let mut viewed = DdSketch::new(0.01);
+    // A view holds occupied buckets only, so `merge_view` equals merging
+    // the owned sketch shrunk to fit (answers equal the unshrunk merge).
     for (window, (words, len)) in windows.iter().zip(&stored) {
-        owned.merge(window).unwrap();
+        let mut shrunk = window.clone();
+        shrunk.shrink_to_fit();
+        owned.merge(&shrunk).unwrap();
         viewed
             .merge_view(&DdSketchView::from_bytes(aligned_bytes(words, *len)).unwrap())
             .unwrap();
@@ -271,6 +275,46 @@ fn spread_ddsketches_are_written_sparse() {
     assert!(spread.to_view_bytes().len() < 600);
 }
 
+/// A tiny alpha puts a few samples millions of buckets apart: a view of
+/// about a hundred bytes whose alpha or bucket keys are rewritten so its
+/// store spans that far (or below its smallest sample) is refused, never
+/// turned into a multi-gigabyte owned sketch.
+#[test]
+fn tiny_alpha_views_cannot_force_huge_allocations() {
+    // Two samples, 1 and 1e6, at alpha 0.01: a sparse view with two keys.
+    let mut sketch = DdSketch::new(0.01);
+    sketch.add(&1.0);
+    sketch.add(&1e6);
+    let bytes = sketch.to_view_bytes();
+    let words = aligned_copy(&bytes);
+    let view = DdSketchView::from_bytes(aligned_bytes(&words, bytes.len())).unwrap();
+    assert!(view.is_sparse());
+    // Layout: alpha at byte 8, the positive store's offset at 72 and its
+    // two u32 keys (relative to the offset) at 88 and 92.
+    let patched = |alpha: f64, offset: i32, last_key: u32| {
+        let mut b = bytes.clone();
+        b[8..16].copy_from_slice(&alpha.to_le_bytes());
+        b[72..76].copy_from_slice(&offset.to_le_bytes());
+        b[92..96].copy_from_slice(&last_key.to_le_bytes());
+        let words = aligned_copy(&b);
+        DdSketchView::from_bytes(aligned_bytes(&words, b.len())).map(|v| v.get_count())
+    };
+    let (offset, last_key) = (
+        i32::from_le_bytes(bytes[72..76].try_into().unwrap()),
+        u32::from_le_bytes(bytes[92..96].try_into().unwrap()),
+    );
+    // Unchanged keys at a tiny alpha are a small sketch: accepted.
+    assert_eq!(patched(1e-9, offset, last_key), Ok(2));
+    // 1.5e9 buckets below the smallest sample (12 GB dense): refused.
+    assert!(patched(1e-9, -1_500_000_000, last_key).is_err());
+    // Within [key(1), key(1e6)] at alpha 1e-9 / 1e-6, but spanning 2^30 /
+    // 6e6 buckets (8 GB / 48 MB dense): refused.
+    assert!(patched(1e-9, 0, 1 << 30).is_err());
+    assert!(patched(1e-6, 0, 6_000_000).is_err());
+    // Keys inside the samples' range and under the span cap read.
+    assert_eq!(patched(1e-6, 0, 200_000), Ok(2));
+}
+
 /// Every view family, its bytes mutated one byte at a time (several values
 /// at every position) and in random multi-byte bursts: `from_bytes` either
 /// refuses the bytes or accepts a view on which every operation (answers,
@@ -300,6 +344,16 @@ fn mutated_views_never_panic() {
                 s.add(&(f64::from(i).powi(4)));
             }
             s.to_view_bytes()
+        }),
+        // Alpha rewritten to 1e-9: mutated keys may land anywhere in a
+        // range of billions of buckets.
+        ("dd-tiny-alpha", {
+            let mut s = DdSketch::new(0.01);
+            s.add(&1.0);
+            s.add(&1e6);
+            let mut b = s.to_view_bytes();
+            b[8..16].copy_from_slice(&1e-9f64.to_le_bytes());
+            b
         }),
         ("kll", kll(5, 3_000).to_view_bytes()),
         ("cms", cms(6, 300).to_view_bytes()),
