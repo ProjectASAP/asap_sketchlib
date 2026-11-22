@@ -764,6 +764,8 @@ impl DdSketch {
         self.lower_bound(k) * (1.0 + self.alpha)
     }
 
+    /// Adds `other`'s counts to `store` in place, growing `store` (once, to
+    /// the union of both ranges) only when `other` reaches past it.
     fn merge_store(store: &mut Buckets, other: StoreRef<'_>) {
         if other.is_empty() {
             return;
@@ -772,29 +774,19 @@ impl DdSketch {
             *store = other.to_buckets();
             return;
         }
-
         let (self_l, self_r) = store.range().unwrap();
         let (other_l, other_r) = other.range();
-
-        let new_l = self_l.min(other_l);
-        let new_r = self_r.max(other_r);
-        let new_len = (new_r - new_l + 1) as usize;
-
-        let mut merged = vec![0u64; new_len];
-
-        // Copy self
-        for (i, &c) in store.counts.as_slice().iter().enumerate() {
-            let k = self_l + i as i32;
-            merged[(k - new_l) as usize] += c;
+        if other_l < self_l || other_r > self_r {
+            let new_l = self_l.min(other_l);
+            let new_r = self_r.max(other_r);
+            let mut merged = vec![0u64; (new_r - new_l + 1) as usize];
+            let at = (self_l - new_l) as usize;
+            let old = store.counts.as_slice();
+            merged[at..at + old.len()].copy_from_slice(old);
+            store.counts = Vector1D::from_vec(merged);
+            store.offset = new_l;
         }
-
-        // Add other
-        for (k, c) in other.buckets() {
-            merged[(k - new_l) as usize] += c;
-        }
-
-        store.counts = Vector1D::from_vec(merged);
-        store.offset = new_l;
+        other.add_into(store.counts.as_mut_slice(), store.offset);
     }
 }
 
@@ -839,12 +831,31 @@ impl Counts<'_> {
         }
     }
 
+    #[inline]
     fn get(&self, index: usize) -> u64 {
         match self {
             Self::U8(counts) => u64::from(counts[index]),
             Self::U16(counts) => u64::from(counts[index]),
             Self::U32(counts) => u64::from(counts[index]),
             Self::U64(counts) => counts[index],
+        }
+    }
+
+    /// The sum of the counts, `None` on overflow. One loop per width, with
+    /// no per-element dispatch.
+    fn total(&self) -> Option<u64> {
+        // Under 2^20 entries (the span limit) of at most u32::MAX each, a
+        // narrow store's sum fits a u64.
+        fn widened<T: Copy + Into<u64>>(counts: &[T]) -> u64 {
+            counts.iter().map(|&c| c.into()).sum()
+        }
+        match self {
+            Self::U8(counts) => Some(widened(counts)),
+            Self::U16(counts) => Some(widened(counts)),
+            Self::U32(counts) => Some(widened(counts)),
+            Self::U64(counts) => counts
+                .iter()
+                .try_fold(0u64, |total, &c| total.checked_add(c)),
         }
     }
 
@@ -910,12 +921,42 @@ impl<'a> StoreRef<'a> {
 
     /// Entry `i`: its bucket index and count. The index fits an `i32`
     /// (checked when the view was read).
+    #[inline]
     fn bucket(&self, i: usize) -> (i32, u64) {
         let key = match self.keys {
             Some(keys) => keys[i] as i32,
             None => i as i32,
         };
         (self.offset + key, self.counts.get(i))
+    }
+
+    /// Adds every count to `dst`, whose first slot is bucket `dst_offset`
+    /// and which covers this store's range. One loop per width and form:
+    /// a dense store adds a slice, a sparse one scatters by key.
+    fn add_into(&self, dst: &mut [u64], dst_offset: i32) {
+        fn dense<T: Copy + Into<u64>>(dst: &mut [u64], src: &[T]) {
+            for (d, &c) in dst[..src.len()].iter_mut().zip(src) {
+                *d += c.into();
+            }
+        }
+        // `base` is this store's offset in `dst`: at or above 0 for a dense
+        // store; for a sparse one, base + its first key is.
+        fn sparse<T: Copy + Into<u64>>(dst: &mut [u64], base: i64, keys: &[u32], src: &[T]) {
+            for (&k, &c) in keys.iter().zip(src) {
+                dst[(base + i64::from(k)) as usize] += c.into();
+            }
+        }
+        let base = i64::from(self.offset) - i64::from(dst_offset);
+        match (self.keys, self.counts) {
+            (None, Counts::U8(c)) => dense(&mut dst[base as usize..], c),
+            (None, Counts::U16(c)) => dense(&mut dst[base as usize..], c),
+            (None, Counts::U32(c)) => dense(&mut dst[base as usize..], c),
+            (None, Counts::U64(c)) => dense(&mut dst[base as usize..], c),
+            (Some(k), Counts::U8(c)) => sparse(dst, base, k, c),
+            (Some(k), Counts::U16(c)) => sparse(dst, base, k, c),
+            (Some(k), Counts::U32(c)) => sparse(dst, base, k, c),
+            (Some(k), Counts::U64(c)) => sparse(dst, base, k, c),
+        }
     }
 
     fn buckets<'b>(&'b self) -> BucketIter<'a, 'b> {
@@ -937,9 +978,7 @@ impl<'a> StoreRef<'a> {
         }
         let (first, last) = self.range();
         let mut counts = vec![0u64; (last - first) as usize + 1];
-        for (key, count) in self.buckets() {
-            counts[(key - first) as usize] += count;
-        }
+        self.add_into(&mut counts, first);
         Buckets {
             counts: Vector1D::from_vec(counts),
             offset: first,
@@ -1031,9 +1070,10 @@ impl<'a> DdSketchView<'a> {
         let positive = store(positive_offset, positive_len)?;
         let negative = store(negative_offset, negative_len)?;
         let buckets: u64 = positive
-            .buckets()
-            .chain(negative.buckets())
-            .try_fold(zero_count, |total, (_, c)| total.checked_add(c))
+            .counts
+            .total()
+            .zip(negative.counts.total())
+            .and_then(|(p, n)| p.checked_add(n)?.checked_add(zero_count))
             .ok_or_else(|| ViewError("DDSketch counts overflow".into()))?;
         if buckets != count {
             return Err(ViewError(format!(
@@ -1054,7 +1094,9 @@ impl<'a> DdSketchView<'a> {
         let inv_log_gamma = 1.0 / ((1.0 + alpha) / (1.0 - alpha)).ln();
         let key = |v: f64| (v.ln() * inv_log_gamma).floor();
         let slack = GROW_CHUNK as f64 + 1.0;
-        let indexable_lowest = key(ddsketch_indexable_bounds(alpha).0) - slack;
+        // Needed only for a store whose samples may come close to zero
+        // (its `exp` costs more than the rest of the check).
+        let indexable_lowest = || key(ddsketch_indexable_bounds(alpha).0) - slack;
         // A store's magnitudes lie in [smallest, largest]; `smallest` is 0
         // when samples of that sign may come arbitrarily close to zero.
         let store_ok = |store: &StoreRef, smallest: f64, largest: f64| -> bool {
@@ -1063,9 +1105,9 @@ impl<'a> DdSketchView<'a> {
             }
             let (first, last) = store.range();
             let lowest = if smallest > 0.0 {
-                (key(smallest) - slack).max(indexable_lowest)
+                key(smallest) - slack
             } else {
-                indexable_lowest
+                indexable_lowest()
             };
             let highest = if largest > 0.0 {
                 key(largest) + slack
