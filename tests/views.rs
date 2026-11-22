@@ -202,7 +202,8 @@ fn ddsketch_counts_are_stored_narrow_and_widen_on_overflow() {
     let small_bytes = small.to_view_bytes();
     let words = aligned_copy(&small_bytes);
     let view = DdSketchView::from_bytes(aligned_bytes(&words, small_bytes.len())).unwrap();
-    assert_eq!(view.count_width(), 4);
+    // 1,000 samples over ~100 buckets: every count fits a u8 or u16.
+    assert!(view.count_width() <= 2);
     let mut big = dd(2, 1_000);
     big.apply_delta(DdSketchBucketDelta {
         sign: DdSign::Positive,
@@ -230,6 +231,46 @@ fn ddsketch_counts_are_stored_narrow_and_widen_on_overflow() {
     assert!(viewed.get_count() > u64::from(u32::MAX));
 }
 
+/// A sketch whose samples spread over many buckets is written sparse
+/// (occupied buckets only), one packed into a narrow range dense; both
+/// answer and merge as their owned sketches, and sparse takes fewer bytes.
+#[test]
+fn spread_ddsketches_are_written_sparse() {
+    let mut spread = DdSketch::new(0.01);
+    for i in 1..=60u32 {
+        spread.add(&(f64::from(i).powi(4)));
+    }
+    let mut packed = DdSketch::new(0.01);
+    for i in 0..150u32 {
+        packed.add(&(100.0 + f64::from(i % 5)));
+    }
+    for (sketch, sparse) in [(&spread, true), (&packed, false)] {
+        let bytes = sketch.to_view_bytes();
+        let words = aligned_copy(&bytes);
+        let view = DdSketchView::from_bytes(aligned_bytes(&words, bytes.len())).unwrap();
+        assert_eq!(view.is_sparse(), sparse);
+        assert_eq!(view.count_width(), 1);
+        for q in QS {
+            assert_eq!(
+                view.quantile_interpolated(q),
+                sketch.quantile_interpolated(q)
+            );
+            assert_eq!(
+                view.get_value_at_quantile(q),
+                sketch.get_value_at_quantile(q)
+            );
+        }
+        let mut owned = dd(1, 100);
+        owned.merge(sketch).unwrap();
+        let mut viewed = dd(1, 100);
+        viewed.merge_view(&view).unwrap();
+        assert_eq!(viewed.to_view_bytes(), owned.to_view_bytes());
+    }
+    // Dense over the spread range would hold every bucket between 1 and
+    // 60^4 (about 820) at one byte each; sparse holds 60 keys and counts.
+    assert!(spread.to_view_bytes().len() < 600);
+}
+
 /// Every view family, its bytes mutated one byte at a time (several values
 /// at every position) and in random multi-byte bursts: `from_bytes` either
 /// refuses the bytes or accepts a view on which every operation (answers,
@@ -253,6 +294,13 @@ fn mutated_views_never_panic() {
             s.to_view_bytes()
         }),
         ("dd-wide", big.to_view_bytes()),
+        ("dd-sparse", {
+            let mut s = DdSketch::new(0.01);
+            for i in 1..=60u32 {
+                s.add(&(f64::from(i).powi(4)));
+            }
+            s.to_view_bytes()
+        }),
         ("kll", kll(5, 3_000).to_view_bytes()),
         ("cms", cms(6, 300).to_view_bytes()),
     ];

@@ -87,6 +87,20 @@ impl ViewWriter {
         self
     }
 
+    pub(crate) fn u8s(&mut self, values: &[u8]) -> &mut Self {
+        self.pad8();
+        self.bytes.extend_from_slice(values);
+        self
+    }
+
+    pub(crate) fn u16s(&mut self, values: &[u16]) -> &mut Self {
+        self.pad8();
+        for value in values {
+            self.bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        self
+    }
+
     pub(crate) fn u32s(&mut self, values: &[u32]) -> &mut Self {
         self.pad8();
         for value in values {
@@ -187,6 +201,8 @@ impl<'a> ViewReader<'a> {
     array!(u64s, u64);
     array!(f64s, f64);
     array!(u32s, u32);
+    array!(u16s, u16);
+    array!(u8s, u8);
 }
 
 /// Copies `bytes` into an 8-byte-aligned buffer, for tests and callers whose
