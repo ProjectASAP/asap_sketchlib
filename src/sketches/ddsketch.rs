@@ -155,10 +155,11 @@ impl Buckets {
 pub struct DdSketch {
     alpha: f64,
     inv_log_gamma: f64,
-    /// [`ddsketch_indexable_bounds`] of `alpha`, computed once when the
-    /// sketch is built or decoded instead of on every add.
-    min_indexable: f64,
-    max_indexable: f64,
+    /// [`ddsketch_indexable_bounds`] of `alpha`: the smallest and largest
+    /// sample magnitudes it indexes, computed once when the sketch is built
+    /// or decoded instead of on every add.
+    min_indexable_magnitude: f64,
+    max_indexable_magnitude: f64,
 
     positive_store: Buckets,
     count: u64,
@@ -194,8 +195,8 @@ impl TryFrom<DdSketchState> for DdSketch {
     }
 }
 
-// Calls of `ddsketch_indexable_bounds` on this thread, for the test that adds
-// do not recompute them.
+// Counts calls of `ddsketch_indexable_bounds` on this thread, so a test can
+// check that adds do not recompute the bounds.
 #[cfg(test)]
 std::thread_local! {
     static INDEXABLE_BOUNDS_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
@@ -208,7 +209,8 @@ std::thread_local! {
 /// handled without growing the dense store: smaller magnitudes enter the
 /// zero bucket, while larger magnitudes are rejected.
 ///
-/// Single source of truth shared by `DdSketch` and tests.
+/// Single source of truth shared by `DdSketch` (computed once per sketch),
+/// its deltas and views, and the quantile analytics.
 pub fn ddsketch_indexable_bounds(alpha: f64) -> (f64, f64) {
     #[cfg(test)]
     INDEXABLE_BOUNDS_CALLS.with(|calls| calls.set(calls.get() + 1));
@@ -230,13 +232,13 @@ impl DdSketch {
     pub fn new(alpha: f64) -> Self {
         assert!(alpha > 0.0 && alpha < 1.0, "alpha must be in (0,1)");
         let gamma = (1.0 + alpha) / (1.0 - alpha);
-        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(alpha);
+        let (min_indexable_magnitude, max_indexable_magnitude) = ddsketch_indexable_bounds(alpha);
 
         Self {
             alpha,
             inv_log_gamma: 1.0 / gamma.ln(),
-            min_indexable,
-            max_indexable,
+            min_indexable_magnitude,
+            max_indexable_magnitude,
             positive_store: Buckets::new(),
             count: 0,
             negative_store: Buckets::new(),
@@ -271,12 +273,12 @@ impl DdSketch {
         if !v.is_finite() {
             return Err("DDSketch requires finite values");
         }
-        if v.abs() > self.max_indexable {
+        if v.abs() > self.max_indexable_magnitude {
             return Err("DDSketch value exceeds indexable range");
         }
         self.count = self.count.checked_add(1).ok_or("DDSketch count overflow")?;
         crate::analytics::ops::add(1);
-        if v.abs() < self.min_indexable {
+        if v.abs() < self.min_indexable_magnitude {
             crate::analytics::ops::add(1);
             self.zero_count += 1;
         } else {
@@ -298,7 +300,7 @@ impl DdSketch {
         if !(value.is_finite() && value > 0.0) {
             return None;
         }
-        if value < self.min_indexable || value > self.max_indexable {
+        if value < self.min_indexable_magnitude || value > self.max_indexable_magnitude {
             return None;
         }
         Some(self.key_for(value))
@@ -306,10 +308,10 @@ impl DdSketch {
 
     /// Select the signed store and magnitude index for an accepted observation.
     pub fn signed_bucket_for(&self, value: f64) -> Option<(DdSign, i32)> {
-        if !value.is_finite() || value.abs() > self.max_indexable {
+        if !value.is_finite() || value.abs() > self.max_indexable_magnitude {
             return None;
         }
-        if value.abs() < self.min_indexable {
+        if value.abs() < self.min_indexable_magnitude {
             return Some((DdSign::Zero, 0));
         }
         Some((
@@ -341,8 +343,8 @@ impl DdSketch {
         // across the whole gap. Out-of-range values are dropped, which is what
         // `add` already does with values it cannot index.
         let (lowest, highest) = (
-            self.key_for(self.min_indexable),
-            self.key_for(self.max_indexable),
+            self.key_for(self.min_indexable_magnitude),
+            self.key_for(self.max_indexable_magnitude),
         );
         if delta.index < lowest || delta.index > highest {
             return;
@@ -514,9 +516,8 @@ impl DdSketch {
         negatives: bool,
     ) -> usize {
         let sketch = Self::new(alpha);
-        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(alpha);
-        let low = min_magnitude.max(min_indexable);
-        let high = max_magnitude.min(max_indexable);
+        let low = min_magnitude.max(sketch.min_indexable_magnitude);
+        let high = max_magnitude.min(sketch.max_indexable_magnitude);
         if n == 0 || low > high {
             return size_of::<Self>();
         }
@@ -690,8 +691,8 @@ impl Clone for DdSketch {
         Self {
             alpha: self.alpha,
             inv_log_gamma: self.inv_log_gamma,
-            min_indexable: self.min_indexable,
-            max_indexable: self.max_indexable,
+            min_indexable_magnitude: self.min_indexable_magnitude,
+            max_indexable_magnitude: self.max_indexable_magnitude,
             positive_store: self.positive_store.clone(),
             count: self.count,
             negative_store: self.negative_store.clone(),
@@ -1063,7 +1064,13 @@ mod tests {
             let decoded =
                 DdSketch::from_asapv1(&built.to_asapv1().expect("encodes")).expect("decodes");
             for sketch in [&built, &decoded, &built.clone()] {
-                assert_eq!((sketch.min_indexable, sketch.max_indexable), bounds);
+                assert_eq!(
+                    (
+                        sketch.min_indexable_magnitude,
+                        sketch.max_indexable_magnitude
+                    ),
+                    bounds
+                );
             }
         }
     }
