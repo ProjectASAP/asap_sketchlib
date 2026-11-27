@@ -75,7 +75,8 @@ pub use mode::{FastPath, RegularPath};
 pub mod countminsketch;
 pub use crate::MatrixStorage;
 pub use countminsketch::{
-    CountMinF64, CountMinSketch, CountMinSketchDelta, QUICKSTART_COLS, QUICKSTART_ROWS,
+    CountMinF64, CountMinF64View, CountMinSketch, CountMinSketchDelta, QUICKSTART_COLS,
+    QUICKSTART_ROWS,
 };
 
 pub mod elastic;
@@ -94,7 +95,7 @@ pub use hll::{
 };
 
 pub mod kll;
-pub use kll::Kll;
+pub use kll::{Kll, KllView};
 
 pub mod kll_dynamic;
 pub use kll_dynamic::KllDynamic;
@@ -108,7 +109,7 @@ pub mod uniform;
 pub use uniform::UniformSampling;
 
 pub mod ddsketch;
-pub use ddsketch::{DdSketch, DdSketchDelta};
+pub use ddsketch::{DdSketch, DdSketchDelta, DdSketchView};
 
 pub mod countminsketch_heap;
 pub use countminsketch_heap::{CountMinSketchWithHeap, CountMinSketchWithHeapDelta};

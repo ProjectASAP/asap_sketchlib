@@ -21,6 +21,7 @@ use crate::common::input::data_input_to_f64;
 use crate::common::numerical::NumericalValue;
 use crate::common::structures::Vector1D;
 use crate::octo_delta::{DdSign, DdSketchBucketDelta};
+use crate::views::{ViewError, ViewReader, ViewWriter};
 
 /// The ASAPv1 DDSketch delta (kind_id `0x05 0x81`).
 mod delta;
@@ -31,6 +32,15 @@ pub use delta::DdSketchDelta;
 
 // Number of buckets to grow by when expanding.
 const GROW_CHUNK: usize = 128;
+
+/// The most buckets one store of a view may span (first to last index).
+/// The owned sketch a view merges into holds its stores dense, so a view
+/// spanning more would make a few bytes allocate gigabytes (a tiny alpha
+/// puts samples a factor of two apart about `ln 2 / (2 alpha)` buckets
+/// apart). 2^20 buckets is 8 MiB of `u64` counts. It covers any samples
+/// between 1e-300 and 1e300 at alpha >= 1e-3, and samples spread by a
+/// factor of 1e9 at alpha >= 1e-5; a sketch spread wider is refused.
+const MAX_VIEW_BUCKET_SPAN: i64 = 1 << 20;
 
 #[derive(Debug, Clone)]
 struct Buckets {
@@ -362,12 +372,7 @@ impl DdSketch {
     /// sample's magnitude is indexable. A nonzero magnitude below the
     /// indexable range is counted as zero and reads `0.0`.
     pub fn get_value_at_quantile(&self, q: f64) -> Option<f64> {
-        crate::analytics::ops::add(1);
-        if self.count == 0 || q.is_nan() {
-            return None;
-        }
-        let rank = ((q * self.count as f64).ceil() as u64).clamp(1, self.count);
-        Some(self.value_at_rank(rank - 1))
+        self.as_view().get_value_at_quantile(q)
     }
 
     /// Returns the quantile at `q` interpolated linearly between the two
@@ -392,69 +397,106 @@ impl DdSketch {
     /// `0`. A sketch never holds NaN: [`Self::try_add`] refuses non-finite
     /// values. Ranks are computed in `f64`, exact up to `2^53` samples.
     pub fn quantile_interpolated(&self, q: f64) -> Result<Option<f64>, String> {
-        if !(0.0..=1.0).contains(&q) {
-            return Err(format!("DDSketch quantile {q} is outside [0, 1]"));
-        }
-        crate::analytics::ops::add(1);
-        if self.count == 0 {
-            return Ok(None);
-        }
-        let rank = q * (self.count - 1) as f64;
-        let lower_rank = rank.floor() as u64;
-        let upper_rank = (rank.ceil() as u64).min(self.count - 1);
-        let fraction = rank - lower_rank as f64;
-        let lower = self.value_at_rank(lower_rank);
-        if fraction == 0.0 {
-            return Ok(Some(lower));
-        }
-        let upper = self.value_at_rank(upper_rank);
-        Ok(Some(lower * (1.0 - fraction) + upper * fraction))
+        self.as_view().quantile_interpolated(q)
     }
 
-    /// The estimated order statistic at 0-based `rank` (`rank < count`): the
-    /// representative of the bucket holding it, `0.0` in the zero bucket.
-    fn value_at_rank(&self, rank: u64) -> f64 {
-        debug_assert!(rank < self.count);
-        // The last occupied bucket walked, returned if the buckets ever held
-        // fewer samples than `count` says (no code path allows it).
-        let mut last = 0.0;
-        let mut seen = 0u64;
-        let negative = self.negative_store.counts.as_slice();
-        let offset = self.negative_store.offset;
-        // Each store's offset and the zero count.
-        crate::analytics::ops::add(3);
-        for (i, &count) in negative.iter().enumerate().rev() {
-            crate::analytics::ops::add(1);
-            if count == 0 {
-                continue;
-            }
-            seen += count;
-            last = -self.bin_representative(offset + i as i32);
-            if seen > rank {
-                return last;
+    /// This sketch as a read-only view: the same answers, read in place.
+    pub fn as_view(&self) -> DdSketchView<'_> {
+        DdSketchView {
+            alpha: self.alpha,
+            gamma: self.gamma,
+            count: self.count,
+            zero_count: self.zero_count,
+            admission_rate: self.admission_rate,
+            positive: StoreRef::of(&self.positive_store),
+            negative: StoreRef::of(&self.negative_store),
+        }
+    }
+
+    /// This sketch in its zero-copy view layout (see [`crate::views`]):
+    /// `DDV1`, version, `alpha`, `count`, `zero_count`,
+    /// `admission_rate`, the count width in bytes (`1`, `2`, `4` or `8`: the
+    /// narrowest that holds every bucket count) and a `u32` that is `1` for
+    /// the sparse form, `0` for the dense one; then per sign (positive,
+    /// negative) `offset: i32` and `len: u32`; then per sign, dense: the
+    /// counts of buckets `offset..offset + len`, or sparse: `[u32; len]`
+    /// bucket indices less `offset` (increasing) and their counts. Only
+    /// occupied buckets and the range between them are written; the form
+    /// taking fewer bytes is chosen.
+    pub fn to_view_bytes(&self) -> Vec<u8> {
+        // Each store's occupied range.
+        fn occupied(store: &Buckets) -> (i32, &[u64]) {
+            let counts = store.counts.as_slice();
+            match counts.iter().position(|&c| c != 0) {
+                None => (0, &counts[..0]),
+                Some(first) => {
+                    let last = counts
+                        .iter()
+                        .rposition(|&c| c != 0)
+                        .expect("a nonzero count");
+                    (store.offset + first as i32, &counts[first..=last])
+                }
             }
         }
-        if self.zero_count > 0 {
-            seen += self.zero_count;
-            last = 0.0;
-            if seen > rank {
-                return last;
-            }
+        let (positive_offset, positive) = occupied(&self.positive_store);
+        let (negative_offset, negative) = occupied(&self.negative_store);
+        let largest = positive.iter().chain(negative).copied().max().unwrap_or(0);
+        let width: usize = match largest {
+            0..=0xff => 1,
+            0x100..=0xffff => 2,
+            0x1_0000..=0xffff_ffff => 4,
+            _ => 8,
+        };
+        let nonzero = |counts: &[u64]| counts.iter().filter(|&&c| c != 0).count();
+        let padded = |bytes: usize| bytes.div_ceil(8) * 8;
+        let dense = padded(positive.len() * width) + padded(negative.len() * width);
+        let sparse_entries = (nonzero(positive), nonzero(negative));
+        let sparse = padded(sparse_entries.0 * 4)
+            + padded(sparse_entries.0 * width)
+            + padded(sparse_entries.1 * 4)
+            + padded(sparse_entries.1 * width);
+        let is_sparse = sparse < dense;
+        let mut writer = ViewWriter::new(DD_VIEW_MAGIC);
+        writer
+            .f64(self.alpha)
+            .u64(self.count)
+            .u64(self.zero_count)
+            .f64(self.admission_rate)
+            .u32(width as u32)
+            .u32(u32::from(is_sparse))
+            .i32(positive_offset)
+            .u32(if is_sparse {
+                sparse_entries.0
+            } else {
+                positive.len()
+            } as u32)
+            .i32(negative_offset)
+            .u32(if is_sparse {
+                sparse_entries.1
+            } else {
+                negative.len()
+            } as u32);
+        for counts in [positive, negative] {
+            let kept: Vec<u64> = if is_sparse {
+                let keys: Vec<u32> = counts
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| **c != 0)
+                    .map(|(i, _)| i as u32)
+                    .collect();
+                writer.u32s(&keys);
+                counts.iter().copied().filter(|&c| c != 0).collect()
+            } else {
+                counts.to_vec()
+            };
+            match width {
+                1 => writer.u8s(&kept.iter().map(|&c| c as u8).collect::<Vec<_>>()),
+                2 => writer.u16s(&kept.iter().map(|&c| c as u16).collect::<Vec<_>>()),
+                4 => writer.u32s(&kept.iter().map(|&c| c as u32).collect::<Vec<_>>()),
+                _ => writer.u64s(&kept),
+            };
         }
-        let positive = self.positive_store.counts.as_slice();
-        let offset = self.positive_store.offset;
-        for (i, &count) in positive.iter().enumerate() {
-            crate::analytics::ops::add(1);
-            if count == 0 {
-                continue;
-            }
-            seen += count;
-            last = self.bin_representative(offset + i as i32);
-            if seen > rank {
-                return last;
-            }
-        }
-        last
+        writer.finish()
     }
 
     /// Returns the total number of samples inserted so far.
@@ -581,6 +623,18 @@ impl DdSketch {
     /// results with no signal at all. DataDog's `MergeWith` and sketchlib-go's
     /// Go `Merge` both return an error here.
     pub fn merge(&mut self, other: &DdSketch) -> Result<(), String> {
+        self.merge_view(&other.as_view())
+    }
+
+    /// Merges a view (a stored sketch read in place) into this one, as
+    /// [`Self::merge`] merges an owned sketch: the same checks, the same
+    /// answers. Allocates only when this sketch's stores must grow.
+    ///
+    /// A view holds only each store's occupied buckets, so the merged
+    /// stores (and so [`Self::to_view_bytes`]) equal a merge of the view's
+    /// owned sketch after [`Self::shrink_to_fit`], which can differ from a merge of the
+    /// original sketch only in empty slots at a store's ends.
+    pub fn merge_view(&mut self, other: &DdSketchView<'_>) -> Result<(), String> {
         if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma - other.gamma).abs() >= 1e-12 {
             return Err(format!(
                 "cannot merge DDSketches with different index mappings: alpha {} vs {}",
@@ -595,21 +649,27 @@ impl DdSketch {
             return Ok(());
         }
         if self.count == 0 {
-            // Every slot, both offsets, the count and the zero count copied.
+            // Every bucket, both offsets, the count and the zero count copied.
             crate::analytics::ops::add(
-                2 * (other.positive_store.counts.len() + other.negative_store.counts.len()) + 8,
+                2 * (other.positive.counts.len() + other.negative.counts.len()) + 8,
             );
-            *self = other.clone();
+            self.count = other.count;
+            self.zero_count = other.zero_count;
+            self.positive_store = other.positive.to_buckets();
+            self.negative_store = other.negative.to_buckets();
             return Ok(());
         }
 
         // The count and the zero count added to.
         crate::analytics::ops::add(3);
-        self.count += other.count;
+        self.count = self
+            .count
+            .checked_add(other.count)
+            .ok_or("cannot merge DDSketches: count overflow")?;
 
         // Merge bucket vectors
-        Self::merge_store(&mut self.positive_store, &other.positive_store);
-        Self::merge_store(&mut self.negative_store, &other.negative_store);
+        Self::merge_store(&mut self.positive_store, other.positive);
+        Self::merge_store(&mut self.negative_store, other.negative);
         self.zero_count += other.zero_count;
         Ok(())
     }
@@ -621,7 +681,7 @@ impl DdSketch {
     }
 
     /// Lower edge γ^k of bucket k.
-    #[inline]
+    #[cfg(test)]
     fn lower_bound(&self, k: i32) -> f64 {
         self.gamma.powf(k as f64)
     }
@@ -630,46 +690,37 @@ impl DdSketch {
     /// DataDog's logarithmic_mapping.go `Value = LowerBound(index) * (1 +
     /// RelativeAccuracy())`. This makes the relative error EXACTLY α at both
     /// bucket edges, as the advertised α-accuracy guarantee requires.
-    #[inline]
+    #[cfg(test)]
     fn bin_representative(&self, k: i32) -> f64 {
         self.lower_bound(k) * (1.0 + self.alpha)
     }
 
-    fn merge_store(store: &mut Buckets, other: &Buckets) {
+    /// Adds `other`'s counts to `store` in place, growing `store` (once, to
+    /// the union of both ranges) only when `other` reaches past it.
+    fn merge_store(store: &mut Buckets, other: StoreRef<'_>) {
         if other.is_empty() {
             return;
         }
         if store.is_empty() {
             crate::analytics::ops::add(2 * other.counts.len() + 2);
-            *store = other.clone();
+            *store = other.to_buckets();
             return;
         }
-
         // Both offsets read, every slot read and added in, the offset written.
         crate::analytics::ops::add(3 + 2 * (store.counts.len() + other.counts.len()));
         let (self_l, self_r) = store.range().unwrap();
-        let (other_l, other_r) = other.range().unwrap();
-
-        let new_l = self_l.min(other_l);
-        let new_r = self_r.max(other_r);
-        let new_len = (new_r - new_l + 1) as usize;
-
-        let mut merged = vec![0u64; new_len];
-
-        // Copy self
-        for (i, &c) in store.counts.as_slice().iter().enumerate() {
-            let k = self_l + i as i32;
-            merged[(k - new_l) as usize] += c;
+        let (other_l, other_r) = other.range();
+        if other_l < self_l || other_r > self_r {
+            let new_l = self_l.min(other_l);
+            let new_r = self_r.max(other_r);
+            let mut merged = vec![0u64; (new_r - new_l + 1) as usize];
+            let at = (self_l - new_l) as usize;
+            let old = store.counts.as_slice();
+            merged[at..at + old.len()].copy_from_slice(old);
+            store.counts = Vector1D::from_vec(merged);
+            store.offset = new_l;
         }
-
-        // Add other
-        for (i, &c) in other.counts.as_slice().iter().enumerate() {
-            let k = other_l + i as i32;
-            merged[(k - new_l) as usize] += c;
-        }
-
-        store.counts = Vector1D::from_vec(merged);
-        store.offset = new_l;
+        other.add_into(store.counts.as_mut_slice(), store.offset);
     }
 }
 
@@ -686,6 +737,443 @@ impl Clone for DdSketch {
             zero_count: self.zero_count,
             admission_rate: self.admission_rate,
         }
+    }
+}
+
+const DD_VIEW_MAGIC: [u8; 4] = *b"DDV1";
+
+/// Bucket counts, borrowed at the width they are stored in: the narrowest
+/// of `u8`, `u16`, `u32` and `u64` that holds every count.
+#[derive(Debug, Clone, Copy)]
+enum Counts<'a> {
+    U8(&'a [u8]),
+    U16(&'a [u16]),
+    U32(&'a [u32]),
+    U64(&'a [u64]),
+}
+
+impl Counts<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::U8(counts) => counts.len(),
+            Self::U16(counts) => counts.len(),
+            Self::U32(counts) => counts.len(),
+            Self::U64(counts) => counts.len(),
+        }
+    }
+
+    #[inline]
+    fn get(&self, index: usize) -> u64 {
+        match self {
+            Self::U8(counts) => u64::from(counts[index]),
+            Self::U16(counts) => u64::from(counts[index]),
+            Self::U32(counts) => u64::from(counts[index]),
+            Self::U64(counts) => counts[index],
+        }
+    }
+
+    /// The sum of the counts, `None` on overflow. One loop per width, with
+    /// no per-element dispatch.
+    fn total(&self) -> Option<u64> {
+        // Under 2^20 entries (the span limit) of at most u32::MAX each, a
+        // narrow store's sum fits a u64.
+        fn widened<T: Copy + Into<u64>>(counts: &[T]) -> u64 {
+            counts.iter().map(|&c| c.into()).sum()
+        }
+        match self {
+            Self::U8(counts) => Some(widened(counts)),
+            Self::U16(counts) => Some(widened(counts)),
+            Self::U32(counts) => Some(widened(counts)),
+            Self::U64(counts) => counts
+                .iter()
+                .try_fold(0u64, |total, &c| total.checked_add(c)),
+        }
+    }
+
+    fn width(&self) -> usize {
+        match self {
+            Self::U8(_) => 1,
+            Self::U16(_) => 2,
+            Self::U32(_) => 4,
+            Self::U64(_) => 8,
+        }
+    }
+}
+
+/// One sign's bucket store, borrowed. Dense (`keys` is `None`): bucket
+/// `offset + i` holds count `i`. Sparse: bucket `offset + keys[i]` holds
+/// count `i`, keys strictly increasing, and every other bucket is empty.
+#[derive(Debug, Clone, Copy)]
+struct StoreRef<'a> {
+    offset: i32,
+    counts: Counts<'a>,
+    keys: Option<&'a [u32]>,
+}
+
+/// The `(bucket, count)` pairs of a [`StoreRef`], from either end.
+struct BucketIter<'a, 'b> {
+    store: &'b StoreRef<'a>,
+    front: usize,
+    back: usize,
+}
+
+impl Iterator for BucketIter<'_, '_> {
+    type Item = (i32, u64);
+
+    fn next(&mut self) -> Option<(i32, u64)> {
+        (self.front < self.back).then(|| {
+            self.front += 1;
+            self.store.bucket(self.front - 1)
+        })
+    }
+}
+
+impl DoubleEndedIterator for BucketIter<'_, '_> {
+    fn next_back(&mut self) -> Option<(i32, u64)> {
+        (self.front < self.back).then(|| {
+            self.back -= 1;
+            self.store.bucket(self.back)
+        })
+    }
+}
+
+impl<'a> StoreRef<'a> {
+    fn of(store: &'a Buckets) -> Self {
+        Self {
+            offset: store.offset,
+            counts: Counts::U64(store.counts.as_slice()),
+            keys: None,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.counts.len() == 0
+    }
+
+    /// Entry `i`: its bucket index and count. The index fits an `i32`
+    /// (checked when the view was read).
+    #[inline]
+    fn bucket(&self, i: usize) -> (i32, u64) {
+        let key = match self.keys {
+            Some(keys) => keys[i] as i32,
+            None => i as i32,
+        };
+        (self.offset + key, self.counts.get(i))
+    }
+
+    /// Adds every count to `dst`, whose first slot is bucket `dst_offset`
+    /// and which covers this store's range. One loop per width and form:
+    /// a dense store adds a slice, a sparse one scatters by key.
+    fn add_into(&self, dst: &mut [u64], dst_offset: i32) {
+        fn dense<T: Copy + Into<u64>>(dst: &mut [u64], src: &[T]) {
+            for (d, &c) in dst[..src.len()].iter_mut().zip(src) {
+                *d += c.into();
+            }
+        }
+        // `base` is this store's offset in `dst`: at or above 0 for a dense
+        // store; for a sparse one, base + its first key is.
+        fn sparse<T: Copy + Into<u64>>(dst: &mut [u64], base: i64, keys: &[u32], src: &[T]) {
+            for (&k, &c) in keys.iter().zip(src) {
+                dst[(base + i64::from(k)) as usize] += c.into();
+            }
+        }
+        let base = i64::from(self.offset) - i64::from(dst_offset);
+        match (self.keys, self.counts) {
+            (None, Counts::U8(c)) => dense(&mut dst[base as usize..], c),
+            (None, Counts::U16(c)) => dense(&mut dst[base as usize..], c),
+            (None, Counts::U32(c)) => dense(&mut dst[base as usize..], c),
+            (None, Counts::U64(c)) => dense(&mut dst[base as usize..], c),
+            (Some(k), Counts::U8(c)) => sparse(dst, base, k, c),
+            (Some(k), Counts::U16(c)) => sparse(dst, base, k, c),
+            (Some(k), Counts::U32(c)) => sparse(dst, base, k, c),
+            (Some(k), Counts::U64(c)) => sparse(dst, base, k, c),
+        }
+    }
+
+    fn buckets<'b>(&'b self) -> BucketIter<'a, 'b> {
+        BucketIter {
+            store: self,
+            front: 0,
+            back: self.counts.len(),
+        }
+    }
+
+    /// The first and last bucket index, for a non-empty store.
+    fn range(&self) -> (i32, i32) {
+        (self.bucket(0).0, self.bucket(self.counts.len() - 1).0)
+    }
+
+    fn to_buckets(self) -> Buckets {
+        if self.is_empty() {
+            return Buckets::new();
+        }
+        let (first, last) = self.range();
+        let mut counts = vec![0u64; (last - first) as usize + 1];
+        self.add_into(&mut counts, first);
+        Buckets {
+            counts: Vector1D::from_vec(counts),
+            offset: first,
+        }
+    }
+}
+
+/// A read-only DDSketch over borrowed bucket counts: a stored sketch used
+/// in place (from [`DdSketch::to_view_bytes`] bytes), or an owned one
+/// ([`DdSketch::as_view`]). Answers exactly as the owned sketch.
+#[derive(Debug, Clone, Copy)]
+pub struct DdSketchView<'a> {
+    alpha: f64,
+    gamma: f64,
+    count: u64,
+    zero_count: u64,
+    admission_rate: f64,
+    positive: StoreRef<'a>,
+    negative: StoreRef<'a>,
+}
+
+impl<'a> DdSketchView<'a> {
+    /// The view of bytes written by [`DdSketch::to_view_bytes`], borrowed
+    /// in place; `bytes` must start 8-byte aligned.
+    pub fn from_bytes(bytes: &'a [u8]) -> Result<Self, ViewError> {
+        let mut reader = ViewReader::new(bytes, DD_VIEW_MAGIC)?;
+        let alpha = reader.f64()?;
+        if !(alpha > 0.0 && alpha < 1.0) {
+            return Err(ViewError(format!(
+                "DDSketch alpha {alpha} is outside (0, 1)"
+            )));
+        }
+        let count = reader.u64()?;
+        let zero_count = reader.u64()?;
+        let admission_rate = reader.f64()?;
+        let width = reader.u32()?;
+        let sparse = match reader.u32()? {
+            0 => false,
+            1 => true,
+            other => return Err(ViewError(format!("DDSketch store form {other}"))),
+        };
+        let positive_offset = reader.i32()?;
+        let positive_len = reader.u32()? as usize;
+        let negative_offset = reader.i32()?;
+        let negative_len = reader.u32()? as usize;
+        let mut store = |offset: i32, len: usize| -> Result<StoreRef<'a>, ViewError> {
+            let keys = if sparse {
+                Some(reader.u32s(len)?)
+            } else {
+                None
+            };
+            let counts = match width {
+                1 => Counts::U8(reader.u8s(len)?),
+                2 => Counts::U16(reader.u16s(len)?),
+                4 => Counts::U32(reader.u32s(len)?),
+                8 => Counts::U64(reader.u64s(len)?),
+                other => return Err(ViewError(format!("DDSketch count width {other}"))),
+            };
+            // Every bucket index fits an i32; sparse keys increase.
+            let last_key = match keys {
+                Some(keys) => {
+                    if keys.windows(2).any(|pair| pair[0] >= pair[1]) {
+                        return Err(ViewError("DDSketch sparse keys not increasing".into()));
+                    }
+                    keys.last().copied().unwrap_or(0)
+                }
+                None => len.saturating_sub(1) as u32,
+            };
+            if len > 0
+                && i32::try_from(last_key)
+                    .ok()
+                    .and_then(|key| offset.checked_add(key))
+                    .is_none()
+            {
+                return Err(ViewError("DDSketch bucket index overflows".into()));
+            }
+            Ok(StoreRef {
+                offset,
+                counts,
+                keys,
+            })
+        };
+        let positive = store(positive_offset, positive_len)?;
+        let negative = store(negative_offset, negative_len)?;
+        let buckets: u64 = positive
+            .counts
+            .total()
+            .zip(negative.counts.total())
+            .and_then(|(p, n)| p.checked_add(n)?.checked_add(zero_count))
+            .ok_or_else(|| ViewError("DDSketch counts overflow".into()))?;
+        if buckets != count {
+            return Err(ViewError(format!(
+                "DDSketch count {count} differs from its buckets' {buckets}"
+            )));
+        }
+        admission_rate::to_key(admission_rate).map_err(|e| ViewError(format!("DDSketch {e}")))?;
+        // Every bucket index a real sketch can hold: within the indexable
+        // magnitudes' indices (`to_view_bytes` writes only the occupied
+        // range, and `try_add` / `apply_delta` index nothing outside it, so
+        // every bucket reads back finite), spanning at most
+        // MAX_VIEW_BUCKET_SPAN buckets.
+        let inv_log_gamma = 1.0 / ((1.0 + alpha) / (1.0 - alpha)).ln();
+        let key = |v: f64| (v.ln() * inv_log_gamma).floor();
+        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(alpha);
+        let (lowest, highest) = (key(min_indexable), key(max_indexable));
+        let store_ok = |store: &StoreRef| -> bool {
+            if store.is_empty() {
+                return true;
+            }
+            let (first, last) = store.range();
+            f64::from(first) >= lowest
+                && f64::from(last) <= highest
+                && i64::from(last) - i64::from(first) < MAX_VIEW_BUCKET_SPAN
+        };
+        if !store_ok(&positive) || !store_ok(&negative) {
+            return Err(ViewError(format!(
+                "DDSketch bucket range outside the indexable range or over \
+                 {MAX_VIEW_BUCKET_SPAN} buckets"
+            )));
+        }
+        Ok(Self {
+            alpha,
+            gamma: (1.0 + alpha) / (1.0 - alpha),
+            count,
+            zero_count,
+            admission_rate,
+            positive,
+            negative,
+        })
+    }
+
+    /// The owned sketch this view reads.
+    pub fn to_owned_sketch(&self) -> DdSketch {
+        let mut sketch = DdSketch::new(self.alpha);
+        sketch.admission_rate = self.admission_rate;
+        sketch
+            .merge_view(self)
+            .expect("a view merges into an empty sketch of its alpha");
+        sketch
+    }
+
+    /// The width of its stored bucket counts, in bytes: 1, 2, 4 or 8.
+    pub fn count_width(&self) -> usize {
+        self.positive.counts.width()
+    }
+
+    /// Whether its stores are written sparse (occupied buckets only).
+    pub fn is_sparse(&self) -> bool {
+        self.positive.keys.is_some()
+    }
+
+    /// Representative of bucket k, as [`DdSketch`] computes it.
+    #[inline]
+    fn bin_representative(&self, k: i32) -> f64 {
+        self.gamma.powf(k as f64) * (1.0 + self.alpha)
+    }
+
+    /// Returns the total number of samples.
+    pub fn get_count(&self) -> u64 {
+        self.count
+    }
+
+    /// Returns the relative-accuracy parameter `alpha`.
+    pub fn alpha(&self) -> f64 {
+        self.alpha
+    }
+
+    /// Returns the estimated value at quantile `q`, or `None` if the sketch is
+    /// empty or `q` is NaN: the representative of the bucket holding the
+    /// order statistic at nearest rank `ceil(q * n)` (1-based). `q <= 0` reads
+    /// the lowest occupied bucket and `q >= 1` the highest, so every answer,
+    /// the extremes included, is within `alpha` relative of a sample when that
+    /// sample's magnitude is indexable. A nonzero magnitude below the
+    /// indexable range is counted as zero and reads `0.0`.
+    pub fn get_value_at_quantile(&self, q: f64) -> Option<f64> {
+        crate::analytics::ops::add(1);
+        if self.count == 0 || q.is_nan() {
+            return None;
+        }
+        let rank = ((q * self.count as f64).ceil() as u64).clamp(1, self.count);
+        Some(self.value_at_rank(rank - 1))
+    }
+
+    /// Returns the quantile at `q` interpolated linearly between the two
+    /// adjacent order statistics at rank `q * (n - 1)` (0-based), the
+    /// convention of PromQL `quantile_over_time` and SQL `percentile_cont`.
+    /// [`Self::get_value_at_quantile`] keeps its nearest-rank convention.
+    ///
+    /// - `Ok(None)` for an empty sketch.
+    /// - `Err` for `q` outside `[0, 1]`, NaN included; mapping such a `q` to
+    ///   `-inf` / `+inf` (as PromQL does) is the caller's job.
+    /// - Every order statistic, rank 0 and rank `n - 1` included, is its
+    ///   bucket's representative (negative store, zero bucket or positive
+    ///   store).
+    ///
+    /// Error: each neighbour is within `alpha` relative of the true order
+    /// statistic when its magnitude is indexable, so when both neighbours are
+    /// indexable and share a sign the result is within `alpha` relative of the
+    /// true interpolated value. Across zero the bound is absolute:
+    /// `alpha * ((1 - f) |lower| + f |upper|)` with `f` the fractional rank,
+    /// which need not be small relative to a result near zero. Magnitudes
+    /// below the indexable range are counted in the zero bucket and read as
+    /// `0`. A sketch never holds NaN: [`DdSketch::try_add`] refuses non-finite
+    /// values. Ranks are computed in `f64`, exact up to `2^53` samples.
+    pub fn quantile_interpolated(&self, q: f64) -> Result<Option<f64>, String> {
+        if !(0.0..=1.0).contains(&q) {
+            return Err(format!("DDSketch quantile {q} is outside [0, 1]"));
+        }
+        crate::analytics::ops::add(1);
+        if self.count == 0 {
+            return Ok(None);
+        }
+        let rank = q * (self.count - 1) as f64;
+        let lower_rank = rank.floor() as u64;
+        let upper_rank = (rank.ceil() as u64).min(self.count - 1);
+        let fraction = rank - lower_rank as f64;
+        let lower = self.value_at_rank(lower_rank);
+        if fraction == 0.0 {
+            return Ok(Some(lower));
+        }
+        let upper = self.value_at_rank(upper_rank);
+        Ok(Some(lower * (1.0 - fraction) + upper * fraction))
+    }
+
+    /// The estimated order statistic at 0-based `rank` (`rank < count`): the
+    /// representative of the bucket holding it, `0.0` in the zero bucket.
+    fn value_at_rank(&self, rank: u64) -> f64 {
+        debug_assert!(rank < self.count);
+        // The last occupied bucket walked, returned if the buckets ever held
+        // fewer samples than `count` says (no code path allows it).
+        let mut last = 0.0;
+        let mut seen = 0u64;
+        // Each store's offset and the zero count.
+        crate::analytics::ops::add(3);
+        for (bin, count) in self.negative.buckets().rev() {
+            crate::analytics::ops::add(1);
+            if count == 0 {
+                continue;
+            }
+            seen += count;
+            last = -self.bin_representative(bin);
+            if seen > rank {
+                return last;
+            }
+        }
+        if self.zero_count > 0 {
+            seen += self.zero_count;
+            last = 0.0;
+            if seen > rank {
+                return last;
+            }
+        }
+        for (bin, count) in self.positive.buckets() {
+            crate::analytics::ops::add(1);
+            if count == 0 {
+                continue;
+            }
+            seen += count;
+            last = self.bin_representative(bin);
+            if seen > rank {
+                return last;
+            }
+        }
+        last
     }
 }
 
