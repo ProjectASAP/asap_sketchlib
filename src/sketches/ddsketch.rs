@@ -164,9 +164,11 @@ impl Buckets {
 #[derive(Debug)]
 pub struct DdSketch {
     alpha: f64,
-    gamma: f64,
-    log_gamma: f64,
     inv_log_gamma: f64,
+    /// [`ddsketch_indexable_bounds`] of `alpha`, computed once when the
+    /// sketch is built or decoded instead of on every add.
+    min_indexable: f64,
+    max_indexable: f64,
 
     positive_store: Buckets,
     count: u64,
@@ -175,8 +177,8 @@ pub struct DdSketch {
     admission_rate: f64,
 }
 
-/// The state a decoded [`DdSketch`] is rebuilt from. `gamma` / `log_gamma` /
-/// `inv_log_gamma` follow from `alpha` and `count` is the sum of the buckets.
+/// The state a decoded [`DdSketch`] is rebuilt from. `inv_log_gamma` and the
+/// indexable bounds follow from `alpha` and `count` is the sum of the buckets.
 struct DdSketchState {
     alpha: f64,
     positive_store: Buckets,
@@ -191,20 +193,22 @@ impl TryFrom<DdSketchState> for DdSketch {
     fn try_from(state: DdSketchState) -> Result<Self, Self::Error> {
         let count = wire::check_state(&state)?;
         admission_rate::to_key(state.admission_rate).map_err(|e| format!("DDSketch {e}"))?;
-        let gamma = (1.0 + state.alpha) / (1.0 - state.alpha);
-        let log_gamma = gamma.ln();
         Ok(Self {
-            alpha: state.alpha,
-            gamma,
-            log_gamma,
-            inv_log_gamma: 1.0 / log_gamma,
             positive_store: state.positive_store,
             count,
             negative_store: state.negative_store,
             zero_count: state.zero_count,
             admission_rate: state.admission_rate,
+            ..Self::new(state.alpha)
         })
     }
+}
+
+// Calls of `ddsketch_indexable_bounds` on this thread, for the test that adds
+// do not recompute them.
+#[cfg(test)]
+std::thread_local! {
+    static INDEXABLE_BOUNDS_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Smallest and largest finite positive values whose bucket index is
@@ -216,6 +220,8 @@ impl TryFrom<DdSketchState> for DdSketch {
 ///
 /// Single source of truth shared by `DdSketch` and tests.
 pub fn ddsketch_indexable_bounds(alpha: f64) -> (f64, f64) {
+    #[cfg(test)]
+    INDEXABLE_BOUNDS_CALLS.with(|calls| calls.set(calls.get() + 1));
     let gamma = (1.0 + alpha) / (1.0 - alpha);
     let inv_log_gamma = 1.0 / gamma.ln();
     // 709.0 is just under ln(f64::MAX) so exp() stays finite.
@@ -234,14 +240,13 @@ impl DdSketch {
     pub fn new(alpha: f64) -> Self {
         assert!(alpha > 0.0 && alpha < 1.0, "alpha must be in (0,1)");
         let gamma = (1.0 + alpha) / (1.0 - alpha);
-        let log_gamma = gamma.ln();
-        let inv_log_gamma = 1.0 / log_gamma;
+        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(alpha);
 
         Self {
             alpha,
-            gamma,
-            log_gamma,
-            inv_log_gamma,
+            inv_log_gamma: 1.0 / gamma.ln(),
+            min_indexable,
+            max_indexable,
             positive_store: Buckets::new(),
             count: 0,
             negative_store: Buckets::new(),
@@ -276,13 +281,12 @@ impl DdSketch {
         if !v.is_finite() {
             return Err("DDSketch requires finite values");
         }
-        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(self.alpha);
-        if v.abs() > max_indexable {
+        if v.abs() > self.max_indexable {
             return Err("DDSketch value exceeds indexable range");
         }
         self.count = self.count.checked_add(1).ok_or("DDSketch count overflow")?;
         crate::analytics::ops::add(1);
-        if v.abs() < min_indexable {
+        if v.abs() < self.min_indexable {
             crate::analytics::ops::add(1);
             self.zero_count += 1;
         } else {
@@ -304,8 +308,7 @@ impl DdSketch {
         if !(value.is_finite() && value > 0.0) {
             return None;
         }
-        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(self.alpha);
-        if value < min_indexable || value > max_indexable {
+        if value < self.min_indexable || value > self.max_indexable {
             return None;
         }
         Some(self.key_for(value))
@@ -313,11 +316,10 @@ impl DdSketch {
 
     /// Select the signed store and magnitude index for an accepted observation.
     pub fn signed_bucket_for(&self, value: f64) -> Option<(DdSign, i32)> {
-        let (min, max) = ddsketch_indexable_bounds(self.alpha);
-        if !value.is_finite() || value.abs() > max {
+        if !value.is_finite() || value.abs() > self.max_indexable {
             return None;
         }
-        if value.abs() < min {
+        if value.abs() < self.min_indexable {
             return Some((DdSign::Zero, 0));
         }
         Some((
@@ -348,8 +350,10 @@ impl DdSketch {
         // otherwise hand over an index near i32::MAX and grow the dense store
         // across the whole gap. Out-of-range values are dropped, which is what
         // `add` already does with values it cannot index.
-        let (min_indexable, max_indexable) = ddsketch_indexable_bounds(self.alpha);
-        let (lowest, highest) = (self.key_for(min_indexable), self.key_for(max_indexable));
+        let (lowest, highest) = (
+            self.key_for(self.min_indexable),
+            self.key_for(self.max_indexable),
+        );
         if delta.index < lowest || delta.index > highest {
             return;
         }
@@ -404,7 +408,7 @@ impl DdSketch {
     pub fn as_view(&self) -> DdSketchView<'_> {
         DdSketchView {
             alpha: self.alpha,
-            gamma: self.gamma,
+            gamma: self.gamma(),
             count: self.count,
             zero_count: self.zero_count,
             admission_rate: self.admission_rate,
@@ -635,7 +639,7 @@ impl DdSketch {
     /// owned sketch after [`Self::shrink_to_fit`], which can differ from a merge of the
     /// original sketch only in empty slots at a store's ends.
     pub fn merge_view(&mut self, other: &DdSketchView<'_>) -> Result<(), String> {
-        if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma - other.gamma).abs() >= 1e-12 {
+        if (self.alpha - other.alpha).abs() >= 1e-12 || (self.gamma() - other.gamma).abs() >= 1e-12 {
             return Err(format!(
                 "cannot merge DDSketches with different index mappings: alpha {} vs {}",
                 self.alpha, other.alpha
@@ -680,10 +684,16 @@ impl DdSketch {
         (v.ln() * self.inv_log_gamma).floor() as i32
     }
 
+    /// The bucket growth factor γ = (1 + α) / (1 − α).
+    #[inline]
+    fn gamma(&self) -> f64 {
+        (1.0 + self.alpha) / (1.0 - self.alpha)
+    }
+
     /// Lower edge γ^k of bucket k.
     #[cfg(test)]
     fn lower_bound(&self, k: i32) -> f64 {
-        self.gamma.powf(k as f64)
+        self.gamma().powf(k as f64)
     }
 
     /// Representative of bucket k: the lower bound γ^k scaled by (1+α), matching
@@ -728,9 +738,9 @@ impl Clone for DdSketch {
     fn clone(&self) -> Self {
         Self {
             alpha: self.alpha,
-            gamma: self.gamma,
-            log_gamma: self.log_gamma,
             inv_log_gamma: self.inv_log_gamma,
+            min_indexable: self.min_indexable,
+            max_indexable: self.max_indexable,
             positive_store: self.positive_store.clone(),
             count: self.count,
             negative_store: self.negative_store.clone(),
@@ -1506,6 +1516,42 @@ mod tests {
         d.add(&7.0);
         assert!(c.merge(&d).is_ok(), "matched-mapping merge must succeed");
         assert_eq!(c.get_count(), 2);
+    }
+
+    #[test]
+    fn indexable_bounds_are_computed_once_per_sketch_not_per_add() {
+        let mut sketch = DdSketch::new(0.05);
+        let calls_before = INDEXABLE_BOUNDS_CALLS.with(std::cell::Cell::get);
+        for i in 1..=1000 {
+            sketch.try_add(&f64::from(i)).expect("indexable value");
+            let _ = sketch.bucket_index_for(f64::from(i));
+            let _ = sketch.signed_bucket_for(-f64::from(i));
+        }
+        sketch.apply_delta(DdSketchBucketDelta {
+            sign: DdSign::Positive,
+            index: sketch.key_for(7.0),
+            count: 3,
+        });
+        let calls = INDEXABLE_BOUNDS_CALLS.with(std::cell::Cell::get) - calls_before;
+        assert_eq!(
+            calls, 0,
+            "adds recomputed the indexable bounds {calls} times"
+        );
+    }
+
+    #[test]
+    fn built_decoded_and_cloned_sketches_hold_the_bounds_of_their_alpha() {
+        for alpha in [0.001, 0.01, 0.05, 0.3] {
+            let bounds = ddsketch_indexable_bounds(alpha);
+            let mut built = DdSketch::new(alpha);
+            built.add(&3.5);
+            built.add(&-2.0);
+            let decoded =
+                DdSketch::from_asapv1(&built.to_asapv1().expect("encodes")).expect("decodes");
+            for sketch in [&built, &decoded, &built.clone()] {
+                assert_eq!((sketch.min_indexable, sketch.max_indexable), bounds);
+            }
+        }
     }
 
     #[test]
