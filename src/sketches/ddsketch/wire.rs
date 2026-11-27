@@ -23,9 +23,9 @@
 //!
 //! ## Relative accuracy
 //!
-//! `alpha` is the one construction parameter, so it lives in the metadata. The
-//! `gamma` / `log_gamma` / `inv_log_gamma` triple is derived from it
-//! (`gamma = (1 + alpha) / (1 - alpha)`) and never reaches the wire.
+//! `alpha` is the one construction parameter, so it lives in the metadata.
+//! `gamma = (1 + alpha) / (1 - alpha)`, `1 / ln(gamma)` and the indexable
+//! bounds are derived from it and never reach the wire.
 //!
 //! ## Signed stores
 //!
