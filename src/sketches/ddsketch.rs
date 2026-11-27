@@ -197,6 +197,13 @@ impl TryFrom<DdSketchState> for DdSketch {
     }
 }
 
+// Calls of `ddsketch_indexable_bounds` on this thread, for the test that adds
+// do not recompute them.
+#[cfg(test)]
+std::thread_local! {
+    static INDEXABLE_BOUNDS_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Smallest and largest finite positive values whose bucket index is
 /// representable without integer overflow (index within `i32`) or
 /// `exp`/`powf` overflow, mirroring DataDog's logarithmic_mapping.go
@@ -206,6 +213,8 @@ impl TryFrom<DdSketchState> for DdSketch {
 ///
 /// Single source of truth shared by `DdSketch` and tests.
 pub fn ddsketch_indexable_bounds(alpha: f64) -> (f64, f64) {
+    #[cfg(test)]
+    INDEXABLE_BOUNDS_CALLS.with(|calls| calls.set(calls.get() + 1));
     let gamma = (1.0 + alpha) / (1.0 - alpha);
     let inv_log_gamma = 1.0 / gamma.ln();
     // 709.0 is just under ln(f64::MAX) so exp() stays finite.
@@ -1018,6 +1027,27 @@ mod tests {
         d.add(&7.0);
         assert!(c.merge(&d).is_ok(), "matched-mapping merge must succeed");
         assert_eq!(c.get_count(), 2);
+    }
+
+    #[test]
+    fn indexable_bounds_are_computed_once_per_sketch_not_per_add() {
+        let mut sketch = DdSketch::new(0.05);
+        let calls_before = INDEXABLE_BOUNDS_CALLS.with(std::cell::Cell::get);
+        for i in 1..=1000 {
+            sketch.try_add(&f64::from(i)).expect("indexable value");
+            let _ = sketch.bucket_index_for(f64::from(i));
+            let _ = sketch.signed_bucket_for(-f64::from(i));
+        }
+        sketch.apply_delta(DdSketchBucketDelta {
+            sign: DdSign::Positive,
+            index: sketch.key_for(7.0),
+            count: 3,
+        });
+        let calls = INDEXABLE_BOUNDS_CALLS.with(std::cell::Cell::get) - calls_before;
+        assert_eq!(
+            calls, 0,
+            "adds recomputed the indexable bounds {calls} times"
+        );
     }
 
     #[test]
