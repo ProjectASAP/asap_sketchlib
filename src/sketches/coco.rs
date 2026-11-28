@@ -138,8 +138,8 @@ impl<H: SketchHasher> CocoSketch<H> {
         println!("rows: {}", self.rows);
         for i in 0..self.rows {
             print!("[ ");
-            for j in 0..self.cols {
-                self.table[i][j].debug();
+            for cell in self.table.row_slice(i) {
+                cell.debug();
             }
             println!(" ]");
         }
@@ -311,10 +311,10 @@ impl<H: SketchHasher> CocoSketch<H> {
         assert_eq!(self.rows, other.rows, "Different rows, do nothing");
         assert_eq!(self.cols, other.cols, "Different cols, do nothing");
         for i in 0..self.rows {
-            for j in 0..self.cols {
+            for cell in other.table.row_slice(i) {
                 crate::analytics::ops::add(1);
-                if let Some(k) = &other.table[i][j].full_key {
-                    self.update_weighted(k.as_str(), other.table[i][j].val);
+                if let Some(k) = &cell.full_key {
+                    self.update_weighted(k.as_str(), cell.val);
                 }
             }
         }

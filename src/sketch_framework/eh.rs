@@ -289,9 +289,9 @@ impl ExponentialHistogram {
         crate::analytics::ops::add(self.payload[from_volume].bucket.cells());
         if from_volume < to_volume {
             let mut merged = self.payload[from_volume].bucket.clone();
-            for i in (from_volume + 1)..=to_volume {
+            for volume in &self.payload[(from_volume + 1)..=to_volume] {
                 crate::analytics::ops::add(1);
-                merged.merge(&self.payload[i].bucket).ok()?;
+                merged.merge(&volume.bucket).ok()?;
             }
             Some(merged)
         } else {
