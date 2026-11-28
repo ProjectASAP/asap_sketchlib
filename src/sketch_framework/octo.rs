@@ -4686,10 +4686,10 @@ mod univmon_tests {
             }
         }
 
-        for layer in 0..LAYERS {
+        for (layer, layer_sketch) in worker.layer_sketches.iter().enumerate().take(LAYERS) {
             let promoted = layer_counters(&aggregator.sketch, layer);
             let exact = layer_counters(&reference, layer);
-            let residual = worker.layer_sketches[layer].residual();
+            let residual = layer_sketch.residual();
             for (cell, ((&p, &e), &r)) in
                 promoted.iter().zip(exact.iter()).zip(residual).enumerate()
             {

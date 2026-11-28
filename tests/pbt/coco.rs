@@ -95,8 +95,8 @@ fn mass_of(stream: &[(u64, u64)]) -> u64 {
 fn vals(sketch: &C) -> Vec<u64> {
     let mut cells = Vec::with_capacity(sketch.rows * sketch.cols);
     for i in 0..sketch.rows {
-        for j in 0..sketch.cols {
-            cells.push(sketch.table[i][j].val);
+        for bucket in sketch.table.row_slice(i) {
+            cells.push(bucket.val);
         }
     }
     cells
@@ -123,8 +123,7 @@ fn mapped(sketch: &C, key: &str) -> Vec<(usize, usize)> {
 fn occupied(sketch: &C) -> Vec<(String, u64)> {
     let mut cells = Vec::new();
     for i in 0..sketch.rows {
-        for j in 0..sketch.cols {
-            let bucket = &sketch.table[i][j];
+        for bucket in sketch.table.row_slice(i) {
             if let Some(key) = &bucket.full_key {
                 cells.push((key.clone(), bucket.val));
             }
@@ -137,8 +136,8 @@ fn occupied(sketch: &C) -> Vec<(String, u64)> {
 fn homes(sketch: &C, key: &str) -> Vec<(usize, usize)> {
     let mut found = Vec::new();
     for i in 0..sketch.rows {
-        for j in 0..sketch.cols {
-            if sketch.table[i][j].full_key.as_deref() == Some(key) {
+        for (j, bucket) in sketch.table.row_slice(i).iter().enumerate() {
+            if bucket.full_key.as_deref() == Some(key) {
                 found.push((i, j));
             }
         }

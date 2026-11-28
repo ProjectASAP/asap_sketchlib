@@ -342,28 +342,28 @@ impl ExponentialHistogramUnivMon {
         crate::analytics::ops::add(2 * total + 6);
 
         // Search sketch buckets
-        for i in 0..s_count {
-            if t1 >= self.sketch_buckets[i].min_time && t1 <= self.sketch_buckets[i].max_time {
+        for (i, bucket) in self.sketch_buckets.iter().enumerate() {
+            if t1 >= bucket.min_time && t1 <= bucket.max_time {
                 from_bucket = i;
                 break;
             }
         }
-        for i in 0..s_count {
-            if t2 >= self.sketch_buckets[i].min_time && t2 <= self.sketch_buckets[i].max_time {
+        for (i, bucket) in self.sketch_buckets.iter().enumerate() {
+            if t2 >= bucket.min_time && t2 <= bucket.max_time {
                 to_bucket = i;
                 break;
             }
         }
 
         // Search map buckets (may override sketch results)
-        for i in 0..m_count {
-            if t1 >= self.exact_buckets[i].min_time && t1 <= self.exact_buckets[i].max_time {
+        for (i, bucket) in self.exact_buckets.iter().enumerate() {
+            if t1 >= bucket.min_time && t1 <= bucket.max_time {
                 from_bucket = i + s_count;
                 break;
             }
         }
-        for i in 0..m_count {
-            if t2 >= self.exact_buckets[i].min_time && t2 <= self.exact_buckets[i].max_time {
+        for (i, bucket) in self.exact_buckets.iter().enumerate() {
+            if t2 >= bucket.min_time && t2 <= bucket.max_time {
                 to_bucket = i + s_count;
                 break;
             }
@@ -410,9 +410,9 @@ impl ExponentialHistogramUnivMon {
             #[cfg(feature = "op-count")]
             crate::analytics::ops::add(self.sketch_buckets[from_bucket].sketch.cells());
             let mut merged = self.sketch_buckets[from_bucket].sketch.clone();
-            for i in (from_bucket + 1)..=to_bucket {
+            for bucket in &self.sketch_buckets[(from_bucket + 1)..=to_bucket] {
                 crate::analytics::ops::add(1);
-                merged.merge(&self.sketch_buckets[i].sketch);
+                merged.merge(&bucket.sketch);
             }
             Some(EhUnivMonQueryResult::Sketch(merged))
         } else if from_bucket >= s_count {
@@ -420,9 +420,9 @@ impl ExponentialHistogramUnivMon {
             let from_map = from_bucket - s_count;
             let to_map = to_bucket - s_count;
             let mut merged_map: HashMap<OwnedDataInput, i64> = HashMap::new();
-            for i in from_map..=to_map {
-                crate::analytics::ops::add(1 + 2 * self.exact_buckets[i].counts.len());
-                for (k, &v) in &self.exact_buckets[i].counts {
+            for bucket in &self.exact_buckets[from_map..=to_map] {
+                crate::analytics::ops::add(1 + 2 * bucket.counts.len());
+                for (k, &v) in &bucket.counts {
                     *merged_map.entry(k.clone()).or_insert(0) += v;
                 }
             }
@@ -437,17 +437,17 @@ impl ExponentialHistogramUnivMon {
             let mut merged = UnivMon::new(self.heap_size, self.rows, self.cols, self.layers);
             #[cfg(feature = "op-count")]
             crate::analytics::ops::add(merged.cells());
-            for i in from_bucket..s_count {
+            for bucket in &self.sketch_buckets[from_bucket..s_count] {
                 crate::analytics::ops::add(1);
-                merged.merge(&self.sketch_buckets[i].sketch);
+                merged.merge(&bucket.sketch);
             }
 
             // Merge qualifying map buckets into a temporary map
             let to_map = to_bucket - s_count;
             let mut map_merged: HashMap<OwnedDataInput, i64> = HashMap::new();
-            for i in 0..=to_map {
-                crate::analytics::ops::add(1 + 2 * self.exact_buckets[i].counts.len());
-                for (k, &v) in &self.exact_buckets[i].counts {
+            for bucket in &self.exact_buckets[..=to_map] {
+                crate::analytics::ops::add(1 + 2 * bucket.counts.len());
+                for (k, &v) in &bucket.counts {
                     *map_merged.entry(k.clone()).or_insert(0) += v;
                 }
             }
