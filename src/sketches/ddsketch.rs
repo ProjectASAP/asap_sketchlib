@@ -119,6 +119,27 @@ impl Buckets {
         let idx = (k - self.offset) as usize;
         self.counts.as_mut_slice()[idx] += 1;
     }
+
+    /// Drops the empty slots at both ends and the spare capacity: the
+    /// occupied range of bucket indices and its counts are unchanged.
+    fn shrink_to_fit(&mut self) {
+        let counts = self.counts.as_slice();
+        let Some(first) = counts.iter().position(|&c| c != 0) else {
+            self.counts = Vector1D::from_vec(Vec::new());
+            self.offset = 0;
+            return;
+        };
+        let last = counts
+            .iter()
+            .rposition(|&c| c != 0)
+            .expect("a nonzero count");
+        if first == 0 && last + 1 == counts.len() && counts.len() == self.counts.capacity() {
+            return;
+        }
+        let kept = counts[first..=last].to_vec();
+        self.offset += first as i32;
+        self.counts = Vector1D::from_vec(kept);
+    }
 }
 
 /// Mergeable, relative-error quantile sketch using logarithmically-spaced buckets.
@@ -446,6 +467,21 @@ impl DdSketch {
         self.alpha
     }
 
+    /// Frees what this sketch holds only for later inserts: the empty
+    /// bucket slots at both ends of each store and their spare capacity
+    /// (stores grow 128 slots at a time). For a sketch that stops receiving
+    /// inserts, such as the sketch of a closed window kept for queries.
+    ///
+    /// Every bucket count and the count are
+    /// unchanged, so every answer and merge is the same as before; the
+    /// sketch stays usable and grows again on a later insert. Its ASAPv1
+    /// bytes are shorter (the stores' empty end slots are not written), and
+    /// decode to a sketch with the same answers.
+    pub fn shrink_to_fit(&mut self) {
+        self.positive_store.shrink_to_fit();
+        self.negative_store.shrink_to_fit();
+    }
+
     /// Bytes this sketch holds: the struct and the bucket slots both stores
     /// have allocated.
     pub fn memory_bytes(&self) -> usize {
@@ -665,6 +701,64 @@ impl DdSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A shrunk sketch answers, merges and keeps growing as before, and holds
+    /// only its occupied bucket range.
+    #[test]
+    fn shrink_to_fit_keeps_answers_and_frees_slots() {
+        let values: Vec<f64> = (0..100)
+            .map(|i| {
+                if i % 7 == 0 {
+                    -(1.0 + i as f64)
+                } else {
+                    3.0 + (i as f64).powf(1.3)
+                }
+            })
+            .collect();
+        let full = sketch_of(0.05, &values);
+        let mut shrunk = full.clone();
+        shrunk.shrink_to_fit();
+        assert!(shrunk.memory_bytes() < full.memory_bytes());
+        let qs = [0.0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1.0];
+        let answers = |sketch: &DdSketch| -> Vec<Option<f64>> {
+            qs.iter()
+                .map(|&q| sketch.quantile_interpolated(q).unwrap())
+                .collect()
+        };
+        assert_eq!(answers(&shrunk), answers(&full));
+        assert_eq!(shrunk.get_count(), full.get_count());
+        // The encoding drops the empty slots (shorter bytes) and decodes to
+        // a sketch with the same answers (q = 0 and 1 are its min and max)
+        // and count; decoding the
+        // full sketch's bytes and shrinking it gives the shrunk bytes.
+        let shrunk_bytes = shrunk.to_asapv1().unwrap();
+        let full_bytes = full.to_asapv1().unwrap();
+        assert!(shrunk_bytes.len() < full_bytes.len());
+        let decoded = DdSketch::from_asapv1(&shrunk_bytes).unwrap();
+        assert_eq!(answers(&decoded), answers(&full));
+        assert_eq!(decoded.get_count(), full.get_count());
+        let mut decoded_full = DdSketch::from_asapv1(&full_bytes).unwrap();
+        decoded_full.shrink_to_fit();
+        assert_eq!(decoded_full.to_asapv1().unwrap(), shrunk_bytes);
+        // Shrinking twice changes nothing.
+        let mut twice = shrunk.clone();
+        twice.shrink_to_fit();
+        assert_eq!(twice.to_asapv1().unwrap(), shrunk_bytes);
+        let other = sketch_of(0.05, &[0.5, 1e4, 2.0, -3e3]);
+        let (mut merged_full, mut merged_shrunk) = (full.clone(), shrunk.clone());
+        merged_full.merge(&other).unwrap();
+        merged_shrunk.merge(&other).unwrap();
+        assert_eq!(answers(&merged_shrunk), answers(&merged_full));
+        let (mut grown_full, mut grown_shrunk) = (full.clone(), shrunk.clone());
+        for v in [1e6, 1e-3, -1e5, 42.0] {
+            grown_full.add(&v);
+            grown_shrunk.add(&v);
+        }
+        assert_eq!(answers(&grown_shrunk), answers(&grown_full));
+        let mut empty = DdSketch::new(0.05);
+        empty.shrink_to_fit();
+        assert_eq!(empty.get_count(), 0);
+    }
 
     /// The exact interpolated quantile of `values` at `q`: linear between the
     /// order statistics at ranks `floor(q (n - 1))` and `ceil(q (n - 1))`.
