@@ -436,3 +436,145 @@ fn mutated_views_never_panic() {
         "{accepted} of {tried} accepted"
     );
 }
+
+/// A KLL view whose level above 0 is not sorted is refused: a merge
+/// treats every such level as one sorted run, so an unsorted one would
+/// corrupt the accumulator's levels and every later answer.
+#[test]
+fn kll_views_with_unsorted_upper_levels_are_refused() {
+    let bytes = kll(4, 3_000).to_view_bytes();
+    let words = aligned_copy(&bytes);
+    let view = KllView::from_bytes(aligned_bytes(&words, bytes.len())).unwrap();
+    assert!(view.count() > 3_000 / 2);
+    // Layout: magic, version, k, m, num_levels, len (8 bytes each from
+    // byte 8), the level boundaries as u32 from byte 40, then the items.
+    let num_levels = u64::from_le_bytes(bytes[24..32].try_into().unwrap()) as usize;
+    assert!(num_levels >= 2);
+    let boundary = |h: usize| {
+        let at = 40 + 4 * h;
+        u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize
+    };
+    let items_at = (40 + 4 * (num_levels + 1)).div_ceil(8) * 8;
+    let item = |i: usize| items_at + 8 * i;
+    // A level above 0 holding at least two items.
+    let h = (1..num_levels)
+        .find(|&h| boundary(h + 1) - boundary(h) >= 2)
+        .expect("a level above 0 with two items");
+    let (first, last) = (boundary(h), boundary(h + 1) - 1);
+    let mut forged = bytes.clone();
+    // Swap that level's smallest and largest items.
+    let (low, high) = (
+        bytes[item(first)..item(first) + 8].to_vec(),
+        bytes[item(last)..item(last) + 8].to_vec(),
+    );
+    assert_ne!(low, high);
+    forged[item(first)..item(first) + 8].copy_from_slice(&high);
+    forged[item(last)..item(last) + 8].copy_from_slice(&low);
+    let words = aligned_copy(&forged);
+    assert!(KllView::from_bytes(aligned_bytes(&words, forged.len())).is_err());
+    // Level 0 is unsorted in a real sketch: reordering it is accepted.
+    let level0 = boundary(1);
+    if level0 >= 2 {
+        let mut reordered = bytes.clone();
+        let (a, b) = (
+            bytes[item(0)..item(0) + 8].to_vec(),
+            bytes[item(1)..item(1) + 8].to_vec(),
+        );
+        reordered[item(0)..item(0) + 8].copy_from_slice(&b);
+        reordered[item(1)..item(1) + 8].copy_from_slice(&a);
+        let words = aligned_copy(&reordered);
+        assert!(KllView::from_bytes(aligned_bytes(&words, reordered.len())).is_ok());
+    }
+}
+
+/// Every view operation counts the same analytics ops as the owned
+/// sketch's method it mirrors, so op-count measurements of a query read
+/// from views equal those of the owned sketches. A sparse DDSketch view
+/// holds only its occupied buckets, so it reads (and counts) at most the
+/// owned sketch's ops.
+#[cfg(feature = "op-count")]
+#[test]
+fn views_count_the_ops_of_the_owned_sketch() {
+    use asap_sketchlib::analytics::ops::count;
+    // KLL: answers, and merges into the same accumulator.
+    for n in [0, 15, 5_000] {
+        let owned = kll(n as u64 + 2, n);
+        let bytes = owned.to_view_bytes();
+        let words = aligned_copy(&bytes);
+        let view = KllView::from_bytes(aligned_bytes(&words, bytes.len())).unwrap();
+        assert_eq!(count(|| view.count()), count(|| owned.count()), "count {n}");
+        for x in [-3_000.0, 0.0, 5_000.0] {
+            assert_eq!(count(|| view.rank(x)), count(|| owned.rank(x)), "rank {n}");
+        }
+        assert_eq!(
+            count(|| view.quantile(0.5)).1,
+            count(|| owned.cdf().value_at(0.5)).1,
+            "quantile {n}"
+        );
+        let accumulator = kll(9, 2_000);
+        let (mut by_owned, mut by_view) = (accumulator.clone(), accumulator.clone());
+        let ((), owned_ops) = count(|| by_owned.merge(&owned));
+        let (merged, view_ops) = count(|| by_view.merge_view(&view));
+        merged.unwrap();
+        assert_eq!(view_ops, owned_ops, "merge {n}");
+    }
+    // DDSketch: answers, and merges into an empty and a non-empty sketch,
+    // from dense and sparse views.
+    let mut sparse_seen = false;
+    let mut dense_seen = false;
+    for n in [0, 15, 1_000, 20_000] {
+        let owned = dd(n as u64 + 2, n);
+        let bytes = owned.to_view_bytes();
+        let words = aligned_copy(&bytes);
+        let view = DdSketchView::from_bytes(aligned_bytes(&words, bytes.len())).unwrap();
+        let sparse = view.is_sparse();
+        sparse_seen |= sparse;
+        dense_seen |= !sparse && n > 0;
+        let same_ops = |what: &str, view_ops: u64, owned_ops: u64| {
+            if sparse {
+                assert!(
+                    view_ops <= owned_ops,
+                    "{what} {n}: {view_ops} > {owned_ops}"
+                );
+            } else {
+                assert_eq!(view_ops, owned_ops, "{what} {n}");
+            }
+        };
+        for q in QS {
+            let (a, view_ops) = count(|| view.get_value_at_quantile(q));
+            let (b, owned_ops) = count(|| owned.get_value_at_quantile(q));
+            assert_eq!(a, b);
+            same_ops("quantile", view_ops, owned_ops);
+            let (a, view_ops) = count(|| view.quantile_interpolated(q));
+            let (b, owned_ops) = count(|| owned.quantile_interpolated(q));
+            assert_eq!(a, b);
+            same_ops("interpolated", view_ops, owned_ops);
+        }
+        for accumulator in [DdSketch::new(0.01), dd(9, 500)] {
+            let (mut by_owned, mut by_view) = (accumulator.clone(), accumulator.clone());
+            let (a, owned_ops) = count(|| by_owned.merge(&owned));
+            let (b, view_ops) = count(|| by_view.merge_view(&view));
+            a.unwrap();
+            b.unwrap();
+            same_ops("merge", view_ops, owned_ops);
+        }
+    }
+    assert!(sparse_seen && dense_seen);
+    // Count-Min: point estimates and merges.
+    let owned = cms(2, 500);
+    let bytes = owned.to_view_bytes();
+    let words = aligned_copy(&bytes);
+    let view = CountMinF64View::from_bytes(aligned_bytes(&words, bytes.len())).unwrap();
+    for key in 0..20 {
+        let key = DataInput::I64(key);
+        assert_eq!(
+            count(|| view.estimate::<asap_sketchlib::DefaultXxHasher>(&key)).1,
+            count(|| owned.estimate(&key)).1
+        );
+    }
+    let (mut by_owned, mut by_view) = (cms(1, 500), cms(1, 500));
+    let ((), owned_ops) = count(|| by_owned.merge(&owned));
+    let (merged, view_ops) = count(|| by_view.merge_view(&view));
+    merged.unwrap();
+    assert_eq!(view_ops, owned_ops, "Count-Min merge");
+}
