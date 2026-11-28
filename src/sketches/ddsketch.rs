@@ -690,18 +690,15 @@ impl DdSketch {
     }
 
     /// Lower edge γ^k of bucket k.
-    #[inline]
+    #[cfg(test)]
     fn lower_bound(&self, k: i32) -> f64 {
         self.gamma().powf(k as f64)
     }
 
-    /// Representative of bucket k: the lower bound γ^k scaled by (1+α), matching
-    /// DataDog's logarithmic_mapping.go `Value = LowerBound(index) * (1 +
-    /// RelativeAccuracy())`. This makes the relative error EXACTLY α at both
-    /// bucket edges, as the advertised α-accuracy guarantee requires.
-    #[inline]
+    /// Representative of bucket k, as [`DdSketchView`] answers with it.
+    #[cfg(test)]
     fn bin_representative(&self, k: i32) -> f64 {
-        self.lower_bound(k) * (1.0 + self.alpha)
+        self.as_view().bin_representative(k)
     }
 
     /// Adds `other`'s counts to `store` in place, growing `store` (once, to
@@ -1072,7 +1069,10 @@ impl<'a> DdSketchView<'a> {
         self.positive.keys.is_some()
     }
 
-    /// Representative of bucket k, as [`DdSketch`] computes it.
+    /// Representative of bucket k: the lower bound γ^k scaled by (1+α), matching
+    /// DataDog's logarithmic_mapping.go `Value = LowerBound(index) * (1 +
+    /// RelativeAccuracy())`. This makes the relative error EXACTLY α at both
+    /// bucket edges, as the advertised α-accuracy guarantee requires.
     #[inline]
     fn bin_representative(&self, k: i32) -> f64 {
         self.gamma.powf(k as f64) * (1.0 + self.alpha)

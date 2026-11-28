@@ -837,19 +837,7 @@ impl<T: NumericalValue> Kll<T> {
 
     /// Returns the estimated (weighted) rank of value `x`.
     pub fn rank(&self, x: f64) -> usize {
-        let mut r = 0;
-        for h in 0..self.num_levels {
-            let start = self.levels[h];
-            let end = self.levels[h + 1];
-            let weight = 1 << h;
-            crate::analytics::ops::add(2 + end - start);
-            for &val in &self.items[start..end] {
-                if val.to_f64() <= x {
-                    r += weight;
-                }
-            }
-        }
-        r
+        rank_of_levels(self.num_levels, |h| self.level(h), x)
     }
 
     /// Returns the configured compactor capacity `k`.
@@ -859,12 +847,12 @@ impl<T: NumericalValue> Kll<T> {
 
     /// Returns the total (weighted) number of items ingested by the sketch.
     pub fn count(&self) -> usize {
-        crate::analytics::ops::add(2 * self.num_levels);
-        let mut total = 0;
-        for h in 0..self.num_levels {
-            total += self.level_size(h) * (1 << h);
-        }
-        total
+        count_of_levels(self.num_levels, |h| self.level(h))
+    }
+
+    /// Level `h`'s retained items.
+    fn level(&self, h: usize) -> &[T] {
+        &self.items[self.levels[h]..self.levels[h + 1]]
     }
 
     fn buffer_size(&self) -> usize {
@@ -1068,6 +1056,28 @@ impl Kll<f64> {
 
 /// The CDF of a sketch given by its levels' retained items (level `h`
 /// weighs `2^h`), `len` items in all.
+/// [`Kll::rank`] of a sketch given by its levels' retained items: one code
+/// path, and one op count, for the owned sketch and its view.
+fn rank_of_levels<'b, T: NumericalValue + 'b>(
+    num_levels: usize,
+    level: impl Fn(usize) -> &'b [T],
+    x: f64,
+) -> usize {
+    let mut rank = 0;
+    for h in 0..num_levels {
+        let items = level(h);
+        crate::analytics::ops::add(2 + items.len());
+        rank += items.iter().filter(|value| value.to_f64() <= x).count() << h;
+    }
+    rank
+}
+
+/// [`Kll::count`] of a sketch given by its levels' retained items.
+fn count_of_levels<'b, T: 'b>(num_levels: usize, level: impl Fn(usize) -> &'b [T]) -> usize {
+    crate::analytics::ops::add(2 * num_levels);
+    (0..num_levels).map(|h| level(h).len() << h).sum()
+}
+
 fn cdf_of_levels<'b, T: NumericalValue + 'b>(
     num_levels: usize,
     len: usize,
@@ -1148,6 +1158,17 @@ impl<'a> KllView<'a> {
             return Err(ViewError("KLL level boundaries out of order".into()));
         }
         let items = reader.f64s(len)?;
+        // A merge treats each level above 0 as one sorted run (as every
+        // real sketch holds it); an unsorted one would corrupt the merge.
+        for h in 1..num_levels {
+            let level = &items[levels[h] as usize..levels[h + 1] as usize];
+            if level
+                .windows(2)
+                .any(|pair| pair[0].total_cmp(&pair[1]) == std::cmp::Ordering::Greater)
+            {
+                return Err(ViewError(format!("KLL level {h} is not sorted")));
+            }
+        }
         if normalized_k_m(k, m) != (k, m) {
             return Err(ViewError(format!("KLL k {k}, m {m} out of range")));
         }
@@ -1180,9 +1201,7 @@ impl<'a> KllView<'a> {
 
     /// The total (weighted) number of items ingested.
     pub fn count(&self) -> usize {
-        (0..self.num_levels)
-            .map(|h| self.level(h).len() * (1 << h))
-            .sum()
+        count_of_levels(self.num_levels, |h| self.level(h))
     }
 
     /// The CDF, as [`Kll::cdf`] builds it.
@@ -1202,9 +1221,7 @@ impl<'a> KllView<'a> {
 
     /// The estimated (weighted) rank of `x`, as [`Kll::rank`].
     pub fn rank(&self, x: f64) -> usize {
-        (0..self.num_levels)
-            .map(|h| self.level(h).iter().filter(|&&v| v <= x).count() << h)
-            .sum()
+        rank_of_levels(self.num_levels, |h| self.level(h), x)
     }
 
     /// An owned sketch holding this view's items, an accumulator to merge

@@ -502,6 +502,8 @@ impl<'a> CountMinF64View<'a> {
     /// The point estimate of `value`, as the owned sketch answers it.
     pub fn estimate<H: SketchHasher>(&self, value: &DataInput) -> f64 {
         probe_min::<f64, H>(self.rows, self.cols, value, |row, col| {
+            // One counter read, as `Vector2D::query_one_counter` counts it.
+            crate::analytics::ops::add(1);
             self.grid[row * self.cols + col]
         })
     }
@@ -531,6 +533,9 @@ impl<H: SketchHasher> CountMinSketch<Vector2D<f64>, RegularPath, H> {
         if self.admission_rate != other.admission_rate {
             return Err("admission rate mismatch while merging Count-Min sketches".into());
         }
+        // Each cell read from the view and added in, as `Self::merge` counts
+        // its reads and writes.
+        crate::analytics::ops::add(2 * other.grid.len());
         for (cell, &value) in self.counts.as_mut_slice().iter_mut().zip(other.grid) {
             *cell += value;
         }
