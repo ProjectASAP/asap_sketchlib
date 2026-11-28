@@ -4953,7 +4953,7 @@ mod partition_accuracy {
             };
             let mut buckets = Tally::default();
             for k in lo..hi {
-                let (a, b) = (at(p, p_off, k), at(r, r_off, k));
+                let (a, b) = (at(&p, p_off, k), at(&r, r_off, k));
                 buckets.record(a == b, || {
                     format!("bucket {k}: octo {a}, single-thread {b}")
                 });

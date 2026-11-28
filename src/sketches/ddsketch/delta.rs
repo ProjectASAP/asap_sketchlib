@@ -189,8 +189,7 @@ impl DdSketch {
                 } else {
                     &mut self.positive_store
                 };
-                store.ensure(k);
-                store.counts.as_mut_slice()[(k - store.offset) as usize] += c;
+                store.add(k, c);
             }
         }
         self.zero_count += delta.zero_count;
@@ -202,7 +201,6 @@ impl DdSketch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::common::structures::Vector1D;
     use crate::sketches::ddsketch::DdSketchState;
 
     const ALPHA: f64 = 0.01;
@@ -266,7 +264,7 @@ mod tests {
                     let i = i64::from(k) - i64::from(s.offset);
                     usize::try_from(i)
                         .ok()
-                        .and_then(|i| s.counts.as_slice().get(i).copied())
+                        .and_then(|i| s.wide_counts().get(i).copied())
                         .unwrap_or(0)
                 };
                 let mut indices = Vec::new();
@@ -331,8 +329,8 @@ mod tests {
                     .collect::<Vec<_>>()
             };
             (
-                nonzero(s.positive_store_counts(), s.positive_store_offset()),
-                nonzero(s.negative_store_counts(), s.negative_store_offset()),
+                nonzero(&s.positive_store_counts(), s.positive_store_offset()),
+                nonzero(&s.negative_store_counts(), s.negative_store_offset()),
                 s.zero_count(),
             )
         };
@@ -360,8 +358,7 @@ mod tests {
         assert!(sketch.merge_delta(&other).is_err());
         assert_eq!(sketch.get_count(), 1);
 
-        sketch.positive_store.counts = Vector1D::from_vec(vec![u64::MAX - 1]);
-        sketch.positive_store.offset = 55;
+        sketch.positive_store = Buckets::wide(vec![u64::MAX - 1], 55);
         sketch.count = u64::MAX - 1;
         let before = sketch.to_asapv1().unwrap();
         let rows = [
@@ -381,10 +378,7 @@ mod tests {
     fn merge_delta_rejects_a_store_span_past_i32() {
         let mut sketch = DdSketch::try_from(DdSketchState {
             alpha: ALPHA,
-            positive_store: Buckets {
-                counts: Vector1D::from_vec(vec![1]),
-                offset: i32::MAX - 1,
-            },
+            positive_store: Buckets::wide(vec![1], i32::MAX - 1),
             negative_store: Buckets::new(),
             zero_count: 0,
             admission_rate: 1.0,

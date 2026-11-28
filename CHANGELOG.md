@@ -21,6 +21,12 @@ signals a backwards-compatible change.
   operation on an accepted view panics). Each view answers as its owned
   sketch and folds into an owned accumulator with `merge_view`;
   `KllView::to_owned_sketch` takes the accumulator's seed.
+- **Sealed DDSketch stores keep `u32` counts**: `DdSketch::shrink_to_fit`
+  also narrows each bucket store to 4-byte counts when every count fits a
+  `u32`, halving the bucket bytes a stored window holds; any later write
+  widens the store back to `u64` first. `positive_store_counts` /
+  `negative_store_counts` return `Cow<[u64]>` (borrowed for 8-byte
+  stores). ASAPv1 bytes are unchanged.
 - **`Kll::shrink_to_fit`** frees what a KLL sketch holds only for later
   inserts and queries (unused levels, the free front of the item buffer,
   compaction scratch space, a memoized CDF), for a sketch kept after it
