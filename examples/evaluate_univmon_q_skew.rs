@@ -517,9 +517,15 @@ fn score(sketch: &UnivMonQ, truth: &Truth) -> Accuracy {
     let query = sketch.prepare_queries();
     let mut squared_error = 0.0;
     let mut point_count = 0;
-    for key in 1..=truth.domain {
+    for (key, &count) in truth
+        .counts
+        .iter()
+        .enumerate()
+        .take(truth.domain + 1)
+        .skip(1)
+    {
         let estimate = query.estimate_frequency(key as f64) as f64;
-        squared_error += (estimate - truth.counts[key] as f64).powi(2);
+        squared_error += (estimate - count as f64).powi(2);
         point_count += 1;
     }
     for key in truth.domain + 1..=truth.domain + 256 {
@@ -572,9 +578,15 @@ fn score(sketch: &UnivMonQ, truth: &Truth) -> Accuracy {
 fn score_um(sketch: &UnivMon, truth: &Truth) -> Accuracy {
     let mut squared_error = 0.0;
     let mut point_count = 0;
-    for key in 1..=truth.domain {
+    for (key, &count) in truth
+        .counts
+        .iter()
+        .enumerate()
+        .take(truth.domain + 1)
+        .skip(1)
+    {
         let estimate = univmon_frequency(sketch, key);
-        squared_error += (estimate - truth.counts[key] as f64).powi(2);
+        squared_error += (estimate - count as f64).powi(2);
         point_count += 1;
     }
     for key in truth.domain + 1..=truth.domain + 256 {
